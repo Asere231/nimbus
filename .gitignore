@@ -1,0 +1,17 @@
+# Build output
+/bin/
+
+# Nimbus state and certificates (never commit a CA key)
+/.nimbus/
+
+# Terraform working files. The lock file IS committed, on purpose: it pins the
+# azurerm version the examples were proven against.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+tf.log
+
+# macOS
+.DS_Store

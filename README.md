@@ -1,0 +1,90 @@
+# Nimbus
+
+A from-scratch, offline, multi-cloud emulator with a live visualizer. Azure first; AWS and GCP plug into the same engine later.
+
+Real tools talk to it unchanged: the Terraform `azurerm` provider and the Azure SDKs see an Azure Resource Manager endpoint, and the visualizer at `http://localhost:4700` draws every resource as it is created.
+
+```
+terraform apply  ──HTTPS──▶  Nimbus Azure (ARM) :4701 ──▶ store ──▶ event bus ──SSE──▶  visualizer :4700
+```
+
+**Status (v0.1.0, Milestone 1):** ARM control plane with resource groups, virtual networks, subnets, and an "accepted" tier for every other resource type; token and metadata endpoints; live visualizer. Verified with `hashicorp/go-azure-sdk` (the SDK inside the azurerm provider). See [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Quick start
+
+Needs Go 1.22+ (and later, Docker for AKS). Works on macOS, Windows and Linux.
+
+```bash
+# build
+go build -o bin/nimbus ./cmd/nimbus          # Windows: go build -o bin\nimbus.exe .\cmd\nimbus
+
+# trust the local CA once (prints the exact command for your OS)
+./bin/nimbus cert
+
+# run
+./bin/nimbus start                            # add --persist to keep state between runs
+```
+
+Open http://localhost:4700, then in another terminal:
+
+```bash
+cd examples/terraform/azure-basic
+terraform init
+terraform apply
+```
+
+## Why a certificate?
+
+The azurerm provider only talks HTTPS to the metadata and ARM endpoints. On first start Nimbus creates its own CA in `~/.nimbus/certs` and signs a `localhost` certificate with it. `nimbus cert` prints the one command that trusts that CA on your OS:
+
+| OS | Command (also printed by `nimbus cert`) |
+|---|---|
+| macOS | `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.nimbus/certs/nimbus-ca.pem` |
+| Windows (PowerShell) | `Import-Certificate -FilePath $HOME\.nimbus\certs\nimbus-ca.pem -CertStoreLocation Cert:\CurrentUser\Root` |
+| Linux | copy to `/usr/local/share/ca-certificates/` and run `update-ca-certificates`, or set `SSL_CERT_FILE` |
+
+The CA key never leaves your machine. Remove "Nimbus Local CA" from the same store to undo it.
+
+## Using it from Terraform
+
+Either put the settings in the provider block (see the example) or export them:
+
+```bash
+eval "$(./bin/nimbus env azure)"          # PowerShell: ./bin/nimbus.exe env azure | Invoke-Expression
+```
+
+| Setting | Value |
+|---|---|
+| `metadata_host` / `ARM_METADATA_HOSTNAME` | `localhost:4701` |
+| `subscription_id` | `00000000-0000-0000-0000-000000000000` (any GUID works) |
+| `tenant_id` / `client_id` / `client_secret` | any values; Nimbus issues a token for anything |
+| `resource_provider_registrations` | `"none"` |
+
+## What works today
+
+| Tier | Resource types | Behaviour |
+|---|---|---|
+| Modelled | Resource groups, virtual networks, subnets | Validation, server fields (etag, resourceGuid), VNet ↔ subnet sync, cascade delete |
+| Accepted | Any other ARM type | Stored and returned with `provisioningState: Succeeded`; nothing runs behind it |
+| Actions | `POST …/listKeys` etc. | Return `{}` and show as "unimplemented" in the activity feed |
+
+Not yet: data planes (Blob, Key Vault secrets), AKS clusters you can `kubectl` into, the `az` CLI, AWS and GCP. Those are the next milestones.
+
+## Repo layout
+
+```
+cmd/nimbus/            CLI: start, cert, env
+internal/core/         cloud-agnostic engine: store, event bus, certs, persistence
+internal/azure/        ARM emulator: routing, identity/metadata, generic CRUD, per-type hooks
+internal/ui/           visualizer API + SSE, and the embedded web app (static/)
+examples/terraform/    configs to apply against Nimbus
+test/sdkcompat/        drives Nimbus with hashicorp/go-azure-sdk (separate Go module)
+docs/                  roadmap, offline setup
+```
+
+## Tests
+
+```bash
+go test ./...                              # unit + HTTP tests, no network
+cd test/sdkcompat && go run . -endpoint https://localhost:4701   # real Azure SDK against a running Nimbus
+```

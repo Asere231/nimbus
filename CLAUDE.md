@@ -26,6 +26,9 @@ Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualize
 - Responses must be `Content-Type: application/json` or the SDK skips provisioning-state checks.
 - Deleting something absent returns 204. A missing resource group is `ResourceGroupNotFound`; other misses are `ResourceNotFound`.
 - Tokens are unsigned JWTs; clients only decode the claims (`oid`, `tid`, `appid`).
+- A resource's `id` and `name` are fixed when it is created. ARM resolves IDs case-insensitively but always answers with the casing used at creation, and the name is immutable. Take them from the path only on create, or a client using different casing silently renames the resource and Terraform sees a perpetual diff.
+- **macOS rejects long-lived server certificates** with `x509: "localhost" certificate is not standards compliant`, which never mentions dates. The limit is on the validity *span* (`NotAfter - NotBefore`): measured on macOS 27, 824 days passes and 825 fails. Backdating `NotBefore` for clock skew spends part of that budget. Compute `NotAfter` from `NotBefore` as a plain duration in UTC — `AddDate` works in the local zone, so crossing a daylight-saving boundary shifts the span by an hour. Nimbus uses 397 days, under Apple's documented 398.
+- **Some azurerm delays cannot be fixed from this side.** A resource group takes ~20 s to create and every DELETE a flat 10 s, no matter what we return. `azurerm_resource_group` ignores `Azure-AsyncOperation` and runs its own client-side wait that re-reads the group several times; the delete poller waits, then GETs until the resource 404s. Adding async headers to resource-group writes or `Content-Type` to the empty 202 changes neither. Measured against azurerm 4.81.0 — don't re-chase it.
 
 ## Adding a resource type (the usual task)
 

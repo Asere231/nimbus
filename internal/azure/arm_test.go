@@ -258,17 +258,30 @@ func TestProvidersAndSubscription(t *testing.T) {
 	}
 }
 
+// raw performs a request and returns the response so headers can be asserted.
+func raw(t *testing.T, srv *httptest.Server, method, path, body string) *http.Response {
+	t.Helper()
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req, _ := http.NewRequest(method, srv.URL+path+"?api-version=2023-09-01", rdr)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	t.Cleanup(func() { res.Body.Close() })
+	return res
+}
+
 // Writes advertise an async operation that is already Succeeded, with
 // Retry-After: 1, so the SDK polls once after a second instead of waiting 10.
 func TestWritesAdvertiseFastAsyncOperation(t *testing.T) {
 	srv, _ := newTestServer(t)
 	rg := sub + "/resourceGroups/rg-lro"
 	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
-	req, _ := http.NewRequest("PUT", srv.URL+rg+"/providers/Microsoft.Network/routeTables/rt?api-version=2023-09-01", strings.NewReader(`{"location":"eastus"}`))
-	res, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := raw(t, srv, "PUT", rg+"/providers/Microsoft.Network/routeTables/rt", `{"location":"eastus"}`)
 	op := res.Header.Get("Azure-AsyncOperation")
 	if op == "" || res.Header.Get("Retry-After") != "1" {
 		t.Fatalf("missing async headers: %v", res.Header)
@@ -277,5 +290,37 @@ func TestWritesAdvertiseFastAsyncOperation(t *testing.T) {
 	code, body := do(t, srv, "GET", u.Path, nil)
 	if code != 200 || body["status"] != "Succeeded" {
 		t.Errorf("operation status = %d %v", code, body)
+	}
+}
+
+// A resource group PUT is synchronous, as it is in real ARM: no async header.
+//
+// Do not "optimise" this. Measured against azurerm 4.81.0: adding
+// Azure-AsyncOperation + Retry-After to resource-group writes changes nothing,
+// because azurerm_resource_group does not use the SDK's async poller. It runs
+// its own client-side wait that GETs the resource group four times across 20 s
+// and requires the target state several times in a row; every response already
+// said Succeeded. The 20 s is a constant inside the provider, so it cannot be
+// shortened from this side — only by the provider, or by not using it.
+//
+// The same holds for DELETE: each one costs a flat 10 s because azurerm waits,
+// then GETs until the resource 404s, ignoring the operation URL we advertise.
+// Setting Content-Type on the empty 202 makes no difference either.
+func TestResourceGroupWritesAreSynchronous(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-sync"
+
+	res := raw(t, srv, "PUT", rg, `{"location":"eastus"}`)
+	if res.StatusCode != 201 {
+		t.Fatalf("PUT rg = %d", res.StatusCode)
+	}
+	if op := res.Header.Get("Azure-AsyncOperation"); op != "" {
+		t.Errorf("resource-group PUT advertised an async operation (%s); ARM answers these synchronously", op)
+	}
+
+	// A resource under it, by contrast, does advertise one.
+	res = raw(t, srv, "PUT", rg+"/providers/Microsoft.Network/routeTables/rt", `{"location":"eastus"}`)
+	if res.Header.Get("Azure-AsyncOperation") == "" {
+		t.Error("resource PUT must advertise an async operation")
 	}
 }

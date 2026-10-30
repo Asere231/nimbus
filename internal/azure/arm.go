@@ -191,6 +191,10 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 	if res, err := s.store.Get(t.ID); err == nil {
 		raw = res.Body
 	}
+	// Only real resources advertise an async operation, matching ARM: a
+	// resource group PUT is synchronous there. Adding the header here does NOT
+	// speed up azurerm, which ignores it for resource groups — see the note on
+	// TestResourceGroupWritesAreSynchronous.
 	if t.Kind == "resource" {
 		s.markAsync(w, t)
 	}

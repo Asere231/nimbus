@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Keep this in step with the `go` directive in go.mod.
+  GO_VERSION: "1.22"
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod # stdlib-only, so there is no go.sum
+
+      # gofmt only needs checking once, and only on Linux: a CRLF checkout on
+      # Windows makes it report every file.
+      - name: gofmt
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: build
+        run: go build -o bin/nimbus ./cmd/nimbus
+
+      # The main module must stay stdlib-only (see CLAUDE.md). Check at module
+      # level: `go list -deps` also reports the stdlib's own vendored
+      # golang.org/x/... packages, which are not dependencies of ours.
+      - name: no third-party dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          mods=$(go list -m all | grep -v '^github.com/Asere231/nimbus$' || true)
+          if [ -n "$mods" ]; then
+            echo "The main module must be stdlib-only, but it requires:"
+            echo "$mods"
+            exit 1
+          fi
+
+  sdkcompat:
+    name: go-azure-sdk harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: test/sdkcompat/go.sum
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus cert
+          ./bin/nimbus start &
+          # Wait for the visualizer rather than sleeping a fixed amount.
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: Run the SDK compatibility harness
+        working-directory: test/sdkcompat
+        # Unlike macOS, Go on Linux honours SSL_CERT_FILE, so the CA does not
+        # need installing into a system trust store.
+        run: |
+          export SSL_CERT_FILE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          go run . -endpoint https://localhost:4701
+
+  terraform:
+    name: terraform azure-basic
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false # so exit codes reach us unchanged
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus cert
+          ./bin/nimbus start &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, plan, destroy
+        working-directory: examples/terraform/azure-basic
+        run: |
+          set -euo pipefail
+          # Go on Linux honours SSL_CERT_FILE; the azurerm provider inherits it.
+          export SSL_CERT_FILE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          # The real bar: a second plan must find nothing to do. Anything else
+          # means we echo a field differently from the way it was sent.
+          # -detailed-exitcode: 0 = no changes, 1 = error, 2 = changes pending.
+          set +e
+          terraform plan -detailed-exitcode -input=false
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::plan -detailed-exitcode returned $code; expected 0 (no changes)"
+            exit 1
+          fi
+
+          terraform destroy -auto-approve -input=false
+
+      - name: Nothing left behind
+        run: |
+          remaining=$(curl -sf "http://localhost:4700/api/resources?cloud=azure" \
+            | grep -o '"type":"[^"]*"' | grep -v 'Microsoft.Resources/subscriptions' || true)
+          if [ -n "$remaining" ]; then
+            echo "::error::destroy left resources behind:"
+            echo "$remaining"
+            exit 1
+          fi

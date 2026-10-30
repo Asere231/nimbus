@@ -76,6 +76,11 @@ func (s *Server) handleARM(w http.ResponseWriter, r *http.Request) string {
 			return s.handleAction(w, t)
 		}
 		s.listCollection(w, t)
+	default:
+		// Unreachable today, but a new target kind that forgot its case here
+		// would otherwise return an empty 200 and be very hard to debug.
+		writeError(w, 500, "InternalError", "Nimbus parsed %q as kind %q and has no handler for it", r.URL.Path, t.Kind)
+		return "unhandled target kind: " + t.Kind
 	}
 	return ""
 }
@@ -104,6 +109,11 @@ func (s *Server) handleResource(w http.ResponseWriter, r *http.Request, t target
 			w.WriteHeader(204) // ARM: deleting something absent is a no-op
 			return "already absent"
 		}
+		// Only this type's hook runs. store.Delete cascades to children, but
+		// their AfterDelete hooks do not fire, so a type whose hook stops a
+		// real engine will leak it when an ancestor is deleted instead. Fine
+		// while every hook is pure state; it must be fixed before AKS (M3)
+		// starts containers. Noted in docs/ROADMAP.md under "Later".
 		if h := s.hookFor(t.Type); h.AfterDelete != nil {
 			h.AfterDelete(s, t)
 		}
@@ -148,6 +158,23 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 	}
 
 	// Canonical fields every ARM resource carries.
+	//
+	// id and name come from the path, but only on create. ARM resolves IDs
+	// case-insensitively while always answering with the casing used at
+	// creation, and a resource's name is immutable. Taking them from the path
+	// on every write would let a client that happens to use different casing
+	// rename the resource under Terraform's feet, which then sees the name it
+	// holds in state disagree with ours on every read.
+	if existing != nil {
+		if id, ok := existing["id"].(string); ok && id != "" {
+			t.ID = id
+		}
+		if name, ok := existing["name"].(string); ok && name != "" {
+			t.Name = name
+		}
+	}
+	// From here on t carries the canonical identity, so hooks, the store key
+	// and the async-operation URL all agree with what reads will report.
 	body["id"] = t.ID
 	body["name"] = t.Name
 	body["type"] = t.Type

@@ -20,13 +20,19 @@ const sub = "/subscriptions/" + DefaultSubscriptionID
 
 func newTestServer(t *testing.T) (*httptest.Server, *core.Store) {
 	t.Helper()
+	srv, store, _ := newTestServerWithBus(t)
+	return srv, store
+}
+
+func newTestServerWithBus(t *testing.T) (*httptest.Server, *core.Store, *core.Bus) {
+	t.Helper()
 	bus := core.NewBus(100)
 	store, _ := core.NewStore(bus, "")
 	var az *Server
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { az.ServeHTTP(w, r) }))
 	az = New(Config{PublicURL: srv.URL}, store, bus)
 	t.Cleanup(srv.Close)
-	return srv, store
+	return srv, store, bus
 }
 
 func do(t *testing.T, srv *httptest.Server, method, path string, body any) (int, map[string]any) {
@@ -322,5 +328,179 @@ func TestResourceGroupWritesAreSynchronous(t *testing.T) {
 	res = raw(t, srv, "PUT", rg+"/providers/Microsoft.Network/routeTables/rt", `{"location":"eastus"}`)
 	if res.Header.Get("Azure-AsyncOperation") == "" {
 		t.Error("resource PUT must advertise an async operation")
+	}
+}
+
+// --- hardening -------------------------------------------------------------
+
+func TestPatchOnMissingResourceIs404(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-patch"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+
+	code, body := do(t, srv, "PATCH", rg+"/providers/Microsoft.Network/routeTables/ghost", map[string]any{"tags": map[string]any{"a": "b"}})
+	if code != 404 {
+		t.Errorf("PATCH missing resource = %d, want 404", code)
+	}
+	if got := errCode(body); got != "ResourceNotFound" {
+		t.Errorf("error code = %q, want ResourceNotFound", got)
+	}
+
+	// A PATCH on a missing resource group names the group, not the resource.
+	code, body = do(t, srv, "PATCH", sub+"/resourceGroups/rg-ghost", map[string]any{"tags": map[string]any{}})
+	if code != 404 || errCode(body) != "ResourceGroupNotFound" {
+		t.Errorf("PATCH missing rg = %d %v, want 404 ResourceGroupNotFound", code, body)
+	}
+}
+
+func errCode(body map[string]any) string {
+	e, _ := body["error"].(map[string]any)
+	if e == nil {
+		return ""
+	}
+	s, _ := e["code"].(string)
+	return s
+}
+
+func TestPutWithInvalidJSONIs400(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-badjson"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	rt := rg + "/providers/Microsoft.Network/routeTables/rt"
+
+	for _, bad := range []string{`{"location":`, `not json at all`, `[1,2,3]`, `"a string"`} {
+		res := raw(t, srv, "PUT", rt, bad)
+		if res.StatusCode != 400 {
+			t.Errorf("PUT %q = %d, want 400", bad, res.StatusCode)
+		}
+		var body map[string]any
+		data, _ := io.ReadAll(res.Body)
+		_ = json.Unmarshal(data, &body)
+		if got := errCode(body); got != "InvalidRequestContent" {
+			t.Errorf("PUT %q: error code %q, want InvalidRequestContent", bad, got)
+		}
+	}
+
+	// An empty body is legal: some clients PUT nothing for a resource whose
+	// fields are all defaults.
+	if res := raw(t, srv, "PUT", rg+"/providers/Microsoft.Network/routeTables/rt2", ""); res.StatusCode != 201 {
+		t.Errorf("PUT with empty body = %d, want 201", res.StatusCode)
+	}
+}
+
+// Deleting a resource group deletes everything in it, and the visualizer must
+// see a delete event for every one of them, leaves before parents, or the
+// graph keeps orphaned nodes.
+func TestDeletingResourceGroupCascadesAndPublishesEvents(t *testing.T) {
+	srv, store, bus := newTestServerWithBus(t)
+	rg := sub + "/resourceGroups/rg-cascade"
+	vnet := rg + "/providers/Microsoft.Network/virtualNetworks/vnet"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	do(t, srv, "PUT", vnet, map[string]any{"location": "eastus", "properties": map[string]any{
+		"addressSpace": map[string]any{"addressPrefixes": []string{"10.0.0.0/16"}},
+		"subnets":      []any{map[string]any{"name": "a", "properties": map[string]any{"addressPrefix": "10.0.1.0/24"}}},
+	}})
+	do(t, srv, "PUT", rg+"/providers/Microsoft.Network/networkSecurityGroups/nsg", map[string]any{"location": "eastus"})
+
+	ch, _, cancel := bus.Subscribe()
+	defer cancel()
+
+	if code, _ := do(t, srv, "DELETE", rg, nil); code != 202 {
+		t.Fatalf("DELETE rg = %d", code)
+	}
+
+	for _, id := range []string{rg, vnet, vnet + "/subnets/a", rg + "/providers/Microsoft.Network/networkSecurityGroups/nsg"} {
+		if store.Exists(id) {
+			t.Errorf("%s survived the cascade", id)
+		}
+	}
+
+	var deleted []string
+	for len(ch) > 0 {
+		e := <-ch
+		if e.Kind == "resource" && e.Action == "delete" {
+			deleted = append(deleted, e.ResourceID)
+		}
+	}
+	if len(deleted) != 4 {
+		t.Errorf("got %d delete events, want 4: %v", len(deleted), deleted)
+	}
+	// Leaves first: an ancestor must never be announced before its descendant,
+	// or the visualizer removes a parent node while its children still hang off
+	// it.
+	for i, id := range deleted {
+		for _, earlier := range deleted[:i] {
+			if strings.HasPrefix(strings.ToLower(id), strings.ToLower(earlier)+"/") {
+				t.Errorf("ancestor %s was announced before its descendant %s", earlier, id)
+			}
+		}
+	}
+}
+
+// A resource's name is fixed when it is created. ARM resolves IDs
+// case-insensitively but keeps answering with the casing used at creation, so a
+// client that writes with different casing must not change what later GETs
+// return -- Terraform compares the name it has in state against what we send.
+func TestResourceIdentityKeepsItsOriginalCasing(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-Casing"
+	code, body := do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	if code != 201 || body["name"] != "rg-Casing" {
+		t.Fatalf("create = %d %v", code, body)
+	}
+
+	// Re-PUT addressing the same group in lower case.
+	_, body = do(t, srv, "PUT", sub+"/resourcegroups/rg-casing", map[string]any{"location": "eastus"})
+	if body["name"] != "rg-Casing" || body["id"] != rg {
+		t.Errorf("a re-PUT with different casing renamed the group: name=%v id=%v", body["name"], body["id"])
+	}
+	// And a later read still reports the original casing.
+	_, body = do(t, srv, "GET", sub+"/resourcegroups/rg-casing", nil)
+	if body["name"] != "rg-Casing" || body["id"] != rg {
+		t.Errorf("GET after the re-PUT reports %v / %v", body["name"], body["id"])
+	}
+}
+
+// Every verb must resolve a differently-cased ID to the same resource.
+func TestEveryHandlerResolvesIDsCaseInsensitively(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-Case"
+	vnet := rg + "/providers/Microsoft.Network/virtualNetworks/VNet1"
+	space := map[string]any{"addressSpace": map[string]any{"addressPrefixes": []string{"10.0.0.0/16"}}}
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	do(t, srv, "PUT", vnet, map[string]any{"location": "eastus", "properties": space})
+	do(t, srv, "PUT", vnet+"/subnets/App", map[string]any{"properties": map[string]any{"addressPrefix": "10.0.1.0/24"}})
+
+	// Mangle the casing of every segment a client might differ on.
+	lower := strings.ToLower(vnet)
+
+	if code, _ := do(t, srv, "GET", lower, nil); code != 200 {
+		t.Errorf("GET lowercased = %d", code)
+	}
+	if code, _ := do(t, srv, "HEAD", lower, nil); code != 204 {
+		t.Errorf("HEAD lowercased = %d, want 204", code)
+	}
+	if code, _ := do(t, srv, "PATCH", lower, map[string]any{"tags": map[string]any{"k": "v"}}); code != 200 {
+		t.Errorf("PATCH lowercased = %d", code)
+	}
+	if code, l := do(t, srv, "GET", lower+"/subnets", nil); code != 200 || len(l["value"].([]any)) != 1 {
+		t.Errorf("list subnets lowercased = %d %v", code, l)
+	}
+	if code, _ := do(t, srv, "GET", strings.ToLower(rg)+"/resources", nil); code != 200 {
+		t.Errorf("rg resources lowercased = %d", code)
+	}
+	// An action on a lowercased resource path must find the resource.
+	if code, body := do(t, srv, "POST", lower+"/someAction", nil); code != 200 {
+		t.Errorf("action on lowercased resource = %d %v", code, body)
+	}
+	// Uppercased subscription segment too.
+	if code, _ := do(t, srv, "GET", strings.Replace(lower, "/subscriptions/", "/SUBSCRIPTIONS/", 1), nil); code != 200 {
+		t.Errorf("GET with uppercased /SUBSCRIPTIONS/ = %d", code)
+	}
+	if code, _ := do(t, srv, "DELETE", lower+"/subnets/app", nil); code != 202 {
+		t.Errorf("DELETE lowercased subnet = %d, want 202", code)
+	}
+	if code, _ := do(t, srv, "DELETE", lower, nil); code != 202 {
+		t.Errorf("DELETE lowercased vnet = %d, want 202", code)
 	}
 }

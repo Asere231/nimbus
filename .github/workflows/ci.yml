@@ -10,8 +10,14 @@ permissions:
   contents: read
 
 env:
-  # Keep this in step with the `go` directive in go.mod.
-  GO_VERSION: "1.22"
+  # The toolchain CI actually tests with. NOT pinned to go.mod's `go` directive:
+  # Go 1.22's Mach-O linker omits LC_UUID, and macOS 26's dyld refuses to load
+  # such binaries ("missing LC_UUID load command", then abort trap), so every
+  # test binary dies before running. Unrelated to Nimbus -- it hits any Go 1.22
+  # build on current macOS. The go.mod floor is covered by the minimum-go job.
+  GO_VERSION: "stable"
+  # The `go` directive in go.mod: the oldest toolchain we claim to support.
+  GO_MIN_VERSION: "1.22"
 
 jobs:
   test:
@@ -62,6 +68,21 @@ jobs:
             echo "$mods"
             exit 1
           fi
+
+  # The language level in go.mod must keep compiling on the oldest toolchain we
+  # claim to support. Linux only: see the GO_VERSION comment above for why 1.22
+  # cannot run its own test binaries on current macOS.
+  minimum-go:
+    name: oldest supported Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_MIN_VERSION }}
+          cache-dependency-path: go.mod
+      - run: go build ./...
+      - run: go test ./...
 
   sdkcompat:
     name: go-azure-sdk harness

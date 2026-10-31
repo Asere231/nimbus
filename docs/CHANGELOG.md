@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.1 — 2026-10-31
+
+Fixes found while proving `az keyvault` against Nimbus on macOS, which is now
+the last of Milestone 4's done-criteria to be verified with a real client.
+
+- `nimbus az register` trusts the CA before it calls `az`, not after. The very
+  first command, `az cloud register`, fetches `/metadata/endpoints` over TLS,
+  so the old order failed with an SSL error blaming the network. `--run` now
+  sets `REQUESTS_CA_BUNDLE` on each child process, so it works whatever the
+  shell has exported.
+- It also turns off MSAL's instance discovery
+  (`core.instance_discovery=false`), which otherwise validates our authority
+  by calling the real `login.microsoftonline.com` — reaching the internet and
+  then failing, since the CA bundle no longer trusts public certificates.
+- Re-registering an existing cloud falls back to `az cloud update` instead of
+  exiting, so running the command again after a port change works.
+
 ## 0.4.0 — 2026-10-31
 
 Milestone 4: identity, secrets and a container registry. An app on the

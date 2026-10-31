@@ -33,7 +33,7 @@ import (
 	"github.com/Asere231/nimbus/internal/ui"
 )
 
-const version = "0.4.0"
+const version = "0.4.1"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -270,12 +270,22 @@ func printEnv(args []string) {
 // azCLI implements `nimbus az register`, which teaches the az CLI about
 // Nimbus.
 //
-// The az CLI does not read our /metadata/endpoints document -- that is a
-// Terraform and Azure-SDK mechanism. az works from its own list of clouds, so
-// using it against Nimbus means registering one. A full custom-cloud story is
-// Milestone 5's job; this is the part Key Vault needs, because `az keyvault`
-// builds vault hostnames from the cloud's keyvault DNS suffix and would
-// otherwise talk to real Azure.
+// az works from its own list of clouds, so using it against Nimbus means
+// registering one. A full custom-cloud story is Milestone 5's job; this is the
+// part Key Vault needs, because `az keyvault` builds vault hostnames from the
+// cloud's keyvault DNS suffix and would otherwise talk to real Azure.
+//
+// Two things here were measured against az 2.90.0 and are easy to get wrong:
+//
+//  1. `az cloud register` immediately GETs /metadata/endpoints from the
+//     endpoint it was handed, so the CA has to be trusted BEFORE that command
+//     runs, not afterwards. We set REQUESTS_CA_BUNDLE on the child process so
+//     --run works whatever the shell has exported.
+//  2. MSAL validates an unknown authority by asking the REAL
+//     login.microsoftonline.com about it, which both reaches the internet and
+//     fails outright once REQUESTS_CA_BUNDLE has replaced the system trust
+//     store. `core.instance_discovery=false` turns that off; it is the switch
+//     Azure Stack uses (azure/cli/core/_profile.py).
 func azCLI(args []string) {
 	if len(args) == 0 || args[0] != "register" {
 		fmt.Fprintln(os.Stderr, "usage: nimbus az register [--home DIR] [--azure-port 4701] [--name nimbus] [--run]")
@@ -307,14 +317,35 @@ func azCLI(args []string) {
 		"--suffix-keyvault-dns", kvSuffix,
 		"--suffix-storage-endpoint", stSuffix,
 	}
-	steps := [][]string{register, {"cloud", "set", "-n", *name}, {"cloud", "update", "--profile", "latest"}}
+	steps := [][]string{
+		{"config", "set", "core.instance_discovery=false"},
+		register,
+		{"cloud", "set", "-n", *name},
+		{"cloud", "update", "--profile", "latest"},
+	}
+
+	// The CA has to be in place before the first az call, so print it first
+	// and hand it to every child process.
+	fmt.Println("# Trust the Nimbus CA in the shell you use az from:")
+	if runtime.GOOS == "windows" {
+		fmt.Printf("$env:REQUESTS_CA_BUNDLE = \"%s\"\n", ca)
+	} else {
+		fmt.Printf("export REQUESTS_CA_BUNDLE=%s\n", ca)
+	}
+	fmt.Println()
 
 	if *run {
 		for _, step := range steps {
-			fmt.Println("+ az", strings.Join(step, " "))
-			cmd := exec.Command("az", step...)
-			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-			if err := cmd.Run(); err != nil {
+			if err := runAz(ca, step); err != nil {
+				// `az cloud register` refuses a name it already knows, which
+				// re-registering after a port change always hits. The same
+				// flags work as `cloud update`.
+				if step[1] == "register" {
+					update := append([]string{"cloud", "update"}, step[2:]...)
+					if err2 := runAz(ca, update); err2 == nil {
+						continue
+					}
+				}
 				fmt.Fprintf(os.Stderr, "nimbus: az %s failed: %v\n", step[1], err)
 				os.Exit(1)
 			}
@@ -325,20 +356,26 @@ func azCLI(args []string) {
 		}
 	}
 
-	// Sign in and trust the CA: printed either way, because both touch things
-	// outside Nimbus -- the az credential cache and your shell.
+	// Signing in is printed either way: it writes to the az credential cache,
+	// which lives outside Nimbus.
 	fmt.Println()
-	fmt.Println("# Then, in the shell you will use az from:")
-	if runtime.GOOS == "windows" {
-		fmt.Printf("$env:REQUESTS_CA_BUNDLE = \"%s\"\n", ca)
-	} else {
-		fmt.Printf("export REQUESTS_CA_BUNDLE=%s\n", ca)
-	}
+	fmt.Println("# Then sign in:")
 	fmt.Printf("az login --service-principal -u %s -p nimbus --tenant %s --allow-no-subscriptions\n",
 		azure.DefaultClientID, azure.DefaultTenantID)
 	fmt.Println()
 	fmt.Println("# To go back to real Azure:")
 	fmt.Println("az cloud set -n AzureCloud")
+	fmt.Println("az config set core.instance_discovery=true")
+}
+
+// runAz runs one az command with the Nimbus CA trusted, so `--run` does not
+// depend on the caller having exported REQUESTS_CA_BUNDLE first.
+func runAz(ca string, args []string) error {
+	fmt.Println("+ az", strings.Join(args, " "))
+	cmd := exec.Command("az", args...)
+	cmd.Env = append(os.Environ(), "REQUESTS_CA_BUNDLE="+ca)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
 }
 
 // storageKey asks the running server for an account key through ARM.

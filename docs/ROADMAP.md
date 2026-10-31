@@ -20,6 +20,9 @@ Milestones 1 to 4 are done, on macOS 27 (arm64) with azurerm 4.81.0.
   emulated ACR, pulled by the cluster through a containerd mirror, running a
   pod that reads a secret from the emulated Key Vault data plane. Apply, clean
   plan, destroy, and a re-apply of the purged vault name all verified.
+- `nimbus az register` makes the `az` CLI talk to Nimbus: `az login`,
+  `az account list`, and `az keyvault secret show`/`set` against the vault
+  Terraform created, all verified on macOS with az 2.90.0.
 - CI is green on ubuntu, macos and windows, plus the SDK harness and the
   Terraform apply/plan/destroy jobs.
 
@@ -59,9 +62,6 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 ## Left to confirm
 
-- **`az keyvault secret set/show` has not been run yet.** `nimbus az register`
-  prints and runs the `az cloud register` line, but the data plane has only
-  been driven by Terraform, curl and the Go tests on this machine.
 - **No Key Vault SDK harness.** `test/storage-sdk` drives blobs, queues and
   tables with Microsoft's Python SDKs; the vault has no equivalent, so the
   challenge flow is only proven against azurerm and the az CLI.

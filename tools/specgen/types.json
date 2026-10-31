@@ -1,0 +1,332 @@
+[
+  {
+    "type": "Microsoft.App/containerApps",
+    "apiVersion": "2025-07-01",
+    "spec": "specification/app/resource-manager/Microsoft.App/ContainerApps/stable/2025-07-01/ContainerApps.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}"
+  },
+  {
+    "type": "Microsoft.App/managedEnvironments",
+    "apiVersion": "2025-07-01",
+    "spec": "specification/app/resource-manager/Microsoft.App/ContainerApps/stable/2025-07-01/ManagedEnvironments.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}"
+  },
+  {
+    "type": "Microsoft.Authorization/policyAssignments",
+    "apiVersion": "2025-01-01",
+    "spec": "specification/resources/resource-manager/Microsoft.Authorization/policy/stable/2025-01-01/policyAssignments.json",
+    "path": "/{scope}/providers/Microsoft.Authorization/policyAssignments/{policyAssignmentName}"
+  },
+  {
+    "type": "Microsoft.Authorization/policyDefinitions",
+    "apiVersion": "2025-01-01",
+    "spec": "specification/resources/resource-manager/Microsoft.Authorization/policy/stable/2025-01-01/policyDefinitions.json",
+    "path": "/subscriptions/{subscriptionId}/providers/Microsoft.Authorization/policyDefinitions/{policyDefinitionName}"
+  },
+  {
+    "type": "Microsoft.Cache/redis",
+    "apiVersion": "2024-11-01",
+    "spec": "specification/redis/resource-manager/Microsoft.Cache/Redis/stable/2024-11-01/redis.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Cache/redis/{name}"
+  },
+  {
+    "type": "Microsoft.Compute/availabilitySets",
+    "apiVersion": "2024-07-01",
+    "spec": "specification/compute/resource-manager/Microsoft.Compute/Compute/stable/2024-07-01/availabilitySet.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/availabilitySets/{availabilitySetName}"
+  },
+  {
+    "type": "Microsoft.Compute/disks",
+    "apiVersion": "2023-10-02",
+    "spec": "specification/compute/resource-manager/Microsoft.Compute/Compute/stable/2023-10-02/disk.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/disks/{diskName}"
+  },
+  {
+    "type": "Microsoft.Compute/galleries",
+    "apiVersion": "2023-07-03",
+    "spec": "specification/compute/resource-manager/Microsoft.Compute/Compute/stable/2023-07-03/gallery.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/galleries/{galleryName}"
+  },
+  {
+    "type": "Microsoft.Compute/images",
+    "apiVersion": "2024-07-01",
+    "spec": "specification/compute/resource-manager/Microsoft.Compute/Compute/stable/2024-07-01/image.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/images/{imageName}"
+  },
+  {
+    "type": "Microsoft.Compute/proximityPlacementGroups",
+    "apiVersion": "2024-07-01",
+    "spec": "specification/compute/resource-manager/Microsoft.Compute/Compute/stable/2024-07-01/proximityPlacementGroup.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/proximityPlacementGroups/{proximityPlacementGroupName}"
+  },
+  {
+    "type": "Microsoft.Compute/snapshots",
+    "apiVersion": "2023-10-02",
+    "spec": "specification/compute/resource-manager/Microsoft.Compute/Compute/stable/2023-10-02/snapshot.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/snapshots/{snapshotName}"
+  },
+  {
+    "type": "Microsoft.Compute/sshPublicKeys",
+    "apiVersion": "2024-07-01",
+    "spec": "specification/compute/resource-manager/Microsoft.Compute/Compute/stable/2024-07-01/sshPublicKey.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/sshPublicKeys/{sshPublicKeyName}"
+  },
+  {
+    "type": "Microsoft.Compute/virtualMachineScaleSets",
+    "apiVersion": "2024-07-01",
+    "spec": "specification/compute/resource-manager/Microsoft.Compute/Compute/stable/2024-07-01/virtualMachineScaleSet.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachineScaleSets/{vmScaleSetName}"
+  },
+  {
+    "type": "Microsoft.Compute/virtualMachines",
+    "apiVersion": "2024-07-01",
+    "spec": "specification/compute/resource-manager/Microsoft.Compute/Compute/stable/2024-07-01/virtualMachine.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}"
+  },
+  {
+    "type": "Microsoft.Compute/virtualMachines/extensions",
+    "apiVersion": "2024-07-01",
+    "spec": "specification/compute/resource-manager/Microsoft.Compute/Compute/stable/2024-07-01/virtualMachine.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}/extensions/{vmExtensionName}"
+  },
+  {
+    "type": "Microsoft.ContainerInstance/containerGroups",
+    "apiVersion": "2026-07-01",
+    "spec": "specification/containerinstance/resource-manager/Microsoft.ContainerInstance/ContainerInstance/stable/2026-07-01/containerInstance.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ContainerInstance/containerGroups/{containerGroupName}"
+  },
+  {
+    "type": "Microsoft.DBforMySQL/flexibleServers",
+    "apiVersion": "2023-12-30",
+    "spec": "specification/mysql/resource-manager/Microsoft.DBforMySQL/FlexibleServers/stable/2023-12-30/FlexibleServers.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DBforMySQL/flexibleServers/{serverName}"
+  },
+  {
+    "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+    "apiVersion": "2024-08-01",
+    "spec": "specification/postgresql/resource-manager/Microsoft.DBforPostgreSQL/PostgreSql/stable/2024-08-01/FlexibleServers.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DBforPostgreSQL/flexibleServers/{serverName}"
+  },
+  {
+    "type": "Microsoft.DocumentDB/databaseAccounts",
+    "apiVersion": "2025-10-15",
+    "spec": "specification/cosmos-db/resource-manager/Microsoft.DocumentDB/DocumentDB/stable/2025-10-15/cosmos-db.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}"
+  },
+  {
+    "type": "Microsoft.EventHub/namespaces",
+    "apiVersion": "2024-01-01",
+    "spec": "specification/eventhub/resource-manager/Microsoft.EventHub/Eventhub/stable/2024-01-01/namespaces.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.EventHub/namespaces/{namespaceName}"
+  },
+  {
+    "type": "Microsoft.EventHub/namespaces/eventhubs",
+    "apiVersion": "2024-01-01",
+    "spec": "specification/eventhub/resource-manager/Microsoft.EventHub/Eventhub/stable/2024-01-01/eventhubs.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.EventHub/namespaces/{namespaceName}/eventhubs/{eventHubName}"
+  },
+  {
+    "type": "Microsoft.Insights/actionGroups",
+    "apiVersion": "2023-01-01",
+    "spec": "specification/monitor/resource-manager/Microsoft.Insights/Insights/stable/2023-01-01/actionGroups_API.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Insights/actionGroups/{actionGroupName}"
+  },
+  {
+    "type": "Microsoft.Insights/autoscalesettings",
+    "apiVersion": "2015-04-01",
+    "spec": "specification/monitor/resource-manager/Microsoft.Insights/Insights/stable/2015-04-01/autoscale_API.json",
+    "path": "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Insights/autoscalesettings/{autoscaleSettingName}"
+  },
+  {
+    "type": "Microsoft.Insights/components",
+    "apiVersion": "2020-02-02",
+    "spec": "specification/applicationinsights/resource-manager/Microsoft.Insights/ApplicationInsights/stable/2020-02-02/components_API.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Insights/components/{resourceName}"
+  },
+  {
+    "type": "Microsoft.Insights/metricAlerts",
+    "apiVersion": "2018-03-01",
+    "spec": "specification/monitor/resource-manager/Microsoft.Insights/Insights/stable/2018-03-01/metricAlert_API.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Insights/metricAlerts/{ruleName}"
+  },
+  {
+    "type": "Microsoft.Logic/workflows",
+    "apiVersion": "2019-05-01",
+    "spec": "specification/logic/resource-manager/Microsoft.Logic/Logic/stable/2019-05-01/logic.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Logic/workflows/{workflowName}"
+  },
+  {
+    "type": "Microsoft.Network/applicationGateways",
+    "apiVersion": "2026-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2026-03-01/applicationGateway.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/applicationGateways/{applicationGatewayName}"
+  },
+  {
+    "type": "Microsoft.Network/applicationSecurityGroups",
+    "apiVersion": "2025-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2025-03-01/applicationSecurityGroup.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/applicationSecurityGroups/{applicationSecurityGroupName}"
+  },
+  {
+    "type": "Microsoft.Network/azureFirewalls",
+    "apiVersion": "2025-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2025-03-01/azureFirewall.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/azureFirewalls/{azureFirewallName}"
+  },
+  {
+    "type": "Microsoft.Network/bastionHosts",
+    "apiVersion": "2025-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2025-03-01/bastionHost.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/bastionHosts/{bastionHostName}"
+  },
+  {
+    "type": "Microsoft.Network/dnsZones",
+    "apiVersion": "2018-05-01",
+    "spec": "specification/dns/resource-manager/Microsoft.Network/Dns/stable/2018-05-01/dns.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/dnsZones/{zoneName}"
+  },
+  {
+    "type": "Microsoft.Network/firewallPolicies",
+    "apiVersion": "2026-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2026-03-01/firewallPolicy.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/firewallPolicies/{firewallPolicyName}"
+  },
+  {
+    "type": "Microsoft.Network/loadBalancers",
+    "apiVersion": "2026-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2026-03-01/loadBalancer.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/loadBalancers/{loadBalancerName}"
+  },
+  {
+    "type": "Microsoft.Network/natGateways",
+    "apiVersion": "2025-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2025-03-01/natGateway.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/natGateways/{natGatewayName}"
+  },
+  {
+    "type": "Microsoft.Network/networkInterfaces",
+    "apiVersion": "2025-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2025-03-01/networkInterface.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/networkInterfaces/{networkInterfaceName}"
+  },
+  {
+    "type": "Microsoft.Network/networkSecurityGroups",
+    "apiVersion": "2025-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2025-03-01/networkSecurityGroup.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/networkSecurityGroups/{networkSecurityGroupName}"
+  },
+  {
+    "type": "Microsoft.Network/networkSecurityGroups/securityRules",
+    "apiVersion": "2025-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2025-03-01/networkSecurityGroup.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/networkSecurityGroups/{networkSecurityGroupName}/securityRules/{securityRuleName}"
+  },
+  {
+    "type": "Microsoft.Network/networkWatchers",
+    "apiVersion": "2026-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2026-03-01/networkWatcher.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/networkWatchers/{networkWatcherName}"
+  },
+  {
+    "type": "Microsoft.Network/privateDnsZones",
+    "apiVersion": "2024-06-01",
+    "spec": "specification/privatedns/resource-manager/Microsoft.Network/PrivateDns/stable/2024-06-01/privatedns.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/privateDnsZones/{privateZoneName}"
+  },
+  {
+    "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "apiVersion": "2024-06-01",
+    "spec": "specification/privatedns/resource-manager/Microsoft.Network/PrivateDns/stable/2024-06-01/privatedns.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/privateDnsZones/{privateZoneName}/virtualNetworkLinks/{virtualNetworkLinkName}"
+  },
+  {
+    "type": "Microsoft.Network/privateEndpoints",
+    "apiVersion": "2025-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2025-03-01/privateEndpoint.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/privateEndpoints/{privateEndpointName}"
+  },
+  {
+    "type": "Microsoft.Network/publicIPAddresses",
+    "apiVersion": "2025-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2025-03-01/publicIpAddress.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/publicIPAddresses/{publicIpAddressName}"
+  },
+  {
+    "type": "Microsoft.Network/routeTables",
+    "apiVersion": "2025-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2025-03-01/routeTable.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/routeTables/{routeTableName}"
+  },
+  {
+    "type": "Microsoft.Network/routeTables/routes",
+    "apiVersion": "2025-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2025-03-01/routeTable.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/routeTables/{routeTableName}/routes/{routeName}"
+  },
+  {
+    "type": "Microsoft.Network/virtualNetworkGateways",
+    "apiVersion": "2025-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2025-03-01/virtualNetworkGateway.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/virtualNetworkGateways/{virtualNetworkGatewayName}"
+  },
+  {
+    "type": "Microsoft.Network/virtualNetworks/virtualNetworkPeerings",
+    "apiVersion": "2026-03-01",
+    "spec": "specification/network/resource-manager/Microsoft.Network/Network/stable/2026-03-01/virtualNetwork.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/virtualNetworks/{virtualNetworkName}/virtualNetworkPeerings/{virtualNetworkPeeringName}"
+  },
+  {
+    "type": "Microsoft.ServiceBus/namespaces",
+    "apiVersion": "2024-01-01",
+    "spec": "specification/servicebus/resource-manager/Microsoft.ServiceBus/ServiceBus/stable/2024-01-01/namespace-preview.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ServiceBus/namespaces/{namespaceName}"
+  },
+  {
+    "type": "Microsoft.ServiceBus/namespaces/queues",
+    "apiVersion": "2024-01-01",
+    "spec": "specification/servicebus/resource-manager/Microsoft.ServiceBus/ServiceBus/stable/2024-01-01/Queue.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ServiceBus/namespaces/{namespaceName}/queues/{queueName}"
+  },
+  {
+    "type": "Microsoft.ServiceBus/namespaces/topics",
+    "apiVersion": "2026-01-01",
+    "spec": "specification/servicebus/resource-manager/Microsoft.ServiceBus/ServiceBus/stable/2026-01-01/servicebus.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ServiceBus/namespaces/{namespaceName}/topics/{topicName}"
+  },
+  {
+    "type": "Microsoft.Sql/servers",
+    "apiVersion": "2023-08-01",
+    "spec": "specification/sql/resource-manager/Microsoft.Sql/SQL/stable/2023-08-01/Servers.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Sql/servers/{serverName}"
+  },
+  {
+    "type": "Microsoft.Sql/servers/databases",
+    "apiVersion": "2023-08-01",
+    "spec": "specification/sql/resource-manager/Microsoft.Sql/SQL/stable/2023-08-01/Databases.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Sql/servers/{serverName}/databases/{databaseName}"
+  },
+  {
+    "type": "Microsoft.Sql/servers/firewallRules",
+    "apiVersion": "2023-08-01",
+    "spec": "specification/sql/resource-manager/Microsoft.Sql/SQL/stable/2023-08-01/FirewallRules.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Sql/servers/{serverName}/firewallRules/{firewallRuleName}"
+  },
+  {
+    "type": "Microsoft.Web/serverfarms",
+    "apiVersion": "2024-11-01",
+    "spec": "specification/web/resource-manager/Microsoft.Web/AppService/stable/2024-11-01/AppServicePlans.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Web/serverfarms/{name}"
+  },
+  {
+    "type": "Microsoft.Web/sites",
+    "apiVersion": "2024-11-01",
+    "spec": "specification/web/resource-manager/Microsoft.Web/AppService/stable/2024-11-01/WebApps.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Web/sites/{name}"
+  },
+  {
+    "type": "Microsoft.Web/staticSites",
+    "apiVersion": "2024-11-01",
+    "spec": "specification/web/resource-manager/Microsoft.Web/AppService/stable/2024-11-01/StaticSites.json",
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Web/staticSites/{name}"
+  }
+]

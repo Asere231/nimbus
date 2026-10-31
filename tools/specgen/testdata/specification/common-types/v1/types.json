@@ -1,0 +1,37 @@
+{
+  "swagger": "2.0",
+  "info": { "title": "Common types", "version": "v1" },
+  "paths": {},
+  "definitions": {
+    "Resource": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "readOnly": true },
+        "name": { "type": "string", "readOnly": true },
+        "type": { "type": "string", "readOnly": true },
+        "systemData": { "$ref": "#/definitions/SystemData", "readOnly": true }
+      }
+    },
+    "TrackedResource": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" },
+        "tags": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "allOf": [{ "$ref": "#/definitions/Resource" }]
+    },
+    "SystemData": {
+      "type": "object",
+      "properties": {
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Principal": {
+      "type": "object",
+      "properties": {
+        "principalId": { "type": "string", "readOnly": true },
+        "tenantId": { "type": "string", "readOnly": true }
+      }
+    }
+  }
+}

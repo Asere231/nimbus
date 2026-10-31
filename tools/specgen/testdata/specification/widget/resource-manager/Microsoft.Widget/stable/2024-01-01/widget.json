@@ -1,0 +1,51 @@
+{
+  "swagger": "2.0",
+  "info": { "title": "WidgetClient", "version": "2024-01-01" },
+  "paths": {
+    "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Widget/widgets/{widgetName}": {
+      "put": {
+        "operationId": "Widgets_CreateOrUpdate",
+        "responses": {
+          "200": { "description": "OK", "schema": { "$ref": "#/definitions/Widget" } },
+          "201": { "description": "Created", "schema": { "$ref": "#/definitions/Widget" } }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "Widget": {
+      "type": "object",
+      "properties": {
+        "properties": { "$ref": "#/definitions/WidgetProperties", "x-ms-client-flatten": true },
+        "etag": { "type": "string", "readOnly": true }
+      },
+      "allOf": [
+        { "$ref": "../../../../../common-types/v1/types.json#/definitions/TrackedResource" }
+      ]
+    },
+    "WidgetProperties": {
+      "type": "object",
+      "properties": {
+        "provisioningState": { "type": "string", "readOnly": true },
+        "resourceGuid": { "type": "string", "readOnly": true },
+        "colour": { "type": "string", "default": "blue" },
+        "spin": { "type": "integer", "default": 3 },
+        "enabled": { "type": "boolean", "default": true },
+        "sockets": {
+          "type": "array",
+          "readOnly": true,
+          "items": { "type": "string" }
+        },
+        "sku": { "$ref": "#/definitions/WidgetSku" },
+        "owner": { "$ref": "../../../../../common-types/v1/types.json#/definitions/Principal" }
+      }
+    },
+    "WidgetSku": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "tier": { "type": "string", "readOnly": true }
+      }
+    }
+  }
+}

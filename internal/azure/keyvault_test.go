@@ -141,9 +141,15 @@ func TestVaultSoftDeleteAndPurge(t *testing.T) {
 		t.Errorf("soft-deleted name reported available: %v", avail)
 	}
 
-	code, _ = do(t, srv, "POST", deleted+"/purge", nil)
-	if code != 200 && code != 202 && code != 204 {
-		t.Fatalf("purge = %d", code)
+	// Purge is long-running: the client polls afterwards, and must be sent to
+	// an operation rather than to the vault URL, where our own 404 would read
+	// as a failed purge.
+	purge := raw(t, srv, "POST", deleted+"/purge", "")
+	if purge.StatusCode != 202 {
+		t.Fatalf("purge = %d, want 202", purge.StatusCode)
+	}
+	if purge.Header.Get("Azure-AsyncOperation") == "" {
+		t.Error("purge must advertise an async operation for the client to poll")
 	}
 	if code, _ := do(t, srv, "GET", deleted, nil); code != 404 {
 		t.Errorf("purged vault still listed: %d", code)

@@ -45,7 +45,7 @@ provider "azurerm" {
     }
   }
 
-  metadata_host   = "localhost:4701"
+  metadata_host   = var.nimbus_host
   subscription_id = "00000000-0000-0000-0000-000000000000"
   tenant_id       = "00000000-0000-0000-0000-000000000001"
   client_id       = "00000000-0000-0000-0000-000000000002"
@@ -59,6 +59,12 @@ provider "kubernetes" {
   client_certificate     = base64decode(azurerm_kubernetes_cluster.app.kube_config[0].client_certificate)
   client_key             = base64decode(azurerm_kubernetes_cluster.app.kube_config[0].client_key)
   cluster_ca_certificate = base64decode(azurerm_kubernetes_cluster.app.kube_config[0].cluster_ca_certificate)
+}
+
+variable "nimbus_host" {
+  type        = string
+  default     = "localhost:4701"
+  description = "host:port Nimbus serves Azure on. Everything else -- the vault and registry addresses, the storage suffix -- follows from the metadata document it returns."
 }
 
 variable "location" {
@@ -110,7 +116,7 @@ resource "azurerm_key_vault" "app" {
   tenant_id                  = "00000000-0000-0000-0000-000000000001"
   sku_name                   = "standard"
   soft_delete_retention_days = 7
-  enable_rbac_authorization  = true
+  rbac_authorization_enabled = true
 }
 
 # Created through the Key Vault DATA plane, not the Resource Manager: this is

@@ -111,6 +111,21 @@ func (s *Server) handleARM(w http.ResponseWriter, r *http.Request) string {
 		s.listByFilter(w, func(res *core.Resource) bool {
 			return eq(res.Type, "Microsoft.Resources/resourceGroups") && eq(res.ParentID, "/subscriptions/"+t.Subscription)
 		})
+	case "subResources":
+		// A subscription-wide resource list. azurerm populates its Key Vault
+		// cache from this: it asks for every Microsoft.KeyVault/vaults in the
+		// subscription so it can turn a vault URI back into a resource ID.
+		want := resourceTypeFilter(r.URL.Query().Get("$filter"))
+		subID := "/subscriptions/" + t.Subscription
+		s.listByFilter(w, func(res *core.Resource) bool {
+			if !strings.HasPrefix(strings.ToLower(res.ID), strings.ToLower(subID)+"/") {
+				return false
+			}
+			if eq(res.Type, "Microsoft.Resources/resourceGroups") {
+				return false // groups are not listed as resources
+			}
+			return want == "" || eq(res.Type, want)
+		})
 	case "rgResources":
 		if !s.store.Exists(t.ID) {
 			writeError(w, 404, "ResourceGroupNotFound", "Resource group '%s' could not be found.", t.ResourceGroup)
@@ -447,6 +462,27 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, t target) 
 	}
 	writeJSON(w, 200, map[string]any{})
 	return "unimplemented action: " + t.Action
+}
+
+// resourceTypeFilter pulls the type out of an OData filter such as
+// "resourceType eq 'Microsoft.KeyVault/vaults'". An unrecognised filter means
+// no filter: over-reporting is recoverable, inventing a match is not.
+func resourceTypeFilter(filter string) string {
+	low := strings.ToLower(filter)
+	i := strings.Index(low, "resourcetype eq ")
+	if i < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(filter[i+len("resourcetype eq "):])
+	if rest == "" || (rest[0] != '\'' && rest[0] != '"') {
+		return ""
+	}
+	quote := rest[0]
+	end := strings.IndexByte(rest[1:], quote)
+	if end < 0 {
+		return ""
+	}
+	return rest[1 : 1+end]
 }
 
 func (s *Server) listCollection(w http.ResponseWriter, t target) {

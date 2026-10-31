@@ -30,9 +30,10 @@ func (s *Store) Persist(dir string) error {
 
 // vaultFile is the on-disk shape.
 type vaultFile struct {
-	Name    string            `json:"name"`
-	Secrets []persistedSecret `json:"secrets,omitempty"`
-	Deleted []persistedSecret `json:"deletedSecrets,omitempty"`
+	Name     string            `json:"name"`
+	Contacts []Contact         `json:"contacts,omitempty"`
+	Secrets  []persistedSecret `json:"secrets,omitempty"`
+	Deleted  []persistedSecret `json:"deletedSecrets,omitempty"`
 }
 
 type persistedSecret struct {
@@ -57,7 +58,7 @@ func (s *Store) Save(v *Vault) {
 	defer s.saveMu.Unlock()
 
 	v.mu.Lock()
-	file := vaultFile{Name: v.Name}
+	file := vaultFile{Name: v.Name, Contacts: v.Contacts}
 	for _, sec := range sorted(v.Secrets) {
 		file.Secrets = append(file.Secrets, persistedSecret{Name: sec.Name, Versions: sec.Versions})
 	}
@@ -119,6 +120,7 @@ func (s *Store) load() error {
 		}
 		v := s.CreateVault(file.Name)
 		v.mu.Lock()
+		v.Contacts = file.Contacts
 		for _, p := range file.Secrets {
 			v.Secrets[strings.ToLower(p.Name)] = &Secret{Name: p.Name, Versions: p.Versions}
 		}

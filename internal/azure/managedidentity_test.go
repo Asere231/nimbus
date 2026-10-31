@@ -166,3 +166,63 @@ func TestClusterIdentityStillComesFromTheAKSHook(t *testing.T) {
 		t.Errorf("kubelet resourceId = %v", kubelet["resourceId"])
 	}
 }
+
+// Deleting an identity is synchronous in Azure. Its generated client rejects
+// our usual 202-and-poll with "unexpected status 202 (202 Accepted) received
+// with no body", which fails a whole destroy -- measured against azurerm
+// 4.81.0 on the azure-app example.
+func TestIdentityDeleteIsSynchronous(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-iddel"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	id := rg + "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-del"
+	do(t, srv, "PUT", id, map[string]any{"location": "eastus"})
+
+	if code, _ := do(t, srv, "DELETE", id, nil); code != 200 {
+		t.Errorf("DELETE identity = %d, want 200", code)
+	}
+	if code, _ := do(t, srv, "GET", id, nil); code != 404 {
+		t.Errorf("identity survived its delete: %d", code)
+	}
+}
+
+// azurerm maps a Key Vault URI back to a resource ID by listing every vault in
+// the subscription through /subscriptions/{id}/resources. Without this the
+// destroy fails with "populating the Key Vaults cache ... Nimbus does not
+// recognise the path".
+func TestSubscriptionResourceListWithTypeFilter(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-sublist"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	do(t, srv, "PUT", rg+"/providers/Microsoft.KeyVault/vaults/kv-listed",
+		map[string]any{"location": "eastus", "properties": map[string]any{}})
+	do(t, srv, "PUT", rg+"/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-listed",
+		map[string]any{"location": "eastus"})
+
+	code, body := do(t, srv, "GET", sub+"/resources", nil)
+	if code != 200 {
+		t.Fatalf("subscription resource list = %d: %v", code, body)
+	}
+	all, _ := body["value"].([]any)
+	if len(all) < 2 {
+		t.Fatalf("unfiltered list returned %d resources: %v", len(all), body)
+	}
+	for _, item := range all {
+		if str(item.(map[string]any)["type"]) == "Microsoft.Resources/resourceGroups" {
+			t.Error("resource groups must not appear in the resource list")
+		}
+	}
+
+	code, filtered := getQuery(t, srv, sub+"/resources",
+		urlValues("$filter", "resourceType eq 'Microsoft.KeyVault/vaults'"))
+	if code != 200 {
+		t.Fatalf("filtered list = %d: %v", code, filtered)
+	}
+	vaults, _ := filtered["value"].([]any)
+	if len(vaults) != 1 {
+		t.Fatalf("filter returned %d resources: %v", len(vaults), filtered)
+	}
+	if str(vaults[0].(map[string]any)["name"]) != "kv-listed" {
+		t.Errorf("filtered list = %v", vaults[0])
+	}
+}

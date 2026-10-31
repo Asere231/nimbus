@@ -280,3 +280,31 @@ func TestMirrorWarnsWhenContainerdNeedsARestart(t *testing.T) {
 		}
 	}
 }
+
+// A registry container can outlive Nimbus -- a restart without --persist
+// forgets the resource but not the container. If it is published on a
+// different port than the resource now says, the resource wins: its login
+// server is already inside image references and cluster mirrors.
+func TestStaleRegistryContainerOnTheWrongPortIsReplaced(t *testing.T) {
+	_, az, f := newACRTestServer(t)
+	reg := &registry{ResourceID: "/r", Name: "acrmoved", Container: "nimbus-acr-acrmoved-0000", Port: 5002}
+
+	// Left behind by a previous run, on the port that run had chosen.
+	if _, err := f.Run(context.Background(), docker.RunOptions{
+		Name: reg.Container, Image: az.cfg.RegistryImage,
+		Ports: map[string]string{"127.0.0.1:5001": "5000"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := az.startRegistry(context.Background(), reg); err != nil {
+		t.Fatalf("startRegistry: %v", err)
+	}
+	c, err := f.Inspect(context.Background(), reg.Container)
+	if err != nil {
+		t.Fatalf("container missing after replacement: %v", err)
+	}
+	if got := containerPort(c, "5000/tcp"); got != 5002 {
+		t.Errorf("container is published on %d, want the resource's port 5002", got)
+	}
+}

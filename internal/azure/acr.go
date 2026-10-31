@@ -243,7 +243,19 @@ func (s *Server) startRegistry(ctx context.Context, reg *registry) error {
 		if !existing.Running {
 			return fmt.Errorf("container %s exists but is not running; remove it and apply again", reg.Container)
 		}
-		return nil
+		// A container left over from a previous run may be published on a
+		// different port than the one this registry's login server names --
+		// it happens whenever Nimbus restarts without --persist, so the
+		// resource is created afresh while the container survives. The ARM
+		// resource decides the port, because that is what image references
+		// already contain, so the stale container is replaced.
+		if port := containerPort(existing, "5000/tcp"); port != reg.Port {
+			if err := d.Remove(ctx, reg.Container); err != nil {
+				return fmt.Errorf("replacing the registry container published on %d: %w", port, err)
+			}
+		} else {
+			return nil
+		}
 	} else {
 		var nf *docker.NotFoundError
 		if !errors.As(err, &nf) {

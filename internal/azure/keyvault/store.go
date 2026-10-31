@@ -35,6 +35,10 @@ type Vault struct {
 	// names are case-insensitive for lookup but reported as created.
 	Secrets map[string]*Secret
 	Deleted map[string]*Secret
+	// Contacts are the certificate contacts. They live here, oddly far from
+	// anything certificate-shaped, because azurerm reads them on every read of
+	// the vault RESOURCE -- see the comment on serveContacts.
+	Contacts []Contact
 
 	mu sync.Mutex
 }
@@ -151,6 +155,27 @@ func (v *Vault) SetSecret(name, value, contentType string, tags map[string]strin
 	}
 	sec.Versions = append(sec.Versions, ver)
 	return ver
+}
+
+// Contact is one certificate contact.
+type Contact struct {
+	Email string `json:"email,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Phone string `json:"phone,omitempty"`
+}
+
+// SetContacts replaces the vault's certificate contacts.
+func (v *Vault) SetContacts(contacts []Contact) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.Contacts = contacts
+}
+
+// GetContacts returns them, or nil when none are set.
+func (v *Vault) GetContacts() []Contact {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.Contacts
 }
 
 // Attributes is the subset of Key Vault's attributes object Nimbus keeps.

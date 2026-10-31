@@ -18,7 +18,7 @@ import (
 
 // target is what an ARM path points at.
 type target struct {
-	Kind          string // subscription, subscriptions, resourceGroup, resourceGroups, rgResources, providers, provider, providerRegister, locations, resource, collection
+	Kind          string // subscription, subscriptions, resourceGroup, resourceGroups, rgResources, subResources, providers, provider, providerRegister, locations, resource, collection
 	Subscription  string
 	ResourceGroup string
 	Namespace     string
@@ -73,6 +73,12 @@ func parseTarget(path string) (t target, ok bool) {
 			t.Kind = "locations"
 		case eq(rest[0], "providers") && len(rest) == 1:
 			t.Kind = "providers"
+		case eq(rest[0], "resources") && len(rest) == 1:
+			// Every resource in the subscription, with an optional $filter.
+			// azurerm's Key Vault cache uses this to map a vault URI back to
+			// a resource ID, and fails the whole operation if it 404s.
+			t.Kind = "subResources"
+			t.ID = subID
 		case eq(rest[0], "resourceGroups") && len(rest) == 1:
 			t.Kind = "resourceGroups"
 		case eq(rest[0], "resourceGroups") && len(rest) == 2:

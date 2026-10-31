@@ -15,7 +15,7 @@ import (
 func newTestVault(t *testing.T) (*httptest.Server, *Handler) {
 	t.Helper()
 	h := NewHandler(NewStore())
-	h.Login = "https://localhost:4701"
+	h.Login = "https://localhost:4701/00000000-0000-0000-0000-000000000001"
 	h.Audience = "https://vault.azure.net"
 	h.BaseURI = func(name string) string {
 		return "https://" + strings.ToLower(name) + ".vault.nimbus.localhost:4701/"
@@ -96,7 +96,9 @@ func TestUnauthenticatedRequestIsChallenged(t *testing.T) {
 		t.Fatalf("WWW-Authenticate = %q", challenge)
 	}
 	for _, want := range []string{
-		`authorization="https://localhost:4701"`,
+		// With a tenant path: go-autorest reads everything after the first
+		// "/" as the tenant ID, and panics outright on a bare origin.
+		`authorization="https://localhost:4701/00000000-0000-0000-0000-000000000001"`,
 		`resource="https://vault.azure.net"`,
 		`scope="https://vault.azure.net/.default"`,
 	} {
@@ -269,7 +271,7 @@ func TestKeysAndCertificatesAreRefusedClearly(t *testing.T) {
 
 func TestUnknownVaultAndSecretErrors(t *testing.T) {
 	h := NewHandler(NewStore())
-	h.Login = "https://localhost:4701"
+	h.Login = "https://localhost:4701/tenant"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.Serve(w, r, "nope")
 	}))
@@ -299,7 +301,7 @@ func TestSecretsSurviveAReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := NewHandler(store)
-	h.Login = "https://localhost:4701"
+	h.Login = "https://localhost:4701/tenant"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.Serve(w, r, "kv-persist")
 	}))
@@ -365,5 +367,59 @@ func TestAttributesRoundTrip(t *testing.T) {
 	_ = json.NewEncoder(&buf).Encode(body)
 	if strings.Contains(buf.String(), `"nbf":"`) {
 		t.Error("nbf must be a number, not a string")
+	}
+}
+
+// Certificate contacts are not an optional corner of the API: azurerm reads
+// them from the DATA plane every time it reads the vault resource through
+// ARM. Measured against azurerm 4.81.0 -- a 501 here crashes the provider
+// inside its Key Vault client, with a stack trace and no useful message.
+// Real Key Vault answers 404 ContactsNotFound when none are set, which
+// azurerm tolerates on purpose, so that is what Nimbus answers.
+func TestCertificateContacts(t *testing.T) {
+	srv, _ := newTestVault(t)
+
+	code, body, _ := call(t, srv, "GET", "/certificates/contacts?api-version=7.4", "")
+	if code != 404 {
+		t.Fatalf("contacts with none set = %d: %v", code, body)
+	}
+	if body["error"].(map[string]any)["code"] != "ContactsNotFound" {
+		t.Errorf("error code = %v", body["error"])
+	}
+
+	code, set, _ := call(t, srv, "PUT", "/certificates/contacts?api-version=7.4",
+		`{"contacts":[{"email":"ops@example.com","name":"Ops","phone":"555"}]}`)
+	if code != 200 {
+		t.Fatalf("setting contacts = %d: %v", code, set)
+	}
+	contacts, _ := set["contacts"].([]any)
+	if len(contacts) != 1 || contacts[0].(map[string]any)["email"] != "ops@example.com" {
+		t.Fatalf("contacts round-trip = %v", set)
+	}
+	if id, _ := set["id"].(string); !strings.HasSuffix(id, "/certificates/contacts") {
+		t.Errorf("contacts id = %q", id)
+	}
+
+	_, got, _ := call(t, srv, "GET", "/certificates/contacts?api-version=7.4", "")
+	if len(got["contacts"].([]any)) != 1 {
+		t.Errorf("contacts did not persist: %v", got)
+	}
+
+	code, _, _ = call(t, srv, "DELETE", "/certificates/contacts?api-version=7.4", "")
+	if code != 200 {
+		t.Errorf("deleting contacts = %d", code)
+	}
+	if code, _, _ := call(t, srv, "GET", "/certificates/contacts?api-version=7.4", ""); code != 404 {
+		t.Errorf("contacts survived deletion: %d", code)
+	}
+}
+
+// Everything else under /certificates is still unimplemented, and still says
+// so rather than pretending.
+func TestOtherCertificateOperationsStillRefused(t *testing.T) {
+	srv, _ := newTestVault(t)
+	code, body, _ := call(t, srv, "GET", "/certificates/my-cert?api-version=7.4", "")
+	if code != 501 || body["error"].(map[string]any)["code"] != "NotSupported" {
+		t.Errorf("certificate get = %d %v", code, body)
 	}
 }

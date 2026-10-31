@@ -296,7 +296,18 @@ func (s *Server) handleKeyVaultSubscriptionPath(w http.ResponseWriter, r *http.R
 			Kind: "resource", Action: "delete", Cloud: "azure",
 			ResourceType: typeKeyVault, Name: name, Note: "purged",
 		})
-		w.WriteHeader(200)
+		// Purge is long-running in Azure, and its client polls afterwards. A
+		// plain 200 sends that poller to the deleted-vault URL, where our own
+		// 404 is read as a failure:
+		//
+		//	polling after VaultsPurgeDeleted: unexpected status 404 ...
+		//	VaultNotFound
+		//
+		// Measured against azurerm 4.81.0, where it fails every destroy.
+		// Pointing at an already-finished async operation ends the poll on its
+		// first try instead.
+		s.markAsync(w, t)
+		w.WriteHeader(202)
 		return "purged vault " + name
 	}
 

@@ -26,6 +26,9 @@ func getQuery(t *testing.T, srv *httptest.Server, path string, q url.Values) (in
 	return res.StatusCode, out
 }
 
+// urlValues is a one-pair url.Values, for the filtered GETs these tests make.
+func urlValues(key, value string) url.Values { return url.Values{key: {value}} }
+
 // azurerm_role_assignment with role_definition_name looks the role up by name
 // first. The filter is the only way it can: role definitions are addressed by
 // GUID, and nobody writes GUIDs in Terraform.

@@ -14,6 +14,13 @@ const typeUserAssignedIdentity = "Microsoft.ManagedIdentity/userAssignedIdentiti
 
 func registerIdentityHooks(s *Server) {
 	s.registerHook(typeUserAssignedIdentity, Hook{
+		// Deleting an identity is synchronous in Azure, and its generated
+		// client says so plainly when it is not:
+		//
+		//	unexpected status 202 (202 Accepted) received with no body
+		//
+		// Measured against azurerm 4.81.0, where it fails the destroy.
+		DeleteStatus: 200,
 		BeforePut: func(s *Server, t target, body, existing map[string]any) *armError {
 			props := body["properties"].(map[string]any) // put() guarantees this
 			props["principalId"] = identityGUID(t.ID, "principal")

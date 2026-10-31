@@ -116,7 +116,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	// The challenge a Key Vault client gets points at our own login endpoint,
 	// and asks for a token for Azure's Key Vault audience -- which our token
 	// endpoint will happily issue, since it issues tokens for any scope.
-	s.keyvault.Login = cfg.PublicURL
+	s.keyvault.Login = cfg.PublicURL + "/" + cfg.TenantID
 	s.keyvault.Audience = keyVaultAudience
 	s.keyvault.BaseURI = s.vaultURI
 	if cfg.DataDir != "" {
@@ -186,6 +186,14 @@ func (s *Server) Shutdown(ctx context.Context) {
 	}
 	for _, cl := range s.clusters.all() {
 		s.stopCluster(ctx, cl)
+	}
+	// Registries too. A registry container that outlives Nimbus is worse than
+	// an orphaned cluster: it holds the port its login server names, so the
+	// next run either collides with it or picks a different port and leaves
+	// pushed images unreachable.
+	for _, reg := range s.registries.all() {
+		_ = s.docker.Stop(ctx, reg.Container)
+		_ = s.docker.Remove(ctx, reg.Container)
 	}
 }
 

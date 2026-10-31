@@ -18,9 +18,10 @@ const softDeleteRetention = 90 * 24 * time.Hour
 // Handler serves one Nimbus instance's vault data planes.
 type Handler struct {
 	store *Store
-	// Login is the authority a 401 challenge points clients at, and Audience
-	// is the resource it asks for a token for. Both come from the Azure
-	// server's configuration, because they must match the metadata document.
+	// Login is the authority a 401 challenge points clients at, INCLUDING a
+	// tenant path segment, and Audience is the resource it asks for a token
+	// for. Both come from the Azure server's configuration, because they must
+	// match the metadata document.
 	Login    string
 	Audience string
 	// BaseURI builds a vault's data-plane URI, used to construct secret IDs.
@@ -97,7 +98,14 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, vaultName string
 		return h.serveSecrets(w, r, v, seg[1:])
 	case "deletedsecrets":
 		return h.serveDeletedSecrets(w, r, v, seg[1:])
-	case "keys", "certificates", "storage", "rng":
+	case "certificates":
+		if len(seg) == 2 && strings.EqualFold(seg[1], "contacts") {
+			return h.serveContacts(w, r, v)
+		}
+		WriteError(w, 501, "NotSupported",
+			"Nimbus emulates Key Vault secrets only; certificates are not implemented.")
+		return "unimplemented Key Vault operation: certificates"
+	case "keys", "storage", "rng":
 		// Deliberately an error, not an empty success: a client that thinks
 		// it wrapped a key with a key that does not exist is in a far worse
 		// position than one that was told Nimbus cannot do this yet.
@@ -115,6 +123,16 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, vaultName string
 // SDKs and the az CLI also accept `authorization_uri`) and `resource`, which
 // newer azcore-based SDKs read as `scope`. Sending all three keeps every
 // generation of client happy, and they all describe the same token.
+//
+// The authorization URL MUST carry a tenant path segment. go-autorest, which
+// the azurerm provider still uses for Key Vault, parses the challenge and
+// takes everything after the first "/" as the tenant:
+//
+//	bc.values[tenantID] = asURL.Path[1:]
+//
+// A bare origin has an empty path, so that slice panics -- measured against
+// azurerm 4.81.0, where it crashes the provider with
+// "slice bounds out of range [1:0]" and no mention of Key Vault at all.
 func (h *Handler) challenge(w http.ResponseWriter) {
 	login := strings.TrimRight(h.Login, "/")
 	audience := h.Audience
@@ -125,6 +143,61 @@ func (h *Handler) challenge(w http.ResponseWriter) {
 		`Bearer authorization="%s", authorization_uri="%s", resource="%s", scope="%s/.default"`,
 		login, login, audience, strings.TrimRight(audience, "/")))
 	WriteError(w, 401, "Unauthorized", "Request is missing a bearer token.")
+}
+
+// serveContacts handles the certificate contacts list.
+//
+// This looks like an odd thing to implement in a milestone about secrets, and
+// it is not optional: azurerm reads the contacts from the DATA plane every
+// time it reads the vault through ARM. Measured against azurerm 4.81.0 -- an
+// unexpected status here does not produce an error message, it crashes the
+// provider inside its Key Vault client with a nil dereference. Real Key Vault
+// answers 404 ContactsNotFound when none are set, which azurerm tolerates
+// deliberately, so that is what Nimbus answers.
+func (h *Handler) serveContacts(w http.ResponseWriter, r *http.Request, v *Vault) string {
+	switch r.Method {
+	case http.MethodGet:
+		contacts := v.GetContacts()
+		if len(contacts) == 0 {
+			WriteError(w, 404, "ContactsNotFound", "Contacts not found")
+			return ""
+		}
+		writeJSON(w, 200, h.contactsJSON(v, contacts))
+		return ""
+
+	case http.MethodPut:
+		var req struct {
+			Contacts []Contact `json:"contacts"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+			WriteError(w, 400, "BadParameter", "The request body is not a valid contacts list: %v", err)
+			return ""
+		}
+		v.SetContacts(req.Contacts)
+		h.store.Save(v)
+		writeJSON(w, 200, h.contactsJSON(v, req.Contacts))
+		return "set certificate contacts"
+
+	case http.MethodDelete:
+		contacts := v.GetContacts()
+		if len(contacts) == 0 {
+			WriteError(w, 404, "ContactsNotFound", "Contacts not found")
+			return ""
+		}
+		v.SetContacts(nil)
+		h.store.Save(v)
+		writeJSON(w, 200, h.contactsJSON(v, contacts))
+		return "deleted certificate contacts"
+	}
+	return methodNotAllowed(w, r)
+}
+
+func (h *Handler) contactsJSON(v *Vault, contacts []Contact) map[string]any {
+	list := []any{}
+	for _, c := range contacts {
+		list = append(list, map[string]any{"email": c.Email, "name": c.Name, "phone": c.Phone})
+	}
+	return map[string]any{"id": h.baseURI(v) + "certificates/contacts", "contacts": list}
 }
 
 // --- secrets ---------------------------------------------------------------

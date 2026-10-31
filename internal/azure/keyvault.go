@@ -28,6 +28,12 @@ import (
 // second apply of the same config breaks.
 const typeKeyVault = "Microsoft.KeyVault/vaults"
 
+// keyVaultAudience is the resource a vault's 401 challenge asks for a token
+// for. It is Azure's real audience rather than a Nimbus URL, because that is
+// what clients expect to see and our token endpoint issues tokens for any
+// scope anyway.
+const keyVaultAudience = "https://vault.azure.net"
+
 // softDeleteRetention is how long a deleted vault is kept, matching Azure's
 // default. Nothing here actually expires one: a local emulator is not running
 // for 90 days, and a timer that purged vaults behind your back would be a
@@ -173,7 +179,14 @@ func registerKeyVaultHooks(s *Server) {
 			delete(props, "createMode")
 			return nil
 		},
+		AfterPut: func(s *Server, t target, body map[string]any) {
+			// The data plane's vault is created alongside the ARM resource,
+			// so a client can set a secret the moment the vault exists.
+			s.keyvault.Store().CreateVault(t.Name)
+		},
 		AfterDelete: func(s *Server, t target, body map[string]any) {
+			// The secrets deliberately stay: the vault is soft-deleted, and a
+			// recovered vault that came back empty would be a lie.
 			loc := str(body["location"])
 			s.vaults.put(&deletedVault{
 				Name: t.Name, Location: loc, VaultID: t.ID,
@@ -276,8 +289,9 @@ func (s *Server) handleKeyVaultSubscriptionPath(w http.ResponseWriter, r *http.R
 				"The soft deleted vault '%s' in location '%s' was not found.", name, loc)
 			return ""
 		}
-		// Purging frees the name, which is what azurerm relies on when it
-		// destroys and re-applies the same configuration.
+		// Purging frees the name and destroys the data, which is what azurerm
+		// relies on when it destroys and re-applies the same configuration.
+		s.keyvault.Store().DeleteVault(name)
 		s.bus.Publish(core.Event{
 			Kind: "resource", Action: "delete", Cloud: "azure",
 			ResourceType: typeKeyVault, Name: name, Note: "purged",

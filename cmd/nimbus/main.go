@@ -105,7 +105,7 @@ func start(args []string) {
 	azURL := fmt.Sprintf("https://%s:%d", *host, *azPort)
 	azCfg := azure.Config{PublicURL: azURL}
 	if dataDir != "" {
-		azCfg.DataDir = filepath.Join(dataDir, "storage")
+		azCfg.DataDir = dataDir
 	}
 	azCfg.KeepClusters = *persist
 	az := azure.New(azCfg, store, bus)

@@ -10,9 +10,11 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/Asere231/nimbus/internal/azure/keyvault"
 	"github.com/Asere231/nimbus/internal/azure/storage"
 	"github.com/Asere231/nimbus/internal/core"
 	"github.com/Asere231/nimbus/internal/engines/docker"
@@ -25,8 +27,9 @@ type Config struct {
 	PublicURL string
 	TenantID  string
 	ClientID  string
-	// DataDir, when set, is where the storage data plane keeps blob content
-	// and the rest of its state so it survives a restart. Empty = memory only.
+	// DataDir, when set, is where the data planes keep their state so it
+	// survives a restart: blob content under {DataDir}/storage, vault secrets
+	// under {DataDir}/keyvault. Empty = memory only.
 	DataDir string
 
 	// K3sImage is the image AKS clusters run. Pinned rather than :latest so a
@@ -60,6 +63,7 @@ type Server struct {
 	bus      *core.Bus
 	hooks    map[string]Hook
 	storage  *storage.Handler
+	keyvault *keyvault.Handler
 	ops      *operations
 	vaults   *deletedVaults
 	docker   docker.Client
@@ -91,14 +95,24 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		cfg: cfg, store: store, bus: bus,
 		hooks:    map[string]Hook{},
 		storage:  storage.NewHandler(storage.NewStore()),
+		keyvault: keyvault.NewHandler(keyvault.NewStore()),
 		ops:      newOperations(),
 		vaults:   newDeletedVaults(),
 		docker:   docker.NewCLI(),
 		clusters: newClusters(),
 	}
+	// The challenge a Key Vault client gets points at our own login endpoint,
+	// and asks for a token for Azure's Key Vault audience -- which our token
+	// endpoint will happily issue, since it issues tokens for any scope.
+	s.keyvault.Login = cfg.PublicURL
+	s.keyvault.Audience = keyVaultAudience
+	s.keyvault.BaseURI = s.vaultURI
 	if cfg.DataDir != "" {
-		if err := s.storage.Store().Persist(cfg.DataDir); err != nil {
+		if err := s.storage.Store().Persist(filepath.Join(cfg.DataDir, "storage")); err != nil {
 			log.Printf("nimbus: storage persistence disabled: %v", err)
+		}
+		if err := s.keyvault.Store().Persist(filepath.Join(cfg.DataDir, "keyvault")); err != nil {
+			log.Printf("nimbus: key vault persistence disabled: %v", err)
 		}
 	}
 	s.storage.OnChange = s.mirrorDataPlaneContainer
@@ -193,6 +207,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) (note string) {
 	// plain host, so this never shadows them.
 	if t, ok := storage.ParseHost(r.Host, s.storageSuffix()); ok {
 		return s.storage.Serve(w, r, t)
+	}
+	// The same trick for Key Vault: {vault}.vault.nimbus.localhost.
+	if name, ok := keyvault.ParseHost(r.Host, s.keyVaultSuffix()); ok {
+		return s.keyvault.Serve(w, r, name)
 	}
 
 	p := r.URL.Path

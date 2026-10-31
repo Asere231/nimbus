@@ -2,6 +2,9 @@ package azure
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -196,4 +199,67 @@ func TestDeletingTheGroupSoftDeletesTheVault(t *testing.T) {
 	if code, _ := do(t, srv, "GET", sub+"/providers/Microsoft.KeyVault/locations/eastus/deletedVaults/kv-casc", nil); code != 200 {
 		t.Errorf("vault removed by a cascade was not soft-deleted: %d", code)
 	}
+}
+
+// The end-to-end address: create a vault through ARM, then reach its data
+// plane on the host from its own vaultUri, on the same listener. This is the
+// join that M2 had to get right for storage, and the one a client actually
+// walks: ARM read, then Host-based routing.
+func TestVaultDataPlaneIsReachableAtItsVaultURI(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-kvdp"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	vault := rg + "/providers/Microsoft.KeyVault/vaults/kv-data"
+	_, body := do(t, srv, "PUT", vault, map[string]any{"location": "eastus", "properties": map[string]any{}})
+	uri, _ := url.Parse(str(body["properties"].(map[string]any)["vaultUri"]))
+
+	// Unauthenticated first, as every Key Vault client does.
+	code, _, hdr := vaultCall(t, srv, uri.Host, "GET", "/secrets/db?api-version=7.4", "", false)
+	if code != 401 || !strings.Contains(hdr.Get("WWW-Authenticate"), "Bearer") {
+		t.Fatalf("unauthenticated data-plane GET = %d, challenge %q", code, hdr.Get("WWW-Authenticate"))
+	}
+
+	code, set, _ := vaultCall(t, srv, uri.Host, "PUT", "/secrets/db?api-version=7.4", `{"value":"hunter2"}`, true)
+	if code != 200 {
+		t.Fatalf("set through the data plane = %d: %v", code, set)
+	}
+	if id, _ := set["id"].(string); !strings.HasPrefix(id, str(body["properties"].(map[string]any)["vaultUri"])) {
+		t.Errorf("secret id %q is not under the vault's own vaultUri", id)
+	}
+
+	// ARM delete soft-deletes the vault, so the secrets must survive for a
+	// recovery; purging the vault is what destroys them.
+	do(t, srv, "DELETE", vault, nil)
+	az := serverOf(t, srv)
+	if v := az.keyvault.Store().Vault("kv-data"); v == nil || v.Secret("db") == nil {
+		t.Error("soft-deleting the vault threw away its secrets")
+	}
+	do(t, srv, "POST", sub+"/providers/Microsoft.KeyVault/locations/eastus/deletedVaults/kv-data/purge", nil)
+	if az.keyvault.Store().Vault("kv-data") != nil {
+		t.Error("purging the vault left its data behind")
+	}
+}
+
+// vaultCall sends a data-plane request to the Azure listener with a vault Host
+// header, which is how the two planes share one port.
+func vaultCall(t *testing.T, srv *httptest.Server, host, method, path, body string, withToken bool) (int, map[string]any, http.Header) {
+	t.Helper()
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req, _ := http.NewRequest(method, srv.URL+path, rdr)
+	req.Host = host
+	if withToken {
+		req.Header.Set("Authorization", "Bearer nimbus-test-token")
+	}
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	return res.StatusCode, out, res.Header
 }

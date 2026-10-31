@@ -3,6 +3,7 @@ package azure
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Asere231/nimbus/internal/azure/storage"
 	"github.com/Asere231/nimbus/internal/core"
@@ -862,4 +864,116 @@ func TestDeletingResourceGroupPurgesStorageData(t *testing.T) {
 	if az.storage.Store().Account("stnimbuspurge") != nil {
 		t.Error("storage account data survived deletion of its resource group")
 	}
+}
+
+// --- async operations -------------------------------------------------------
+
+// Until M3 every write finished before it was answered, so the operation
+// endpoint could honestly say Succeeded for any ID. A k3s cluster takes ~30 s
+// to boot, so operations now carry real per-operation state.
+func TestAsyncOperationReportsRealState(t *testing.T) {
+	srv, _ := newTestServer(t)
+	az := serverOf(t, srv)
+
+	release := make(chan error, 1)
+	az.registerHook("Nimbus.Test/slow", Hook{
+		Provision: func(s *Server, t target, body map[string]any) error { return <-release },
+	})
+
+	rg := sub + "/resourceGroups/rg-async"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	id := rg + "/providers/Nimbus.Test/slow/s1"
+
+	res := raw(t, srv, "PUT", id, `{"location":"eastus"}`)
+	op := res.Header.Get("Azure-AsyncOperation")
+	if op == "" {
+		t.Fatal("a long-running create must advertise an operation")
+	}
+	u, _ := url.Parse(op)
+
+	// The write returns immediately, while provisioning is still running.
+	if code, body := do(t, srv, "GET", u.Path, nil); code != 200 || body["status"] != "InProgress" {
+		t.Errorf("operation while provisioning = %d %v, want InProgress", code, body)
+	}
+	_, got := do(t, srv, "GET", id, nil)
+	if ps := got["properties"].(map[string]any)["provisioningState"]; ps != "Creating" {
+		t.Errorf("resource provisioningState = %v, want Creating", ps)
+	}
+
+	release <- nil
+	waitForOperation(t, srv, u.Path, "Succeeded")
+
+	_, got = do(t, srv, "GET", id, nil)
+	if ps := got["properties"].(map[string]any)["provisioningState"]; ps != "Succeeded" {
+		t.Errorf("after provisioning, provisioningState = %v, want Succeeded", ps)
+	}
+}
+
+// A failed provision must surface as a Failed operation carrying the reason,
+// not as a resource stuck on Creating forever.
+func TestFailedProvisionFailsTheOperation(t *testing.T) {
+	srv, _ := newTestServer(t)
+	az := serverOf(t, srv)
+	az.registerHook("Nimbus.Test/broken", Hook{
+		Provision: func(s *Server, t target, body map[string]any) error {
+			return errors.New("docker is not available: start Docker Desktop")
+		},
+	})
+
+	rg := sub + "/resourceGroups/rg-fail"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	id := rg + "/providers/Nimbus.Test/broken/b1"
+	res := raw(t, srv, "PUT", id, `{"location":"eastus"}`)
+	u, _ := url.Parse(res.Header.Get("Azure-AsyncOperation"))
+
+	body := waitForOperation(t, srv, u.Path, "Failed")
+	errObj, _ := body["error"].(map[string]any)
+	if errObj == nil {
+		t.Fatalf("a failed operation must carry an error: %v", body)
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "start Docker Desktop") {
+		t.Errorf("the failure reason was lost: %v", errObj)
+	}
+	_, got := do(t, srv, "GET", id, nil)
+	if ps := got["properties"].(map[string]any)["provisioningState"]; ps != "Failed" {
+		t.Errorf("resource provisioningState = %v, want Failed", ps)
+	}
+}
+
+// Types without a Provision hook stay synchronous, so M1 and M2 behaviour is
+// untouched: their operation URL answers Succeeded straight away.
+func TestSynchronousTypesStillReportSucceededImmediately(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-sync-op"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	res := raw(t, srv, "PUT", rg+"/providers/Microsoft.Network/routeTables/rt", `{"location":"eastus"}`)
+	u, _ := url.Parse(res.Header.Get("Azure-AsyncOperation"))
+	if code, body := do(t, srv, "GET", u.Path, nil); code != 200 || body["status"] != "Succeeded" {
+		t.Errorf("synchronous operation = %d %v, want Succeeded", code, body)
+	}
+}
+
+// An unknown operation ID must 404 rather than claim success, or a client
+// polling a stale URL would believe work it never started had finished.
+func TestUnknownOperationIs404(t *testing.T) {
+	srv, _ := newTestServer(t)
+	path := sub + operationsPath + "00000000-0000-0000-0000-00000000dead"
+	if code, _ := do(t, srv, "GET", path, nil); code != 404 {
+		t.Errorf("unknown operation = %d, want 404", code)
+	}
+}
+
+func waitForOperation(t *testing.T, srv *httptest.Server, path, want string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_, body := do(t, srv, "GET", path, nil)
+		if body["status"] == want {
+			return body
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_, body := do(t, srv, "GET", path, nil)
+	t.Fatalf("operation never reached %s; last state %v", want, body)
+	return nil
 }

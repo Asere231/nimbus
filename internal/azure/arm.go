@@ -2,6 +2,7 @@ package azure
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -37,6 +38,19 @@ type Hook struct {
 	//
 	// Zero means 202.
 	DeleteStatus int
+	// Provision runs in the BACKGROUND after the resource is stored, for types
+	// backed by something that genuinely takes time to start -- a k3s
+	// container, not a map entry.
+	//
+	// The write answers immediately with provisioningState "Creating" and an
+	// operation the client can poll. When Provision returns, the resource
+	// moves to Succeeded, or to Failed carrying the error, and the operation
+	// does the same. A type without this stays fully synchronous.
+	Provision func(s *Server, t target, body map[string]any) error
+	// Deprovision is the teardown counterpart, run in the background on
+	// delete. AfterDelete still runs synchronously for bookkeeping; this is
+	// for stopping engines, which can be slow.
+	Deprovision func(s *Server, t target)
 }
 
 type armError struct {
@@ -127,6 +141,7 @@ func (s *Server) handleResource(w http.ResponseWriter, r *http.Request, t target
 			return "already absent"
 		}
 		s.runDeleteHooks(deleted)
+		s.runDeprovision(deleted)
 		if h := s.hookFor(t.Type); h.DeleteStatus != 0 {
 			w.WriteHeader(h.DeleteStatus)
 			return ""
@@ -231,6 +246,20 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 			status = h.CreateStatus
 		}
 	}
+
+	// A type that provisions something real answers now and finishes later.
+	if h.Provision != nil && t.Kind == "resource" {
+		op := s.ops.start(t.ID)
+		s.setProvisioningState(t.ID, "Creating")
+		go s.provision(h, t, deepCopy(body), op)
+
+		if res, err := s.store.Get(t.ID); err == nil {
+			raw = res.Body
+		}
+		s.markAsyncOperation(w, t, op)
+		writeRaw(w, status, raw)
+		return "provisioning " + t.Type
+	}
 	// Re-read: an AfterPut hook may have enriched the stored body.
 	if res, err := s.store.Get(t.ID); err == nil {
 		raw = res.Body
@@ -247,6 +276,90 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 		return "accepted (state only): " + t.Type
 	}
 	return ""
+}
+
+// runDeprovision starts background teardown for every removed resource that
+// has something real behind it. The ARM delete has already been answered, as
+// Azure does: the resource is gone from the API immediately while the engine
+// winds down.
+func (s *Server) runDeprovision(deleted []*core.Resource) {
+	for _, res := range deleted {
+		h := s.hookFor(res.Type)
+		if h.Deprovision == nil {
+			continue
+		}
+		dt, ok := parseTarget(res.ID)
+		if !ok {
+			dt = target{Kind: "resource", ID: res.ID, Type: res.Type, Name: res.Name, ParentID: res.ParentID}
+		}
+		go func(h Hook, dt target) {
+			defer func() { _ = recover() }() // teardown must never crash the server
+			h.Deprovision(s, dt)
+		}(h, dt)
+	}
+}
+
+// provision runs a type's Provision hook and records the outcome on both the
+// resource and the operation.
+//
+// Anything that goes wrong has to land somewhere the user will see it. A
+// resource left on "Creating" with no failed operation is the worst outcome:
+// Terraform waits, then times out after minutes, with nothing explaining why.
+func (s *Server) provision(h Hook, t target, body map[string]any, op *operation) {
+	defer func() {
+		// A panic in a hook must not take the server down, and must not leave
+		// the operation InProgress forever either.
+		if r := recover(); r != nil {
+			aerr := &armError{Status: 500, Code: "ProvisioningFailed",
+				Message: fmt.Sprintf("provisioning %s panicked: %v", t.Type, r)}
+			s.failProvision(t, op, aerr)
+		}
+	}()
+
+	if err := h.Provision(s, t, body); err != nil {
+		s.failProvision(t, op, &armError{
+			Status: 500, Code: "ProvisioningFailed", Message: err.Error(),
+		})
+		return
+	}
+	s.setProvisioningState(t.ID, "Succeeded")
+	s.ops.finish(op.ID, nil)
+	s.bus.Publish(core.Event{
+		Kind: "resource", Action: "update", Cloud: "azure",
+		ResourceID: t.ID, ResourceType: t.Type, Name: t.Name,
+		Note: "provisioned",
+	})
+}
+
+func (s *Server) failProvision(t target, op *operation, aerr *armError) {
+	s.setProvisioningState(t.ID, "Failed")
+	s.ops.finish(op.ID, aerr)
+	s.bus.Publish(core.Event{
+		Kind: "resource", Action: "update", Cloud: "azure",
+		ResourceID: t.ID, ResourceType: t.Type, Name: t.Name,
+		Status: aerr.Status, Note: "provisioning failed: " + aerr.Message,
+	})
+}
+
+// setProvisioningState rewrites just properties.provisioningState on a stored
+// resource, leaving everything else as it was.
+func (s *Server) setProvisioningState(id, state string) {
+	res, err := s.store.Get(id)
+	if err != nil {
+		return // deleted while provisioning
+	}
+	var body map[string]any
+	if json.Unmarshal(res.Body, &body) != nil {
+		return
+	}
+	props, _ := body["properties"].(map[string]any)
+	if props == nil {
+		props = map[string]any{}
+	}
+	props["provisioningState"] = state
+	body["properties"] = props
+	res.Body, _ = json.Marshal(body)
+	s.store.Put(res)
 }
 
 // runDeleteHooks runs AfterDelete for every resource a cascade removed, not

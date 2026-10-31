@@ -35,6 +35,7 @@ type Server struct {
 	bus     *core.Bus
 	hooks   map[string]Hook
 	storage *storage.Handler
+	ops     *operations
 }
 
 // New creates the Azure emulator.
@@ -50,6 +51,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		cfg: cfg, store: store, bus: bus,
 		hooks:   map[string]Hook{},
 		storage: storage.NewHandler(storage.NewStore()),
+		ops:     newOperations(),
 	}
 	if cfg.DataDir != "" {
 		if err := s.storage.Store().Persist(cfg.DataDir); err != nil {
@@ -129,9 +131,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) (note string) {
 		s.handleInstanceDiscovery(w, r)
 		return "instance discovery"
 	case isOperationPath(p):
-		// Async operation status: every operation completes immediately.
-		writeJSON(w, 200, map[string]any{"id": p, "name": p[strings.LastIndex(p, "/")+1:], "status": "Succeeded"})
-		return ""
+		return s.handleOperation(w, r)
 	case p == "/" || p == "":
 		writeJSON(w, 200, map[string]any{"emulator": "nimbus", "cloud": "azure", "resourceManager": s.cfg.PublicURL})
 		return ""
@@ -148,12 +148,21 @@ func isOperationPath(p string) bool {
 }
 
 // markAsync tells the client this was a long-running operation and where to
-// poll. Every write in Nimbus finishes before it is answered, so the status
-// URL always says Succeeded; Retry-After: 1 keeps clients from waiting the
-// SDK default of 10 seconds per resource.
+// poll, registering an operation that has ALREADY finished.
+//
+// Most writes in Nimbus really do complete before they are answered, so their
+// operation is born Succeeded and the client's first poll ends it.
+// Retry-After: 1 keeps clients from waiting the SDK default of 10 seconds per
+// resource. Types that genuinely take time use markAsyncOperation instead.
 func (s *Server) markAsync(w http.ResponseWriter, t target) {
-	op := fmt.Sprintf("%s/subscriptions/%s%s%s?api-version=2020-01-01", s.cfg.PublicURL, t.Subscription, operationsPath, newUUID())
-	w.Header().Set("Azure-AsyncOperation", op)
+	s.markAsyncOperation(w, t, s.ops.done(t.ID))
+}
+
+// markAsyncOperation points the client at a specific operation.
+func (s *Server) markAsyncOperation(w http.ResponseWriter, t target, op *operation) {
+	url := fmt.Sprintf("%s/subscriptions/%s%s%s?api-version=2020-01-01",
+		s.cfg.PublicURL, t.Subscription, operationsPath, op.ID)
+	w.Header().Set("Azure-AsyncOperation", url)
 	w.Header().Set("Retry-After", "1")
 }
 

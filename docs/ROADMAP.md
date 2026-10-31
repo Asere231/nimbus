@@ -1,8 +1,8 @@
 # Roadmap
 
-**Current: Milestone 4 — identity, secrets and ACR. Prompt: `docs/prompts/m04-identity-secrets-acr.md`.**
+**Current: Milestone 5 — breadth. Prompt: `docs/prompts/m05-breadth.md`.**
 
-Milestones 1, 2 and 3 are done, on macOS 27 (arm64) with azurerm 4.81.0.
+Milestones 1 to 4 are done, on macOS 27 (arm64) with azurerm 4.81.0.
 
 - `examples/terraform/azure-basic` applies, plans clean (`-detailed-exitcode`
   = 0) and destroys; survives a `--persist` restart; every resource imports
@@ -16,8 +16,12 @@ Milestones 1, 2 and 3 are done, on macOS 27 (arm64) with azurerm 4.81.0.
   Docker, `kubectl get nodes` showing the nodes, `node_count` scaling by
   adding agent containers, and pods and services appearing live in the
   visualizer. Apply, clean plan, scale, clean plan, destroy all verified.
-- CI is green on ubuntu, macos and windows, plus the SDK harness and a
-  Terraform apply/plan/destroy job.
+- `examples/terraform/azure-app` ties them together: an image pushed to an
+  emulated ACR, pulled by the cluster through a containerd mirror, running a
+  pod that reads a secret from the emulated Key Vault data plane. Apply, clean
+  plan, destroy, and a re-apply of the purged vault name all verified.
+- CI is green on ubuntu, macos and windows, plus the SDK harness and the
+  Terraform apply/plan/destroy jobs.
 
 Each milestone has a session prompt in `docs/prompts/` (see its README).
 
@@ -30,7 +34,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 | 1 | ~~**ARM core + visualizer** (scaffold)~~ **done** | `azure-basic` applies and destroys on Mac; graph and feed update live |
 | 2 | ~~**Storage data plane** (Blob, Queue, Table)~~ **done** | `azurerm_storage_account` + container + blob apply; `az storage blob upload` works; files visible in the inspector |
 | 3 | ~~**AKS on k3s** (Docker)~~ **done** | `azurerm_kubernetes_cluster` creates a k3s container; `kube_config` output works with `kubectl`; pods and services appear under the cluster in the graph |
-| 4 | **Identity and secrets**: Key Vault secrets, managed identities, ACR on `registry:2`, Log Analytics stub | An app on AKS pulls an image from the emulated ACR and reads a Key Vault secret |
+| 4 | ~~**Identity and secrets**: Key Vault secrets, managed identities, ACR on `registry:2`, Log Analytics stub~~ **done** | An app on AKS pulls an image from the emulated ACR and reads a Key Vault secret |
 | 5 | **Breadth**: spec-driven defaults from `azure-rest-api-specs`, ARM/Bicep deployments, `az` CLI as a custom cloud | `az group create` and a Bicep deployment work; 50+ resource types round-trip in Terraform |
 | 6 | **Visualizer v2**: apply timeline, plan/diff view, Kubernetes view, export diagram as SVG/PNG | A `terraform apply` can be replayed step by step in the UI |
 
@@ -55,23 +59,32 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 ## Left to confirm
 
-- **CI does not run the AKS example.** It needs Docker, so it cannot join the
-  default matrix unconditionally. The unit tests cover the whole hook through
-  the Fake, and `NIMBUS_DOCKER_TESTS=1` covers the real engine, but no CI job
-  provisions a cluster. A Linux job could: GitHub runners have Docker.
+- **`az keyvault secret set/show` has not been run yet.** `nimbus az register`
+  prints and runs the `az cloud register` line, but the data plane has only
+  been driven by Terraform, curl and the Go tests on this machine.
+- **No Key Vault SDK harness.** `test/storage-sdk` drives blobs, queues and
+  tables with Microsoft's Python SDKs; the vault has no equivalent, so the
+  challenge flow is only proven against azurerm and the az CLI.
+
 - **The Docker-stopped path is only unit-tested.** Stopping Docker Desktop
   mid-session would have disrupted the machine, so the ARM error and feed note
   are covered by a test against the Fake rather than by pulling the plug.
 
-- **CI has never run.** The repository has no remote, so `.github/workflows/ci.yml`
-  is unproven. The YAML parses, every shell step was reproduced locally on
-  macOS, and all test packages cross-compile for linux and windows, but the
-  Linux and Windows legs need a real run. Push to GitHub and check.
-- **Windows has not been tested at all this session** — no Windows machine was
-  available. The cert fix matters there too: Windows has its own certificate
-  rules, and `nimbus cert` uses `Import-Certificate` into `CurrentUser\Root`.
+- **Windows has only been DNS-tested.** No Windows machine has run Terraform,
+  `az` or `kubectl` against Nimbus; CI's Windows leg runs the Go tests only.
+  The certificate path matters there too: Windows has its own rules, and
+  `nimbus cert` uses `Import-Certificate` into `CurrentUser\Root`.
 
 ## Later
+
+- **Only secrets are emulated in Key Vault.** Keys and certificates answer 501
+  NotSupported, except the certificate CONTACTS list, which exists because
+  azurerm reads it on every vault read.
+- **The registry has no authentication.** `registry:2` runs open, and
+  `listCredentials` returns decorative values; an imagePullSecret built from
+  them works because nothing checks it.
+- **Role assignments are never enforced.** See CLAUDE.md: they round-trip and
+  are drawn, but no request is refused.
 
 - **A mid-apply restart fails the apply.** Terraform polls while the port is
   closed and azurerm reports `unimplemented polling status "Unknown"`. Nothing

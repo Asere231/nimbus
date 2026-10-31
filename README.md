@@ -64,16 +64,24 @@ eval "$(./bin/nimbus env azure)"          # PowerShell: ./bin/nimbus.exe env azu
 
 | Tier | Resource types | Behaviour |
 |---|---|---|
-| Modelled | Resource groups, virtual networks, subnets | Validation, server fields (etag, resourceGuid), VNet ↔ subnet sync, cascade delete |
+| Real | Storage accounts and containers, AKS clusters and node pools, Key Vaults, container registries | Something actually runs: bytes on disk, k3s in Docker, a `registry:2` container, secrets you can read back with a client |
+| Modelled | Resource groups, virtual networks, subnets, managed identities, role assignments and definitions, Log Analytics workspaces | Validation, server-generated fields, parent/child sync, cascade delete |
 | Accepted | Any other ARM type | Stored and returned with `provisioningState: Succeeded`; nothing runs behind it |
-| Actions | `POST …/listKeys` etc. | Return `{}` and show as "unimplemented" in the activity feed |
+| Actions | `listKeys`, `listClusterUserCredential`, `listCredentials`, `sharedKeys`, … | Answered for the types above; anything else returns `{}` and shows as "unimplemented" in the activity feed |
 
-Not yet: data planes (Blob, Key Vault secrets), AKS clusters you can `kubectl` into, the `az` CLI, AWS and GCP. Those are the next milestones.
+Data planes: Blob, Queue and Table (Shared Key verified, real bytes), and Key
+Vault secrets (challenge auth, versions, soft delete). `az storage blob` works
+from a connection string, and `nimbus az register` sets `az` up as a custom
+cloud for `az keyvault`.
+
+Not yet: AWS and GCP, ARM/Bicep deployments, and the breadth of types a
+spec-driven generator would bring. Those are the next milestones — see
+`docs/ROADMAP.md`.
 
 ## Repo layout
 
 ```
-cmd/nimbus/            CLI: start, cert, env
+cmd/nimbus/            CLI: start, cert, env, az register
 internal/core/         cloud-agnostic engine: store, event bus, certs, persistence
 internal/azure/        ARM emulator: routing, identity/metadata, generic CRUD, per-type hooks
 internal/ui/           visualizer API + SSE, and the embedded web app (static/)

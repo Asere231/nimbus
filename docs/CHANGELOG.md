@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.4.0 — 2026-10-31
+
+Milestone 4: identity, secrets and a container registry. An app on the
+emulated cluster now pulls its image from an emulated ACR and reads its
+password out of an emulated Key Vault.
+
+- **Key Vault**, both planes. The vault resource carries a `vaultUri` on
+  `{vault}.vault.nimbus.localhost:<port>`, and that host serves secrets for
+  real: set (every set makes a version), get by version, list, versions,
+  attribute updates, delete, and the recycle bin — recover and purge. The
+  vault itself soft-deletes too, so azurerm's destroy-and-purge and its
+  recover-on-collision both work.
+- **Managed identities and RBAC.** User-assigned identities with stable IDs,
+  any resource's `identity` block completed generically, role assignments
+  stored as extension resources at any scope, and Azure's built-in role
+  definitions served with their real GUIDs so `role_definition_name` lookups
+  resolve. Nothing is enforced: Nimbus records permissions, it does not check
+  them.
+- **ACR** backed by a `registry:2` container per registry, with
+  `loginServer = localhost:<port>` so `docker push` works with no daemon
+  configuration at all. Each k3s node gets a containerd mirror pointing that
+  host at the registry container, written to `certs.d`, which k3s honours
+  without a restart — so a registry created after a cluster is still pullable.
+- **Log Analytics** as an honest stub: stable `customerId` and shared keys,
+  nothing that ingests a log.
+- **`examples/terraform/azure-app`** applies, plans clean and destroys: a
+  registry, a vault with a secret, an identity, two role assignments, a
+  cluster, and a `kubernetes_deployment` whose pod pulls the pushed image and
+  reads the secret from its environment.
+- **`nimbus az register`** teaches the `az` CLI about Nimbus as a custom
+  cloud, which is what `az keyvault` needs — az never reads our metadata
+  document.
+- **Visualizer**: a vault's secrets are listed by name with a per-secret
+  reveal button, and role assignments are drawn as dashed links from the
+  identity that owns the principal to the scope they cover.
+
+Five things the real provider found, each now a regression test: the Key
+Vault challenge's authority must carry a tenant path or go-autorest panics
+on it; an ARM read of a vault triggers a data-plane read of certificate
+contacts, where 501 crashes the provider and 404 is correct; identity
+deletes must be synchronous; a vault URI is mapped back to a resource ID
+through `/subscriptions/{id}/resources`; and purging a vault is
+long-running. Plus one of our own: a registry container outliving Nimbus
+held the port its login server names.
+
 ## 0.3.0 — 2026-10-30
 
 Milestone 3: AKS. `azurerm_kubernetes_cluster` starts a real Kubernetes

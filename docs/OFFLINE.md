@@ -29,3 +29,16 @@ a kubectl minor version, so keep the two in step if you change it:
 ```bash
 docker pull rancher/k3s:v1.34.12-k3s1
 ```
+
+From Milestone 4 (ACR), also pre-pull the registry image, and whatever image
+you intend to push into the emulated registry. `examples/terraform/azure-app`
+retags `nginx:alpine`, so with these two plus the k3s image the whole
+example runs with the network unplugged:
+
+```bash
+docker pull registry:2
+docker pull nginx:alpine
+```
+
+The registry tag is pinned in `internal/azure/server.go`
+(`DefaultRegistryImage`).

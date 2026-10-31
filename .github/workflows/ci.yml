@@ -241,6 +241,85 @@ jobs:
             exit 1
           fi
 
+  # The milestone 4 example: a registry, a vault and a cluster together. Needs
+  # Docker for both the registry and k3s, so it joins the aks job's shape
+  # rather than the plain terraform matrix.
+  app:
+    name: terraform azure-app (ACR + Key Vault + AKS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Docker and images
+        run: |
+          docker version --format '{{.Server.Version}}'
+          docker pull rancher/k3s:v1.34.12-k3s1
+          docker pull registry:2
+          docker pull nginx:alpine
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus cert
+          ./bin/nimbus start --persist &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, pull from the local registry, read the secret
+        working-directory: examples/terraform/azure-app
+        run: |
+          set -euo pipefail
+          export SSL_CERT_FILE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          # The pod has to actually start, which means containerd really did
+          # pull the image through the cluster's mirror of our registry.
+          kubectl --kubeconfig ./kubeconfig get pods
+          kubectl --kubeconfig ./kubeconfig rollout status deploy/app --timeout=300s
+
+          # And the secret really came from the Key Vault data plane.
+          got=$(kubectl --kubeconfig ./kubeconfig exec deploy/app -- printenv DB_PASSWORD)
+          [ "$got" = "hunter2" ] || { echo "::error::DB_PASSWORD was \"$got\""; exit 1; }
+
+          set +e; terraform plan -detailed-exitcode -input=false; code=$?; set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::plan -detailed-exitcode returned $code; expected 0"
+            exit 1
+          fi
+
+          terraform destroy -auto-approve -input=false
+
+          # Destroy purges the vault, so the same name is free again. Applying
+          # just the vault proves it without booting a second cluster.
+          terraform apply -auto-approve -input=false -target=azurerm_key_vault.app
+          terraform destroy -auto-approve -input=false
+
+      - name: No containers left behind
+        run: |
+          # One filter per label: docker ANDs repeated label filters, so asking
+          # for both at once would match nothing and always pass.
+          for label in nimbus.cluster nimbus.registry; do
+            left=$(docker ps -aq --filter "label=$label")
+            if [ -n "$left" ]; then
+              echo "::error::destroy left $label containers running:"
+              docker ps -a --filter "label=$label"
+              exit 1
+            fi
+          done
+
   terraform:
     name: terraform examples
     runs-on: ubuntu-latest

@@ -57,7 +57,7 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 		// certificate matches. See TestStorageSuffixCarriesThePort.
 		"suffixes": map[string]any{
 			"storage":                             s.storageSuffix(),
-			"keyVaultDns":                         "vault.nimbus.localhost",
+			"keyVaultDns":                         s.keyVaultSuffix(),
 			"acrLoginServer":                      "acr.nimbus.localhost",
 			"sqlServerHostname":                   "sql.nimbus.localhost",
 			"mysqlServerEndpoint":                 "mysql.nimbus.localhost",

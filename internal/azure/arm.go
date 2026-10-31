@@ -18,8 +18,10 @@ type Hook struct {
 	BeforePut func(s *Server, t target, body map[string]any, existing map[string]any) *armError
 	// AfterPut runs once the resource is stored.
 	AfterPut func(s *Server, t target, body map[string]any)
-	// AfterDelete runs once the resource (and its children) are gone.
-	AfterDelete func(s *Server, t target)
+	// AfterDelete runs once the resource (and its children) are gone. body is
+	// the resource as it was last stored, because a hook cleaning up after a
+	// resource usually needs more than its ID -- a vault's location, say.
+	AfterDelete func(s *Server, t target, body map[string]any)
 	// Backing is "real" when a local engine actually runs this type.
 	Backing string
 	// CreateStatus overrides the status a successful create returns. Most
@@ -86,6 +88,12 @@ func (s *Server) handleARM(w http.ResponseWriter, r *http.Request) string {
 	// read by GUID land here.
 	if eq(t.Type, typeRoleDefinition) {
 		return s.handleRoleDefinitions(w, r, t)
+	}
+	// Soft-deleted vaults and vault name availability are served the same
+	// way: they are subscription-level Key Vault endpoints, not resources
+	// anyone creates.
+	if isKeyVaultSubscriptionPath(t) {
+		return s.handleKeyVaultSubscriptionPath(w, r, t)
 	}
 
 	switch t.Kind {
@@ -402,7 +410,9 @@ func (s *Server) runDeleteHooks(deleted []*core.Resource) {
 		if !ok {
 			dt = target{Kind: "resource", ID: res.ID, Type: res.Type, Name: res.Name, ParentID: res.ParentID}
 		}
-		h.AfterDelete(s, dt)
+		var body map[string]any
+		_ = json.Unmarshal(res.Body, &body)
+		h.AfterDelete(s, dt, body)
 	}
 }
 

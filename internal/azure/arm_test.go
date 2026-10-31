@@ -772,10 +772,17 @@ func TestCascadeDeleteRunsHooksForEveryResourceLeavesFirst(t *testing.T) {
 
 	var fired []string
 	az.registerHook("Nimbus.Test/parents", Hook{
-		AfterDelete: func(s *Server, t target) { fired = append(fired, "parent:"+t.Name) },
+		AfterDelete: func(s *Server, t target, body map[string]any) {
+			// The hook is handed the resource as it was last stored: a hook
+			// cleaning up after something usually needs more than its ID.
+			if body["id"] != t.ID {
+				t.Name = "parent-without-body"
+			}
+			fired = append(fired, "parent:"+t.Name)
+		},
 	})
 	az.registerHook("Nimbus.Test/parents/children", Hook{
-		AfterDelete: func(s *Server, t target) { fired = append(fired, "child:"+t.Name) },
+		AfterDelete: func(s *Server, t target, body map[string]any) { fired = append(fired, "child:"+t.Name) },
 	})
 
 	rg := sub + "/resourceGroups/rg-cascade-hooks"
@@ -812,7 +819,7 @@ func TestCascadeDeleteReachesGrandchildren(t *testing.T) {
 
 	var fired []string
 	az.registerHook("Nimbus.Test/parents/children", Hook{
-		AfterDelete: func(s *Server, t target) { fired = append(fired, t.Name) },
+		AfterDelete: func(s *Server, t target, body map[string]any) { fired = append(fired, t.Name) },
 	})
 
 	rg := sub + "/resourceGroups/rg-deep"

@@ -27,6 +27,11 @@ const certValidity = 397 * 24 * time.Hour
 // these names must resolve to loopback and the certificate must cover them.
 const StorageSuffix = "storage.nimbus.localhost"
 
+// KeyVaultSuffix is the DNS suffix Key Vault's data plane lives under.
+// Clients build {vault}.{suffix} from the metadata document or from the
+// vault's own vaultUri, so these names must resolve to loopback too.
+const KeyVaultSuffix = "vault.nimbus.localhost"
+
 // serverDNSNames is every name the server certificate must cover.
 //
 // A wildcard matches exactly ONE label: "*.localhost" covers "a.localhost" but
@@ -45,6 +50,8 @@ var serverDNSNames = []string{
 	"*.table." + StorageSuffix,
 	"*.file." + StorageSuffix,
 	"*.dfs." + StorageSuffix,
+	KeyVaultSuffix,
+	"*." + KeyVaultSuffix,
 }
 
 // coversAllNames reports whether an existing certificate carries every name in

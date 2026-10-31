@@ -61,6 +61,7 @@ type Server struct {
 	hooks    map[string]Hook
 	storage  *storage.Handler
 	ops      *operations
+	vaults   *deletedVaults
 	docker   docker.Client
 	clusters *clusters
 }
@@ -91,6 +92,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		hooks:    map[string]Hook{},
 		storage:  storage.NewHandler(storage.NewStore()),
 		ops:      newOperations(),
+		vaults:   newDeletedVaults(),
 		docker:   docker.NewCLI(),
 		clusters: newClusters(),
 	}
@@ -107,6 +109,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	registerIdentityHooks(s)
 	registerAuthorizationHooks(s)
 	registerLogAnalyticsHooks(s)
+	registerKeyVaultHooks(s)
 	return s
 }
 

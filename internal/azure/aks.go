@@ -181,7 +181,7 @@ func registerAKSHooks(s *Server) {
 			// off the PARENT on the next refresh.
 			s.updateClusterPools(t.ParentID, t.Name, body)
 		},
-		AfterDelete: func(s *Server, t target) {
+		AfterDelete: func(s *Server, t target, body map[string]any) {
 			s.updateClusterPools(t.ParentID, t.Name, nil)
 		},
 		Provision: func(s *Server, t target, body map[string]any) error {

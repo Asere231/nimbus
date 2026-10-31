@@ -107,7 +107,7 @@ func registerNetworkHooks(s *Server) {
 				return out
 			})
 		},
-		AfterDelete: func(s *Server, t target) {
+		AfterDelete: func(s *Server, t target, body map[string]any) {
 			s.updateVNetSubnets(t.ParentID, func(list []any) []any {
 				out := []any{}
 				for _, raw := range list {

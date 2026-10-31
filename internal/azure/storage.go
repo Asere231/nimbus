@@ -81,7 +81,7 @@ func registerStorageHooks(s *Server) {
 			s.storage.Store().CreateAccount(t.Name)
 			s.ensureServiceResources(t)
 		},
-		AfterDelete: func(s *Server, t target) {
+		AfterDelete: func(s *Server, t target, body map[string]any) {
 			// Deleting the account deletes its data; there is no soft delete.
 			s.storage.Store().DeleteAccount(t.Name)
 		},
@@ -113,7 +113,7 @@ func registerContainerHooks(s *Server) {
 			}
 			a.CreateContainer(t.Name, map[string]string{}, access)
 		},
-		AfterDelete: func(s *Server, t target) {
+		AfterDelete: func(s *Server, t target, body map[string]any) {
 			if a := s.storage.Store().Account(accountFromContainerID(t.ID)); a != nil {
 				a.DeleteContainer(t.Name)
 			}

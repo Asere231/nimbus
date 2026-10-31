@@ -104,6 +104,9 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	registerStorageHooks(s)
 	registerContainerHooks(s)
 	registerAKSHooks(s)
+	registerIdentityHooks(s)
+	registerAuthorizationHooks(s)
+	registerLogAnalyticsHooks(s)
 	return s
 }
 

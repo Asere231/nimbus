@@ -38,6 +38,11 @@ type Hook struct {
 	//
 	// Zero means 202.
 	DeleteStatus int
+	// DeleteReturnsBody makes a successful delete answer with the resource
+	// that was removed, which is what ARM does for a few types -- role
+	// assignments among them. Most types answer an empty body, so this is
+	// opt-in rather than the default.
+	DeleteReturnsBody bool
 	// Provision runs in the BACKGROUND after the resource is stored, for types
 	// backed by something that genuinely takes time to start -- a k3s
 	// container, not a map entry.
@@ -73,6 +78,14 @@ func (s *Server) handleARM(w http.ResponseWriter, r *http.Request) string {
 	}
 	if t.Subscription != "" {
 		s.ensureSubscription(t.Subscription)
+	}
+
+	// Role definitions are not stored resources: Azure's built-in roles exist
+	// in every subscription and nobody creates them, so they are served from
+	// a table instead of the store. Both a list (filtered by role name) and a
+	// read by GUID land here.
+	if eq(t.Type, typeRoleDefinition) {
+		return s.handleRoleDefinitions(w, r, t)
 	}
 
 	switch t.Kind {
@@ -143,6 +156,10 @@ func (s *Server) handleResource(w http.ResponseWriter, r *http.Request, t target
 		s.runDeleteHooks(deleted)
 		s.runDeprovision(deleted)
 		if h := s.hookFor(t.Type); h.DeleteStatus != 0 {
+			if h.DeleteReturnsBody && len(deleted) > 0 {
+				writeRaw(w, h.DeleteStatus, deleted[len(deleted)-1].Body)
+				return ""
+			}
 			w.WriteHeader(h.DeleteStatus)
 			return ""
 		}
@@ -216,6 +233,10 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 	}
 	props["provisioningState"] = "Succeeded"
 	body["properties"] = props
+
+	// Any type can carry an identity block, so it is completed here rather
+	// than in a per-type hook. Hooks run after this and can still override.
+	fillIdentity(s, t, body, existing)
 
 	h := s.hookFor(t.Type)
 	if h.BeforePut != nil {
@@ -403,6 +424,10 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, t target) 
 		return ""
 	}
 	if out, ok := s.storageAccountAction(t, body); ok {
+		writeJSON(w, 200, out)
+		return ""
+	}
+	if out, ok := s.workspaceAction(t); ok {
 		writeJSON(w, 200, out)
 		return ""
 	}

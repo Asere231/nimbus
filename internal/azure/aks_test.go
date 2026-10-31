@@ -281,3 +281,78 @@ func fmtAny(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+// azurerm parses identityProfile.kubeletidentity.resourceId as a full
+// UserAssignedIdentity ARM ID, not as a name. Putting the node resource
+// group's name there fails the apply outright with
+//
+//	Error: parsing "MC_rg-aks-dev_aks-nimbus-dev_eastus":
+//	parsing the UserAssignedIdentity ID: the number of segments didn't match
+//
+// which says nothing about which field was wrong.
+func TestKubeletIdentityResourceIDIsAFullARMID(t *testing.T) {
+	srv, _, _ := newAKSTestServer(t)
+	rg := sub + "/resourceGroups/rg-aks6"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	id := rg + "/providers/Microsoft.ContainerService/managedClusters/demo6"
+	_, body := do(t, srv, "PUT", id, aksBody(1))
+
+	props := body["properties"].(map[string]any)
+	kubelet := props["identityProfile"].(map[string]any)["kubeletidentity"].(map[string]any)
+	resID, _ := kubelet["resourceId"].(string)
+
+	seg := strings.Split(strings.Trim(resID, "/"), "/")
+	if len(seg) != 8 {
+		t.Fatalf("kubeletidentity resourceId = %q has %d segments; a UserAssignedIdentity ID has 8", resID, len(seg))
+	}
+	if !strings.Contains(resID, "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/") {
+		t.Errorf("kubeletidentity resourceId is not a UserAssignedIdentity ID: %q", resID)
+	}
+	if !strings.HasPrefix(resID, sub+"/resourceGroups/MC_") {
+		t.Errorf("kubelet identity should live in the node resource group: %q", resID)
+	}
+	for _, f := range []string{"clientId", "objectId"} {
+		if v, _ := kubelet[f].(string); len(v) != 36 {
+			t.Errorf("kubeletidentity %s = %q, want a GUID", f, v)
+		}
+	}
+}
+
+// azurerm scales the default node pool by PUTting the agentPools CHILD
+// resource, not by updating the cluster. The cluster's embedded
+// agentPoolProfiles must mirror that, or the next refresh reads the old count
+// back and the plan never settles -- the same parent/child sync the VNet and
+// its subnets needed in M1.
+func TestScalingAnAgentPoolUpdatesTheClusterProfile(t *testing.T) {
+	srv, _, _ := newAKSTestServer(t)
+	rg := sub + "/resourceGroups/rg-aks7"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	id := rg + "/providers/Microsoft.ContainerService/managedClusters/demo7"
+	do(t, srv, "PUT", id, aksBody(2))
+
+	// Scale the pool the way azurerm does.
+	pool := id + "/agentPools/default"
+	if code, _ := do(t, srv, "PUT", pool, map[string]any{
+		"properties": map[string]any{"count": float64(3), "vmSize": "Standard_DS2_v2"},
+	}); code != 200 && code != 201 {
+		t.Fatalf("PUT agent pool = %d", code)
+	}
+
+	_, body := do(t, srv, "GET", id, nil)
+	pools := body["properties"].(map[string]any)["agentPoolProfiles"].([]any)
+	if len(pools) != 1 {
+		t.Fatalf("cluster has %d pools, want 1", len(pools))
+	}
+	if got := pools[0].(map[string]any)["count"]; got != float64(3) {
+		t.Errorf("cluster still reports count=%v after the pool was scaled to 3", got)
+	}
+
+	// A pool that does not exist on the cluster yet is appended, not dropped.
+	do(t, srv, "PUT", id+"/agentPools/extra", map[string]any{
+		"properties": map[string]any{"count": float64(1), "vmSize": "Standard_DS2_v2"},
+	})
+	_, body = do(t, srv, "GET", id, nil)
+	if n := len(body["properties"].(map[string]any)["agentPoolProfiles"].([]any)); n != 2 {
+		t.Errorf("cluster has %d pools after adding one, want 2", n)
+	}
+}

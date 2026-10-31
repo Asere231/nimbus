@@ -69,11 +69,18 @@ func registerAKSHooks(s *Server) {
 				}
 			}
 			if props["identityProfile"] == nil {
+				// resourceId must be a FULL UserAssignedIdentity ARM ID.
+				// azurerm parses it, and a bare name fails the apply with
+				// "the number of segments didn't match", which names neither
+				// the field nor the resource. Azure puts this identity in the
+				// node resource group, named {cluster}-agentpool.
 				props["identityProfile"] = map[string]any{
 					"kubeletidentity": map[string]any{
-						"clientId":   stableGUID(t.ID + "/kubelet-client"),
-						"objectId":   stableGUID(t.ID + "/kubelet-object"),
-						"resourceId": props["nodeResourceGroup"],
+						"clientId": stableGUID(t.ID + "/kubelet-client"),
+						"objectId": stableGUID(t.ID + "/kubelet-object"),
+						"resourceId": fmt.Sprintf(
+							"/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ManagedIdentity/userAssignedIdentities/%s-agentpool",
+							t.Subscription, str(props["nodeResourceGroup"]), t.Name),
 					},
 				}
 			}
@@ -159,6 +166,15 @@ func registerAKSHooks(s *Server) {
 			setDefault(props, "orchestratorVersion", s.cfg.KubernetesVersion)
 			setDefault(props, "currentOrchestratorVersion", s.cfg.KubernetesVersion)
 			return nil
+		},
+		AfterPut: func(s *Server, t target, body map[string]any) {
+			// Mirror the pool into the cluster's embedded agentPoolProfiles.
+			// azurerm scales by writing the CHILD, then reads the count back
+			// off the PARENT on the next refresh.
+			s.updateClusterPools(t.ParentID, t.Name, body)
+		},
+		AfterDelete: func(s *Server, t target) {
+			s.updateClusterPools(t.ParentID, t.Name, nil)
 		},
 		Provision: func(s *Server, t target, body map[string]any) error {
 			cl := s.clusters.get(t.ParentID)
@@ -317,6 +333,61 @@ func (s *Server) scaleAgents(ctx context.Context, cl *cluster, want int) error {
 		cl.Agents = append(cl.Agents, name)
 	}
 	return nil
+}
+
+// updateClusterPools rewrites one entry of a cluster's agentPoolProfiles.
+// Passing a nil body removes the pool.
+//
+// Written directly to the store rather than through the ARM put path, because
+// re-running the cluster's own hooks here would re-provision the cluster on
+// every pool change.
+func (s *Server) updateClusterPools(clusterID, poolName string, poolBody map[string]any) {
+	res, err := s.store.Get(clusterID)
+	if err != nil {
+		return
+	}
+	var body map[string]any
+	if json.Unmarshal(res.Body, &body) != nil {
+		return
+	}
+	props, _ := body["properties"].(map[string]any)
+	if props == nil {
+		return
+	}
+
+	// The cluster's profile is the pool's properties plus its name, which is
+	// how Azure reports it.
+	var entry map[string]any
+	if poolBody != nil {
+		entry = map[string]any{"name": poolName}
+		if p, ok := poolBody["properties"].(map[string]any); ok {
+			for k, v := range p {
+				entry[k] = v
+			}
+		}
+	}
+
+	out := []any{}
+	replaced := false
+	for _, raw := range asList(props["agentPoolProfiles"]) {
+		p, ok := raw.(map[string]any)
+		if ok && eq(str(p["name"]), poolName) {
+			if entry != nil {
+				out = append(out, entry)
+			}
+			replaced = true
+			continue
+		}
+		out = append(out, raw)
+	}
+	if !replaced && entry != nil {
+		out = append(out, entry)
+	}
+	props["agentPoolProfiles"] = out
+	normaliseAgentPools(props)
+
+	res.Body, _ = json.Marshal(body)
+	s.store.Put(res)
 }
 
 // --- credential actions -----------------------------------------------------

@@ -140,6 +140,15 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	registerKeyVaultHooks(s)
 	registerDeploymentHooks(s)
 	registerACRHooks(s)
+
+	// The default subscription exists from the start, rather than appearing
+	// the first time something asks for it. `az login` lists subscriptions
+	// before anything else happens: finding none, it creates a tenant-level
+	// account and then uses the TENANT id as the subscription id, so every
+	// resource lands under a subscription that is not the one the examples
+	// and the docs name. Terraform never notices, because it is always
+	// configured with an explicit subscription_id.
+	s.ensureSubscription(DefaultSubscriptionID)
 	return s
 }
 

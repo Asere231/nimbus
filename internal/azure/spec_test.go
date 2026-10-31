@@ -300,3 +300,41 @@ func TestEverySpecTypeHasABadge(t *testing.T) {
 		}
 	}
 }
+
+// A fresh Nimbus must already know about its subscription. Nothing had asked
+// for one before, so the store was empty, `az login` saw no subscriptions and
+// fell back to a tenant-level account -- after which az uses the TENANT id as
+// the subscription id and every resource lands under the wrong one. Terraform
+// never noticed, because it is always configured with an explicit
+// subscription_id.
+func TestSubscriptionExistsBeforeAnyRequest(t *testing.T) {
+	bus := core.NewBus(10)
+	store, err := core.NewStore(bus, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{PublicURL: "https://localhost:4701"}, store, bus)
+
+	req := httptest.NewRequest(http.MethodGet, "/subscriptions?api-version=2022-12-01", nil)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("list subscriptions: %d", rec.Code)
+	}
+	var list struct {
+		Value []struct {
+			SubscriptionID string `json:"subscriptionId"`
+			DisplayName    string `json:"displayName"`
+		} `json:"value"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Value) != 1 {
+		t.Fatalf("a fresh server lists %d subscriptions, want 1", len(list.Value))
+	}
+	if list.Value[0].SubscriptionID != DefaultSubscriptionID {
+		t.Errorf("subscriptionId = %s, want %s (not the tenant id)",
+			list.Value[0].SubscriptionID, DefaultSubscriptionID)
+	}
+}

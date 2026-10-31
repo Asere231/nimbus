@@ -93,6 +93,12 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 ## Later
 
+- **`REQUESTS_CA_BUNDLE` replaces the trust store rather than adding to it**,
+  so while it points at the Nimbus CA, `az` cannot reach any real host — which
+  breaks `az bicep install`, `az upgrade` and anything else that downloads.
+  `nimbus az register` could write a combined bundle (the CAs az already
+  trusts, plus ours) and point at that instead. Until then the workaround is a
+  shell without the variable set.
 - **Deployments are resource-group scope only.** `az deployment sub create`,
   management-group and tenant scope, nested deployments, `templateLink` (which
   would fetch over the network) and Complete mode are all unimplemented.

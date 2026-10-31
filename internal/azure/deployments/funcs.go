@@ -61,15 +61,25 @@ func (p *parser) call(name string, args []any) (any, error) {
 		if !s.inCopy {
 			return nil, fmt.Errorf("copyIndex() is only valid inside a copy loop")
 		}
+		// copyIndex(), copyIndex(offset), copyIndex('loop') and
+		// copyIndex('loop', offset) are all spellings ARM accepts.
+		name := s.currentCopy
 		offset := 0.0
-		if len(args) > 0 {
-			// copyIndex('name') selects a loop by name; with one loop per
-			// resource there is only ever one to select.
-			if n, ok := args[len(args)-1].(float64); ok {
-				offset = n
+		for i, a := range args {
+			switch v := a.(type) {
+			case string:
+				if i == 0 {
+					name = v
+				}
+			case float64:
+				offset = v
 			}
 		}
-		return float64(s.copyIndex) + offset, nil
+		idx, ok := s.copyIndexes[name]
+		if !ok {
+			return nil, fmt.Errorf("copyIndex(%q): no such copy loop is in scope", name)
+		}
+		return float64(idx) + offset, nil
 	case "deployment":
 		return map[string]any{"name": s.DeploymentName}, nil
 	case "resourceid":

@@ -179,10 +179,15 @@ func expandResource(res map[string]any, s *Scope) ([]Resource, error) {
 // iteration, or -1 outside a loop.
 func materialise(res map[string]any, s *Scope, index int) (Resource, bool, error) {
 	scope := *s
+	scope.copyIndexes = map[string]int{}
+	for k, v := range s.copyIndexes {
+		scope.copyIndexes[k] = v
+	}
 	if index >= 0 {
-		// copyIndex() is just a function over the current iteration, so it is
-		// supplied the same way everything else is.
-		scope.copyIndex = index
+		// The resource-level loop is the one copyIndex() means when it is
+		// given no name.
+		scope.copyIndexes[""] = index
+		scope.currentCopy = ""
 		scope.inCopy = true
 	}
 
@@ -214,7 +219,7 @@ func materialise(res map[string]any, s *Scope, index int) (Resource, bool, error
 		}
 		raw[k] = v
 	}
-	evaluated, err := EvaluateDeferring(raw, &scope)
+	evaluated, err := expandCopies(raw, &scope)
 	if err != nil {
 		return Resource{}, false, fmt.Errorf("%s/%s: %w", typ, name, err)
 	}
@@ -389,6 +394,94 @@ func (p *Plan) EvaluateOutputs(scope *Scope) (map[string]any, error) {
 func asList(v any) []any {
 	if l, ok := v.([]any); ok {
 		return l
+	}
+	return nil
+}
+
+// expandCopies evaluates a resource body, expanding property-level copy loops
+// as it goes.
+//
+// This is what a Bicep `for` inside a property compiles to: instead of
+// repeating the resource, the object carries
+//
+//	"copy": [{"name": "subnets", "count": 2, "input": {...}}]
+//
+// and the result is a sibling array named "subnets". It is easy to miss,
+// because the resource-level copy -- which repeats the whole resource -- looks
+// nothing like it; the azure-bicep example in examples/bicep uses both.
+//
+// Strings are evaluated with reference() deferred, exactly as elsewhere.
+func expandCopies(v any, s *Scope) (any, error) {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			if strings.EqualFold(k, "copy") {
+				if specs, ok := val.([]any); ok {
+					if err := expandPropertyCopies(specs, out, s); err != nil {
+						return nil, err
+					}
+					continue
+				}
+			}
+			ev, err := expandCopies(val, s)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = ev
+		}
+		return out, nil
+	case []any:
+		out := make([]any, 0, len(x))
+		for _, val := range x {
+			ev, err := expandCopies(val, s)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, ev)
+		}
+		return out, nil
+	default:
+		return EvaluateDeferring(v, s)
+	}
+}
+
+// expandPropertyCopies turns each {name, count, input} into a sibling array.
+func expandPropertyCopies(specs []any, into map[string]any, s *Scope) error {
+	for _, raw := range specs {
+		spec, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("a property copy must be an object")
+		}
+		name := toString(spec["name"])
+		if name == "" {
+			return fmt.Errorf("a property copy needs a name")
+		}
+		rawCount, err := EvaluateDeep(spec["count"], s)
+		if err != nil {
+			return fmt.Errorf("copy %q: count: %w", name, err)
+		}
+		count, ok := rawCount.(float64)
+		if !ok {
+			return fmt.Errorf("copy %q: count must be a number", name)
+		}
+		items := make([]any, 0, int(count))
+		for i := 0; i < int(count); i++ {
+			loop := *s
+			loop.copyIndexes = map[string]int{}
+			for k, v := range s.copyIndexes {
+				loop.copyIndexes[k] = v
+			}
+			loop.copyIndexes[name] = i
+			loop.currentCopy = name
+			loop.inCopy = true
+			item, err := expandCopies(spec["input"], &loop)
+			if err != nil {
+				return fmt.Errorf("copy %q item %d: %w", name, i, err)
+			}
+			items = append(items, item)
+		}
+		into[name] = items
 	}
 	return nil
 }

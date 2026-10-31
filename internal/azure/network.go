@@ -45,7 +45,7 @@ func registerNetworkHooks(s *Server) {
 				sn["id"] = t.ID + "/subnets/" + name
 				sn["type"] = typeSubnet
 				if sn["etag"] == nil {
-					sn["etag"] = etag()
+					sn["etag"] = etagFor(str(sn["id"]))
 				}
 				sp, _ := sn["properties"].(map[string]any)
 				if sp == nil {
@@ -54,7 +54,7 @@ func registerNetworkHooks(s *Server) {
 				sp["provisioningState"] = "Succeeded"
 				sn["properties"] = sp
 			}
-			body["etag"] = etag()
+			body["etag"] = etagFor(t.ID)
 			return nil
 		},
 		AfterPut: func(s *Server, t target, body map[string]any) {
@@ -86,7 +86,7 @@ func registerNetworkHooks(s *Server) {
 			if props["addressPrefix"] == nil && len(asList(props["addressPrefixes"])) == 0 {
 				return &armError{400, "InvalidRequestFormat", "A subnet needs properties.addressPrefix or properties.addressPrefixes."}
 			}
-			body["etag"] = etag()
+			body["etag"] = etagFor(t.ID)
 			return nil
 		},
 		AfterPut: func(s *Server, t target, body map[string]any) {
@@ -155,7 +155,12 @@ func keepServerFields(props, existing map[string]any) {
 	props["resourceGuid"] = newUUID()
 }
 
-func etag() string { return `W/"` + newUUID() + `"` }
+// etagFor derives an etag from the resource ID rather than generating one.
+// Azure changes an etag on every write; Nimbus deliberately does not, because
+// a value that differs between two reads of an unchanged resource is a
+// permanent diff -- the same rule the AKS kubeconfig and Content-MD5 taught.
+// Nothing here does optimistic concurrency, so there is nothing to lose.
+func etagFor(id string) string { return `W/"` + stableGUID(id+"/etag") + `"` }
 
 func asList(v any) []any {
 	l, _ := v.([]any)

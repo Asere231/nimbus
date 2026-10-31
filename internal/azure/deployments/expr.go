@@ -33,11 +33,14 @@ type Scope struct {
 	// validation and what-if pass.
 	Reference func(resourceID string) (map[string]any, bool)
 
-	// copyIndex is the current iteration inside a copy loop; inCopy says
-	// whether there is one, so copyIndex() outside a loop can be an error
-	// rather than a silent zero.
-	copyIndex int
-	inCopy    bool
+	// copyIndexes holds the current iteration of every copy loop in scope,
+	// keyed by loop name; the resource-level loop is the empty key.
+	// currentCopy names the innermost one, which is what a bare copyIndex()
+	// means. A copyIndex() with no loop at all is an error rather than a
+	// silent zero.
+	copyIndexes map[string]int
+	currentCopy string
+	inCopy      bool
 	// deferReferences keeps expressions that need reference() unevaluated,
 	// because the resource they name has not been created yet.
 	deferReferences bool

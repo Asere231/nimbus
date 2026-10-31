@@ -89,10 +89,7 @@ func specValue(t target, f specField) (any, bool) {
 	case lower == "provisioningstate":
 		return "Succeeded", true
 	case lower == "etag":
-		// Azure changes an etag on every write; we derive it instead, so a
-		// repeated identical PUT is a no-op to the client. Nothing Nimbus
-		// serves does optimistic concurrency, so there is nothing to lose.
-		return `W/"` + stableGUID(t.ID+"/etag") + `"`, true
+		return etagFor(t.ID), true
 	case strings.HasSuffix(lower, "guid"), lower == "uniqueid", lower == "objectid",
 		lower == "principalid", lower == "clientid", lower == "tenantid":
 		return identityGUID(t.ID, f.Path), true

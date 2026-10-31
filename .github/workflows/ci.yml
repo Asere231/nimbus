@@ -87,6 +87,93 @@ jobs:
       - run: go build ./...
       - run: go test ./...
 
+  specgen:
+    name: spec generator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: tools/specgen/go.mod
+      # The generator's own tests run against the fixtures under testdata and
+      # need no network. Regenerating would, so it is not done here: the
+      # generated table is committed and reviewed like any other code.
+      - name: Test the generator
+        working-directory: tools/specgen
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          go test ./...
+
+  bicep:
+    name: bicep deployment (az)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus cert
+          ./bin/nimbus start &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      # The az CLI is preinstalled on GitHub's Ubuntu runners.
+      - name: Register Nimbus as a cloud and sign in
+        run: |
+          export REQUESTS_CA_BUNDLE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          ./bin/nimbus az register --run
+          az login --service-principal \
+            -u 00000000-0000-0000-0000-000000000002 -p nimbus \
+            --tenant 00000000-0000-0000-0000-000000000001 --allow-no-subscriptions
+
+      - name: az group create / vnet create / resource list
+        run: |
+          export REQUESTS_CA_BUNDLE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          az group create -n rg-ci -l eastus
+          az network vnet create -g rg-ci -n vnet-ci --address-prefixes 10.0.0.0/16
+          az resource list -g rg-ci -o table
+
+      # Deploys the committed ARM JSON, which is exactly what az sends after
+      # compiling the .bicep locally. Installing the Bicep compiler would need
+      # another download, and the compiled output is what Nimbus must handle.
+      - name: Deploy the Bicep example
+        run: |
+          export REQUESTS_CA_BUNDLE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          az deployment group create -g rg-ci -n ci-example \
+            --template-file examples/bicep/main.json -o json > deployment.json
+          cat deployment.json
+          state=$(python3 -c "import json;print(json.load(open('deployment.json'))['properties']['provisioningState'])")
+          [ "$state" = "Succeeded" ] || { echo "provisioningState=$state"; exit 1; }
+
+      - name: The resources it created are really there
+        run: |
+          export REQUESTS_CA_BUNDLE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          az network vnet show -g rg-ci -n nimbus-vnet -o json > vnet.json
+          subnets=$(python3 -c "import json;print(len(json.load(open('vnet.json'))['subnets']))")
+          [ "$subnets" = "2" ] || { echo "the copy loop produced $subnets subnets"; exit 1; }
+          az deployment group what-if -g rg-ci -n ci-example \
+            --template-file examples/bicep/main.json --no-pretty-print
+
+      - name: Deploying it again changes nothing
+        run: |
+          export REQUESTS_CA_BUNDLE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          az network vnet show -g rg-ci -n nimbus-vnet -o json > before.json
+          az deployment group create -g rg-ci -n ci-example-2 \
+            --template-file examples/bicep/main.json -o none
+          az network vnet show -g rg-ci -n nimbus-vnet -o json > after.json
+          diff before.json after.json || { echo "a redeploy changed the VNet"; exit 1; }
+
   sdkcompat:
     name: go-azure-sdk harness
     runs-on: ubuntu-latest

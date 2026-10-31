@@ -23,6 +23,8 @@ type Account struct {
 
 	mu         sync.RWMutex
 	containers map[string]*Container
+	queues     map[string]*Queue
+	tables     map[string]*Table
 	// ServiceProps is the blob service settings document, kept as the exact
 	// XML last written so it round-trips byte for byte.
 	ServiceProps map[Service][]byte
@@ -55,6 +57,8 @@ func (s *Store) CreateAccount(name string) *Account {
 	a := &Account{
 		Name: name, Keys: [2]string{newKey(), newKey()}, Created: time.Now().UTC(),
 		containers:   map[string]*Container{},
+		queues:       map[string]*Queue{},
+		tables:       map[string]*Table{},
 		ServiceProps: map[Service][]byte{},
 	}
 	s.accounts[key(name)] = a

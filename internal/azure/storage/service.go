@@ -108,7 +108,19 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, t Target) string
 	switch t.Service {
 	case ServiceBlob:
 		return h.serveBlob(w, r, a)
-	case ServiceQueue, ServiceTable, ServiceFile:
+	case ServiceQueue:
+		q := r.URL.Query()
+		if q.Get("restype") == "service" {
+			return h.serviceProperties(w, r, a, t.Service, q.Get("comp"))
+		}
+		return h.serveQueue(w, r, a)
+	case ServiceTable:
+		q := r.URL.Query()
+		if q.Get("restype") == "service" {
+			return h.serviceProperties(w, r, a, t.Service, q.Get("comp"))
+		}
+		return h.serveTable(w, r, a)
+	case ServiceFile:
 		// azurerm reads queue service properties immediately after creating an
 		// account, alongside the blob ones, and will not finish the apply
 		// without them. The settings document has the same shape for every

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Service is one of the storage services a data-plane host can address.
@@ -80,6 +81,10 @@ func (h *Handler) changed(account, container, action string) {
 		h.OnChange(account, container, action)
 	}
 }
+
+// persist writes the account to disk if persistence is on. Called after any
+// mutation, so a restart with --persist finds exactly what was there.
+func (h *Handler) persist(a *Account) { h.store.Save(a) }
 
 // Store exposes the underlying data store, so the ARM hook can create and
 // delete accounts alongside the control-plane resource.
@@ -171,4 +176,51 @@ func setCommonHeaders(w http.ResponseWriter) {
 	w.Header().Set("x-ms-version", APIVersion)
 	w.Header().Set("x-ms-request-id", newRequestID())
 	w.Header().Set("Server", "Nimbus")
+}
+
+// --- visualizer support ----------------------------------------------------
+
+// BlobSummary is one blob as the visualizer sees it.
+type BlobSummary struct {
+	Name        string
+	Size        int64
+	ContentType string
+	Modified    time.Time
+}
+
+// ListBlobs returns the blobs in a container, for the inspector.
+func (h *Handler) ListBlobs(account, container string) []BlobSummary {
+	a := h.store.Account(account)
+	if a == nil {
+		return nil
+	}
+	c := a.Container(container)
+	if c == nil {
+		return nil
+	}
+	out := []BlobSummary{}
+	for _, b := range c.Blobs("") {
+		out = append(out, BlobSummary{
+			Name: b.Name, Size: int64(len(b.Content)),
+			ContentType: contentTypeOf(b), Modified: b.Modified,
+		})
+	}
+	return out
+}
+
+// ReadBlob returns a blob's bytes, for the inspector's download link.
+func (h *Handler) ReadBlob(account, container, name string) ([]byte, string, bool) {
+	a := h.store.Account(account)
+	if a == nil {
+		return nil, "", false
+	}
+	c := a.Container(container)
+	if c == nil {
+		return nil, "", false
+	}
+	b := c.Blob(name)
+	if b == nil {
+		return nil, "", false
+	}
+	return b.Content, contentTypeOf(b), true
 }

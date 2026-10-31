@@ -36,6 +36,8 @@ type Account struct {
 type Store struct {
 	mu       sync.RWMutex
 	accounts map[string]*Account // keyed by lower-cased account name
+	dir      string              // empty = memory only
+	saveMu   sync.Mutex
 }
 
 // NewStore creates an empty in-memory store.
@@ -50,8 +52,8 @@ func key(name string) string { return strings.ToLower(name) }
 // keeps working across account updates.
 func (s *Store) CreateAccount(name string) *Account {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if a, ok := s.accounts[key(name)]; ok {
+		s.mu.Unlock()
 		return a
 	}
 	a := &Account{
@@ -62,6 +64,9 @@ func (s *Store) CreateAccount(name string) *Account {
 		ServiceProps: map[Service][]byte{},
 	}
 	s.accounts[key(name)] = a
+	s.mu.Unlock()
+	// Saved outside the lock: save takes a read lock of its own.
+	s.save(a)
 	return a
 }
 
@@ -76,8 +81,9 @@ func (s *Store) Account(name string) *Account {
 // DeleteAccount removes an account and everything in it.
 func (s *Store) DeleteAccount(name string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	delete(s.accounts, key(name))
+	s.mu.Unlock()
+	s.removeAccountDir(name)
 }
 
 // Accounts lists every account, by name.

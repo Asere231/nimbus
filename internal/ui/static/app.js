@@ -28,6 +28,11 @@
     "microsoft.network/loadbalancers": ["LB", "#ffa657", "Load balancer"],
     "microsoft.network/routetables": ["RT", "#a5d6ff", "Route table"],
     "microsoft.storage/storageaccounts": ["ST", "#3fb950", "Storage account"],
+    "microsoft.storage/storageaccounts/blobservices/containers": ["BLOB", "#2ea043", "Blob container"],
+    "microsoft.storage/storageaccounts/blobservices": ["BSVC", "#8b949e", "Blob service"],
+    "microsoft.storage/storageaccounts/queueservices": ["QSVC", "#8b949e", "Queue service"],
+    "microsoft.storage/storageaccounts/tableservices": ["TSVC", "#8b949e", "Table service"],
+    "microsoft.storage/storageaccounts/fileservices": ["FSVC", "#8b949e", "File service"],
     "microsoft.containerservice/managedclusters": ["AKS", "#326ce5", "Kubernetes cluster"],
     "microsoft.containerregistry/registries": ["ACR", "#58a6ff", "Container registry"],
     "microsoft.keyvault/vaults": ["KV", "#e3b341", "Key vault"],
@@ -185,16 +190,32 @@
     requestAnimationFrame(() => { renderQueued = false; render(); });
   }
 
+  // Types that exist only so ARM has something to address. A storage account
+  // really does have blobServices/default and three siblings -- azurerm polls
+  // them -- but drawing four "default" boxes under every account is noise. They
+  // are skipped and their children lifted to the grandparent, so a container
+  // appears directly under its account, which is how people think about it.
+  const PASSTHROUGH = /\/(blob|queue|table|file)services$/;
+
   function buildForest() {
     const showSubs = $("#show-subs").checked;
     const nodes = new Map();
+    const hidden = new Map(); // key -> parentId, for lifting children
     for (const [k, r] of state.resources) {
-      if (!showSubs && r.type.toLowerCase() === "microsoft.resources/subscriptions") continue;
+      const type = r.type.toLowerCase();
+      if (!showSubs && type === "microsoft.resources/subscriptions") continue;
+      if (PASSTHROUGH.test(type)) {
+        hidden.set(k, (r.parentId || "").toLowerCase());
+        continue;
+      }
       nodes.set(k, { key: k, r, children: [] });
     }
     const roots = [];
     for (const n of nodes.values()) {
-      const p = (n.r.parentId || "").toLowerCase();
+      let p = (n.r.parentId || "").toLowerCase();
+      // Walk up past any hidden ancestors.
+      let guard = 0;
+      while (hidden.has(p) && guard++ < 8) p = hidden.get(p);
       const parent = nodes.get(p);
       if (parent) parent.children.push(n); else roots.push(n);
     }
@@ -204,7 +225,7 @@
     return roots;
   }
 
-  const ORDER = ["subscriptions", "resourcegroups", "virtualnetworks", "subnets", "networksecuritygroups"];
+  const ORDER = ["subscriptions", "resourcegroups", "virtualnetworks", "subnets", "networksecuritygroups", "storageaccounts", "containers"];
   function typeOrder(type) {
     const last = type.toLowerCase().split("/").pop();
     const i = ORDER.indexOf(last);
@@ -259,10 +280,14 @@
 
     let maxX = 0, maxY = 0;
     for (const n of nodes) { maxX = Math.max(maxX, n.x + W); maxY = Math.max(maxY, n.y + H); }
-    // Shrink wide trees (down to 70%) so more of the hierarchy fits on screen.
+    // Shrink wide trees so the hierarchy fits. The floor is 0.5 rather than
+    // something higher because storage adds a fourth level (subscription ->
+    // resource group -> account -> container) and at 0.7 the deepest node
+    // lands off-screen, which reads as "the container was not created" even
+    // though it is there and reachable by scrolling.
     const cw = maxX + PAD, ch = maxY + PAD;
     const avail = $("#canvas").clientWidth || cw;
-    const scale = Math.min(1, Math.max(0.7, avail / cw));
+    const scale = Math.min(1, Math.max(0.5, avail / cw));
     svg.setAttribute("viewBox", `0 0 ${cw} ${ch}`);
     svg.setAttribute("width", Math.round(cw * scale));
     svg.setAttribute("height", Math.round(ch * scale));
@@ -332,6 +357,62 @@
       meta.append(dt, dd);
     }
     $("#i-json").innerHTML = highlight(JSON.stringify(r.body, null, 2));
+    showBlobs(r);
+  }
+
+  // Blobs are not graph nodes -- a container can hold thousands -- so they are
+  // fetched for whichever container is selected and listed here instead.
+  async function showBlobs(r) {
+    const panel = $("#i-blobs");
+    const type = (r.type || "").toLowerCase();
+    if (!type.endsWith("/blobservices/containers")) {
+      panel.hidden = true;
+      return;
+    }
+    const account = accountOf(r.id);
+    panel.hidden = false;
+    $("#i-blobs-list").innerHTML = "<div class='muted'>Loading…</div>";
+    let blobs = [];
+    try {
+      const res = await fetch(`/api/storage/blobs?account=${encodeURIComponent(account)}&container=${encodeURIComponent(r.name)}`);
+      blobs = await res.json();
+    } catch (e) {
+      $("#i-blobs-list").innerHTML = "<div class='muted'>Could not load blobs.</div>";
+      return;
+    }
+    $("#i-blobs-count").textContent = blobs.length === 1 ? "1 blob" : `${blobs.length} blobs`;
+    if (!blobs.length) {
+      $("#i-blobs-list").innerHTML = "<div class='muted'>This container is empty.</div>";
+      return;
+    }
+    const list = document.createElement("div");
+    for (const b of blobs) {
+      const row = document.createElement("div");
+      row.className = "blob-row";
+      const a = document.createElement("a");
+      a.href = `/api/storage/blob?account=${encodeURIComponent(account)}&container=${encodeURIComponent(r.name)}&name=${encodeURIComponent(b.name)}`;
+      a.textContent = b.name;
+      a.title = "Download";
+      const size = document.createElement("span");
+      size.className = "blob-size";
+      size.textContent = humanSize(b.size);
+      row.append(a, size);
+      list.appendChild(row);
+    }
+    $("#i-blobs-list").innerHTML = "";
+    $("#i-blobs-list").appendChild(list);
+  }
+
+  // The account name sits between /storageAccounts/ and the next segment.
+  function accountOf(id) {
+    const m = /\/storageAccounts\/([^/]+)/i.exec(id || "");
+    return m ? m[1] : "";
+  }
+
+  function humanSize(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1024 / 1024).toFixed(1) + " MB";
   }
 
   function highlight(json) {

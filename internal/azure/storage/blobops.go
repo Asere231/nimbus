@@ -68,6 +68,7 @@ func (h *Handler) blobOp(w http.ResponseWriter, r *http.Request, a *Account, con
 			return ""
 		}
 		h.changed(a.Name, containerName, "update")
+		h.persist(a)
 		setCommonHeaders(w)
 		w.WriteHeader(202)
 		return ""
@@ -95,6 +96,7 @@ func (h *Handler) putBlob(w http.ResponseWriter, r *http.Request, a *Account, c 
 	applyBlobHeaders(b, r.Header)
 	c.PutBlob(b)
 	h.changed(a.Name, c.Name, "update")
+	h.persist(a)
 	writeBlobWriteResponse(w, b, 201)
 	return ""
 }

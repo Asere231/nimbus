@@ -243,13 +243,15 @@ func canonicalResource(r *http.Request, account string, lite bool) string {
 // endpoint and key settings. Explicit per-service endpoints are used rather
 // than EndpointSuffix, so clients never have to guess our port.
 func ConnectionString(account, key, suffix string) string {
-	ep := func(svc string) string {
-		return svc + "Endpoint=https://" + account + "." + svc + "." + suffix + "/"
+	// The setting name is capitalised ("BlobEndpoint") but the HOSTNAME must be
+	// lower-case, since it is the service label the data plane routes on.
+	ep := func(name, svc string) string {
+		return name + "Endpoint=https://" + account + "." + svc + "." + suffix + "/"
 	}
 	return strings.Join([]string{
 		"DefaultEndpointsProtocol=https",
 		"AccountName=" + account,
 		"AccountKey=" + key,
-		ep("Blob"), ep("Queue"), ep("Table"), ep("File"),
+		ep("Blob", "blob"), ep("Queue", "queue"), ep("Table", "table"), ep("File", "file"),
 	}, ";")
 }

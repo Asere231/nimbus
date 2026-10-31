@@ -213,6 +213,7 @@ func (h *Handler) containerOp(w http.ResponseWriter, r *http.Request, a *Account
 			return ""
 		}
 		h.changed(a.Name, name, "create")
+		h.persist(a)
 		w.Header().Set("ETag", c.ETag)
 		w.Header().Set("Last-Modified", httpTime(c.Modified))
 		setCommonHeaders(w)
@@ -225,6 +226,7 @@ func (h *Handler) containerOp(w http.ResponseWriter, r *http.Request, a *Account
 			return ""
 		}
 		h.changed(a.Name, name, "delete")
+		h.persist(a)
 		setCommonHeaders(w)
 		w.WriteHeader(202)
 		return ""

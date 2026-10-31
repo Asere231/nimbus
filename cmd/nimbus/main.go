@@ -8,6 +8,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,10 +20,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Asere231/nimbus/internal/azure"
+	"github.com/Asere231/nimbus/internal/azure/storage"
 	"github.com/Asere231/nimbus/internal/core"
 	"github.com/Asere231/nimbus/internal/ui"
 )
@@ -99,13 +103,17 @@ func start(args []string) {
 	}
 
 	azURL := fmt.Sprintf("https://%s:%d", *host, *azPort)
-	az := azure.New(azure.Config{PublicURL: azURL}, store, bus)
+	azCfg := azure.Config{PublicURL: azURL}
+	if dataDir != "" {
+		azCfg.DataDir = filepath.Join(dataDir, "storage")
+	}
+	az := azure.New(azCfg, store, bus)
 	uiURL := fmt.Sprintf("http://%s:%d", *host, *uiPort)
 
 	azSrv := &http.Server{Addr: fmt.Sprintf(":%d", *azPort), Handler: az, TLSConfig: tlsCfg, ReadHeaderTimeout: 10 * time.Second}
 	uiSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", *uiPort),
-		Handler:           ui.Handler(store, bus, ui.Info{Version: version, Clouds: map[string]string{"azure": azURL}, DataDir: dataDir}),
+		Handler:           ui.Handler(store, bus, ui.Info{Version: version, Clouds: map[string]string{"azure": azURL}, DataDir: dataDir}, blobBrowser{az.BlobBrowser()}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -150,6 +158,25 @@ func start(args []string) {
 	_ = uiSrv.Shutdown(ctx)
 }
 
+// blobBrowser adapts the Azure storage handler to the visualizer's interface.
+// The adapter lives here, in the one place that already knows about both, so
+// neither internal/ui nor the storage plugin has to import the other.
+type blobBrowser struct{ h *storage.Handler }
+
+func (b blobBrowser) ListBlobs(account, container string) []ui.BlobInfo {
+	out := []ui.BlobInfo{}
+	for _, s := range b.h.ListBlobs(account, container) {
+		out = append(out, ui.BlobInfo{
+			Name: s.Name, Size: s.Size, ContentType: s.ContentType, Modified: s.Modified,
+		})
+	}
+	return out
+}
+
+func (b blobBrowser) ReadBlob(account, container, name string) ([]byte, string, bool) {
+	return b.h.ReadBlob(account, container, name)
+}
+
 func stateLabel(dir string) string {
 	if dir == "" {
 		return "in memory (use --persist to keep it)"
@@ -178,10 +205,14 @@ func printCert(args []string) {
 }
 
 func printEnv(args []string) {
+	fs := flag.NewFlagSet("env", flag.ExitOnError)
+	account := fs.String("storage-account", "", "also print a connection string for this storage account")
+	azPort := fs.Int("azure-port", 4701, "the port Nimbus serves Azure on")
 	if len(args) == 0 || args[0] != "azure" {
-		fmt.Fprintln(os.Stderr, "usage: nimbus env azure")
+		fmt.Fprintln(os.Stderr, "usage: nimbus env azure [--storage-account NAME]")
 		os.Exit(2)
 	}
+	_ = fs.Parse(args[1:])
 	vars := [][2]string{
 		{"ARM_METADATA_HOSTNAME", "localhost:4701"},
 		{"ARM_SUBSCRIPTION_ID", azure.DefaultSubscriptionID},
@@ -190,6 +221,24 @@ func printEnv(args []string) {
 		{"ARM_CLIENT_SECRET", "nimbus"},
 		{"ARM_RESOURCE_PROVIDER_REGISTRATIONS", "none"},
 	}
+	if *account != "" {
+		// `az storage` and the SDKs take a connection string instead of
+		// separate settings. Per-service endpoints are spelled out rather than
+		// using EndpointSuffix, so no client has to guess our port.
+		//
+		// The key is whatever the running server issued, so fetch it rather
+		// than inventing one: ARM is the only source of truth for it.
+		key, err := storageKey(*azPort, *account)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "nimbus: could not read the key for %q: %v\n", *account, err)
+			fmt.Fprintln(os.Stderr, "Is Nimbus running, and does that account exist?")
+			os.Exit(1)
+		}
+		suffix := fmt.Sprintf("%s:%d", core.StorageSuffix, *azPort)
+		vars = append(vars, [2]string{"AZURE_STORAGE_CONNECTION_STRING",
+			storage.ConnectionString(*account, key, suffix)})
+	}
+
 	if runtime.GOOS == "windows" {
 		for _, v := range vars {
 			fmt.Printf("$env:%s = \"%s\"\n", v[0], v[1])
@@ -199,4 +248,71 @@ func printEnv(args []string) {
 	for _, v := range vars {
 		fmt.Printf("export %s=%s\n", v[0], v[1])
 	}
+}
+
+// storageKey asks the running server for an account key through ARM.
+func storageKey(port int, account string) (string, error) {
+	// The resource group is not known here, so find the account by listing
+	// every storage account in the subscription and matching on name.
+	listURL := fmt.Sprintf("https://localhost:%d/subscriptions/%s/providers/Microsoft.Storage/storageAccounts?api-version=2023-01-01",
+		port, azure.DefaultSubscriptionID)
+	client, err := nimbusClient()
+	if err != nil {
+		return "", err
+	}
+	res, err := client.Get(listURL)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	var list struct {
+		Value []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"value"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&list); err != nil {
+		return "", err
+	}
+	for _, a := range list.Value {
+		if !strings.EqualFold(a.Name, account) {
+			continue
+		}
+		keysURL := fmt.Sprintf("https://localhost:%d%s/listKeys?api-version=2023-01-01", port, a.ID)
+		kr, err := client.Post(keysURL, "application/json", nil)
+		if err != nil {
+			return "", err
+		}
+		defer kr.Body.Close()
+		var keys struct {
+			Keys []struct {
+				Value string `json:"value"`
+			} `json:"keys"`
+		}
+		if err := json.NewDecoder(kr.Body).Decode(&keys); err != nil {
+			return "", err
+		}
+		if len(keys.Keys) == 0 {
+			return "", errors.New("the account reported no keys")
+		}
+		return keys.Keys[0].Value, nil
+	}
+	return "", fmt.Errorf("no storage account named %q", account)
+}
+
+// nimbusClient trusts the Nimbus CA explicitly, so `nimbus env` works whether
+// or not the CA has been installed in the OS trust store yet.
+func nimbusClient() (*http.Client, error) {
+	certs, err := core.EnsureCerts(filepath.Join(defaultHome(), "certs"))
+	if err != nil {
+		return nil, err
+	}
+	pool, err := certs.CAPool()
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}},
+	}, nil
 }

@@ -134,3 +134,17 @@ button { font: inherit; color: inherit; }
   .side { border-left: 0; border-top: 1px solid var(--line); }
   .legend { display: none; }
 }
+
+/* Blob list in the inspector */
+.blob-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line, #21262d);
+  font-size: 12px;
+}
+.blob-row:last-child { border-bottom: 0; }
+.blob-row a { color: var(--accent, #58a6ff); text-decoration: none; overflow-wrap: anywhere; }
+.blob-row a:hover { text-decoration: underline; }
+.blob-size { color: var(--muted, #8b949e); white-space: nowrap; }

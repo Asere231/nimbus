@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,6 +23,9 @@ type Config struct {
 	PublicURL string
 	TenantID  string
 	ClientID  string
+	// DataDir, when set, is where the storage data plane keeps blob content
+	// and the rest of its state so it survives a restart. Empty = memory only.
+	DataDir string
 }
 
 // Server is the Azure plugin.
@@ -47,6 +51,11 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		hooks:   map[string]Hook{},
 		storage: storage.NewHandler(storage.NewStore()),
 	}
+	if cfg.DataDir != "" {
+		if err := s.storage.Store().Persist(cfg.DataDir); err != nil {
+			log.Printf("nimbus: storage persistence disabled: %v", err)
+		}
+	}
 	s.storage.OnChange = s.mirrorDataPlaneContainer
 	registerNetworkHooks(s)
 	registerStorageHooks(s)
@@ -62,6 +71,10 @@ const (
 	DefaultSubscriptionID = "00000000-0000-0000-0000-000000000000"
 	DefaultObjectID       = "00000000-0000-0000-0000-000000000003"
 )
+
+// BlobBrowser returns the data-plane handler, which implements the visualizer's
+// blob-browsing interface.
+func (s *Server) BlobBrowser() *storage.Handler { return s.storage }
 
 // storageSuffix is the DNS suffix for the storage data plane, including our
 // port. Clients join it as {account}.{service}.{suffix}; see the comment in

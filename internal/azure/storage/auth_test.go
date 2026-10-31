@@ -213,3 +213,21 @@ func TestTableSharedKeySignatureMatchesTheRealSDK(t *testing.T) {
 		})
 	}
 }
+
+func TestConnectionStringUsesLowerCaseHostnames(t *testing.T) {
+	cs := ConnectionString("stnimbus", "key==", "storage.nimbus.localhost:4701")
+	for _, want := range []string{
+		"BlobEndpoint=https://stnimbus.blob.storage.nimbus.localhost:4701/",
+		"QueueEndpoint=https://stnimbus.queue.storage.nimbus.localhost:4701/",
+		"TableEndpoint=https://stnimbus.table.storage.nimbus.localhost:4701/",
+		"AccountName=stnimbus",
+	} {
+		if !strings.Contains(cs, want) {
+			t.Errorf("connection string is missing %q\n got: %s", want, cs)
+		}
+	}
+	// The port must be there, or clients go to 443.
+	if !strings.Contains(cs, ":4701/") {
+		t.Error("connection string endpoints must carry the port")
+	}
+}

@@ -246,9 +246,7 @@ func (h *Handler) containerOp(w http.ResponseWriter, r *http.Request, a *Account
 			}{})
 			return ""
 		case "metadata", "":
-			for k, v := range c.Metadata {
-				w.Header().Set("x-ms-meta-"+k, v)
-			}
+			setMetadata(w, c.Metadata)
 			if c.PublicAccess != "" {
 				w.Header().Set("x-ms-blob-public-access", c.PublicAccess)
 			}
@@ -380,14 +378,38 @@ func first(q map[string][]string, k string) string {
 	return ""
 }
 
+// metadataFrom collects x-ms-meta-* headers, lower-casing the name after the
+// prefix.
+//
+// Clients compare metadata names literally -- the Python SDK strips
+// "x-ms-meta-" off whatever it receives and uses the rest as a dictionary key,
+// so "Owner" and "owner" are different entries to it. We cannot echo the case
+// the client sent, because Go's server canonicalises inbound header names
+// while parsing the request ("x-ms-meta-owner" is already "X-Ms-Meta-Owner" by
+// the time a handler sees it) and the original is unrecoverable. Lower-case is
+// what clients send and what they expect back, so that is what is stored.
 func metadataFrom(h http.Header) map[string]string {
 	out := map[string]string{}
 	for name, vals := range h {
-		if lower := strings.ToLower(name); strings.HasPrefix(lower, "x-ms-meta-") && len(vals) > 0 {
-			out[strings.TrimPrefix(lower, "x-ms-meta-")] = vals[0]
+		if len(vals) == 0 {
+			continue
+		}
+		lower := strings.ToLower(name)
+		if strings.HasPrefix(lower, "x-ms-meta-") && len(lower) > len("x-ms-meta-") {
+			out[lower[len("x-ms-meta-"):]] = vals[0]
 		}
 	}
 	return out
+}
+
+// setMetadata writes x-ms-meta-* headers with their names exactly as stored.
+// Assigning into the map directly skips the canonicalisation Header.Set
+// applies, which would turn "x-ms-meta-owner" into "X-Ms-Meta-Owner" and make
+// the client read the name back as "Owner".
+func setMetadata(w http.ResponseWriter, meta map[string]string) {
+	for k, v := range meta {
+		w.Header()["x-ms-meta-"+k] = []string{v}
+	}
 }
 
 func httpTime(t time.Time) string { return t.UTC().Format(http.TimeFormat) }

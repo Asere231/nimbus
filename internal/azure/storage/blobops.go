@@ -180,9 +180,7 @@ func (h *Handler) getBlob(w http.ResponseWriter, r *http.Request, b *Blob) strin
 	if b.Disposition != "" {
 		w.Header().Set("Content-Disposition", b.Disposition)
 	}
-	for k, v := range b.Metadata {
-		w.Header().Set("x-ms-meta-"+k, v)
-	}
+	setMetadata(w, b.Metadata)
 	setCommonHeaders(w)
 	w.WriteHeader(status)
 	if r.Method != http.MethodHead {

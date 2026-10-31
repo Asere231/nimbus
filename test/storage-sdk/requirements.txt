@@ -1,0 +1,7 @@
+# Pinned so a future run exercises the same wire behaviour this milestone was
+# verified against. These live here, not in the main module: CLAUDE.md keeps
+# github.com/Asere231/nimbus stdlib-only, and test harnesses that need SDKs
+# carry their own dependencies.
+azure-storage-blob==12.31.1
+azure-storage-queue==12.18.1
+azure-data-tables==12.7.0

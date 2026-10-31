@@ -248,9 +248,7 @@ func (h *Handler) queueOp(w http.ResponseWriter, r *http.Request, a *Account, na
 			WriteError(w, 404, "QueueNotFound", "The specified queue does not exist.")
 			return ""
 		}
-		for k, v := range q.Metadata {
-			w.Header().Set("x-ms-meta-"+k, v)
-		}
+		setMetadata(w, q.Metadata)
 		w.Header().Set("x-ms-approximate-messages-count", strconv.Itoa(q.Len()))
 		setCommonHeaders(w)
 		w.WriteHeader(200)

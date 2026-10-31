@@ -13,5 +13,9 @@
 crash.log
 tf.log
 
+# Python harness virtualenvs (test/storage-sdk/run.sh creates one)
+.venv/
+__pycache__/
+
 # macOS
 .DS_Store

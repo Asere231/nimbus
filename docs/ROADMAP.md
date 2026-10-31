@@ -1,12 +1,19 @@
 # Roadmap
 
-**Current: Milestone 2 — Storage data plane. Prompt: `docs/prompts/m02-storage.md`.**
+**Current: Milestone 3 — AKS on k3s. Prompt: `docs/prompts/m03-aks.md`.**
 
-Milestone 1 is done. `examples/terraform/azure-basic` applies, plans clean
-(`-detailed-exitcode` = 0) and destroys against Nimbus with azurerm 4.81.0 on
-macOS 27 (arm64), survives a `--persist` restart between apply and destroy, and
-every resource in it imports into a fresh state with a clean plan. CI is
-written but unproven until this is pushed to GitHub — see "Left to confirm".
+Milestones 1 and 2 are done, on macOS 27 (arm64) with azurerm 4.81.0.
+
+- `examples/terraform/azure-basic` applies, plans clean (`-detailed-exitcode`
+  = 0) and destroys; survives a `--persist` restart; every resource imports
+  into a fresh state with a clean plan.
+- `examples/terraform/azure-storage` does the same for a storage account,
+  container and blob, with real bytes behind it. `az storage blob
+  upload/download/list` works, and `test/storage-sdk` drives blob, queue and
+  table with Microsoft's Python SDKs. Storage accounts and containers are the
+  first `Backing: "real"` resources.
+- CI is green on ubuntu, macos and windows, plus the SDK harness and a
+  Terraform apply/plan/destroy job.
 
 Each milestone has a session prompt in `docs/prompts/` (see its README).
 
@@ -17,7 +24,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 | # | Milestone | Done when |
 |---|---|---|
 | 1 | ~~**ARM core + visualizer** (scaffold)~~ **done** | `azure-basic` applies and destroys on Mac; graph and feed update live |
-| 2 | **Storage data plane** (Blob, Queue, Table, Azurite-compatible) | `azurerm_storage_account` + container + blob apply; `az storage blob upload` works; files visible in the inspector |
+| 2 | ~~**Storage data plane** (Blob, Queue, Table)~~ **done** | `azurerm_storage_account` + container + blob apply; `az storage blob upload` works; files visible in the inspector |
 | 3 | **AKS on k3s** (Docker) | `azurerm_kubernetes_cluster` creates a k3s container; `kube_config` output works with `kubectl`; pods and services appear under the cluster in the graph |
 | 4 | **Identity and secrets**: Key Vault secrets, managed identities, ACR on `registry:2`, Log Analytics stub | An app on AKS pulls an image from the emulated ACR and reads a Key Vault secret |
 | 5 | **Breadth**: spec-driven defaults from `azure-rest-api-specs`, ARM/Bicep deployments, `az` CLI as a custom cloud | `az group create` and a Bicep deployment work; 50+ resource types round-trip in Terraform |
@@ -64,6 +71,13 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
   `EnsureCerts` reissues the leaf automatically within 30 days of expiry and
   keeps the trusted CA, so no re-trust is needed — but this has only been
   tested by deleting the leaf, never by actually waiting a year.
-- The visualizer scales a wide graph down to 70% and then scrolls
-  horizontally. Correct and reachable, but on a narrow window a deep tree looks
-  truncated at first glance. Worth revisiting in M6 (Visualizer v2).
+- Only **block blobs** are emulated. Page and append blobs return
+  `UnsupportedBlobType`. Nothing needs them yet; disks and log appends would.
+- **SAS tokens are accepted on shape alone**, not verified — there is no
+  signature check and no expiry enforcement. Fine for a local emulator, but it
+  means a SAS cannot be used to *test* that permissions are wired correctly.
+- Table `$filter` supports `eq` joined by `and`. Anything else matches
+  everything rather than excluding on a guess.
+- The **visualizer re-renders on `requestAnimationFrame`**, which browsers
+  pause in a hidden tab, so a backgrounded visualizer can show a stale layout
+  until it is brought forward. Harmless, but confusing once noticed.

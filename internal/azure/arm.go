@@ -437,6 +437,10 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, t target) 
 		writeJSON(w, 200, out)
 		return ""
 	}
+	if out, ok := s.registryAction(t); ok {
+		writeJSON(w, 200, out)
+		return ""
+	}
 	if out, ok := s.workspaceAction(t); ok {
 		writeJSON(w, 200, out)
 		return ""

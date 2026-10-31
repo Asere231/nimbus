@@ -40,6 +40,10 @@ type Config struct {
 	KubernetesVersion string
 	// ClusterPortBase is the first host port tried for a cluster's API.
 	ClusterPortBase int
+	// RegistryImage is the image container registries run.
+	RegistryImage string
+	// RegistryPortBase is the first host port tried for a registry.
+	RegistryPortBase int
 	// ClusterTimeout bounds how long a cluster may take to become ready.
 	ClusterTimeout time.Duration
 	// KeepClusters leaves k3s containers running when Nimbus stops, so a
@@ -58,16 +62,17 @@ const (
 
 // Server is the Azure plugin.
 type Server struct {
-	cfg      Config
-	store    *core.Store
-	bus      *core.Bus
-	hooks    map[string]Hook
-	storage  *storage.Handler
-	keyvault *keyvault.Handler
-	ops      *operations
-	vaults   *deletedVaults
-	docker   docker.Client
-	clusters *clusters
+	cfg        Config
+	store      *core.Store
+	bus        *core.Bus
+	hooks      map[string]Hook
+	storage    *storage.Handler
+	keyvault   *keyvault.Handler
+	ops        *operations
+	vaults     *deletedVaults
+	docker     docker.Client
+	clusters   *clusters
+	registries *registries
 }
 
 // New creates the Azure emulator.
@@ -87,19 +92,26 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	if cfg.ClusterPortBase == 0 {
 		cfg.ClusterPortBase = DefaultClusterPortBase
 	}
+	if cfg.RegistryImage == "" {
+		cfg.RegistryImage = DefaultRegistryImage
+	}
+	if cfg.RegistryPortBase == 0 {
+		cfg.RegistryPortBase = DefaultRegistryPortBase
+	}
 	if cfg.ClusterTimeout == 0 {
 		cfg.ClusterTimeout = DefaultClusterTimeout
 	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	s := &Server{
 		cfg: cfg, store: store, bus: bus,
-		hooks:    map[string]Hook{},
-		storage:  storage.NewHandler(storage.NewStore()),
-		keyvault: keyvault.NewHandler(keyvault.NewStore()),
-		ops:      newOperations(),
-		vaults:   newDeletedVaults(),
-		docker:   docker.NewCLI(),
-		clusters: newClusters(),
+		hooks:      map[string]Hook{},
+		storage:    storage.NewHandler(storage.NewStore()),
+		keyvault:   keyvault.NewHandler(keyvault.NewStore()),
+		ops:        newOperations(),
+		vaults:     newDeletedVaults(),
+		docker:     docker.NewCLI(),
+		clusters:   newClusters(),
+		registries: newRegistries(),
 	}
 	// The challenge a Key Vault client gets points at our own login endpoint,
 	// and asks for a token for Azure's Key Vault audience -- which our token
@@ -124,6 +136,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	registerAuthorizationHooks(s)
 	registerLogAnalyticsHooks(s)
 	registerKeyVaultHooks(s)
+	registerACRHooks(s)
 	return s
 }
 
@@ -153,6 +166,7 @@ func (s *Server) Start() func() {
 		// Reattach first, so a restart with --persist picks up existing
 		// containers before the watcher starts asking about them.
 		reattachCtx, done := context.WithTimeout(ctx, 2*time.Minute)
+		s.reattachRegistries(reattachCtx)
 		s.reattachClusters(reattachCtx)
 		done()
 		s.startClusterWatcher(ctx)

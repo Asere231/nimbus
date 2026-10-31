@@ -140,6 +140,9 @@ func registerAKSHooks(s *Server) {
 			if err := s.waitForNodes(ctx, cl, want); err != nil {
 				return err
 			}
+			// Registries that already exist have to be mirrored into the new
+			// cluster's nodes, or a pod referring to one cannot pull.
+			s.configureRegistryMirrors(ctx, cl)
 			s.recordClusterEndpoint(t, cl)
 			return nil
 		},
@@ -191,7 +194,12 @@ func registerAKSHooks(s *Server) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ClusterTimeout)
 			defer cancel()
-			return s.scaleAgents(ctx, cl, s.desiredNodeCount(t.ParentID))
+			if err := s.scaleAgents(ctx, cl, s.desiredNodeCount(t.ParentID)); err != nil {
+				return err
+			}
+			// New agents start with no registry configuration of their own.
+			s.configureRegistryMirrors(ctx, cl)
+			return nil
 		},
 	})
 }

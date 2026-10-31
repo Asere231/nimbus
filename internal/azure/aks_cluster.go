@@ -102,6 +102,7 @@ const (
 	// labelCluster marks every container Nimbus starts for a cluster, so they
 	// can be found again after a restart.
 	labelCluster  = "nimbus.cluster"
+	labelRegistry = "nimbus.registry"
 	labelResource = "nimbus.resource-id"
 	labelRole     = "nimbus.role"
 )

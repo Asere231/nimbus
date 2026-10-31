@@ -39,6 +39,9 @@ type Client interface {
 	List(ctx context.Context, label string) ([]Container, error)
 	// EnsureNetwork creates a user-defined network if it does not exist.
 	EnsureNetwork(ctx context.Context, name string) error
+	// ConnectNetwork attaches a container to a network, ignoring one it is
+	// already on.
+	ConnectNetwork(ctx context.Context, network, container string) error
 	// RemoveNetwork deletes a network, ignoring one that is already gone.
 	RemoveNetwork(ctx context.Context, name string) error
 	// ImagePresent reports whether an image is already pulled.
@@ -330,6 +333,19 @@ func (c *CLI) List(ctx context.Context, label string) ([]Container, error) {
 		found = append(found, cont)
 	}
 	return found, nil
+}
+
+// ConnectNetwork attaches a container to a network.
+//
+// A registry container joins each cluster's network so the cluster's nodes can
+// resolve it by name. Being attached already is success, not an error: this is
+// called again whenever a cluster or a registry appears.
+func (c *CLI) ConnectNetwork(ctx context.Context, network, container string) error {
+	_, err := c.run(ctx, "network", "connect", network, container)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "already exists in network") {
+		return nil
+	}
+	return err
 }
 
 // EnsureNetwork creates a network if it is missing.

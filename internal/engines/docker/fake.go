@@ -18,6 +18,12 @@ import (
 type Fake struct {
 	mu sync.Mutex
 
+	// ExecAny makes Exec succeed with empty output for commands that have no
+	// canned entry. Callers that WRITE inside a container (the registry
+	// mirrors) do not read anything back, so insisting on canned output for
+	// them would only pin the exact shell line in a test.
+	ExecAny bool
+
 	// Unavailable makes every call fail with ErrUnavailable, for testing the
 	// "Docker is not running" path -- which must produce a clear error rather
 	// than a hang.
@@ -134,6 +140,9 @@ func (f *Fake) Exec(ctx context.Context, name string, cmd ...string) ([]byte, er
 	if out, ok := f.ExecOutput[joined]; ok {
 		return out, nil
 	}
+	if f.ExecAny {
+		return nil, nil
+	}
 	return nil, fmt.Errorf("fake docker: no canned output for %q in %s", joined, name)
 }
 
@@ -183,6 +192,18 @@ func (f *Fake) EnsureNetwork(ctx context.Context, name string) error {
 		return err
 	}
 	f.networks[name] = true
+	return nil
+}
+
+// ConnectNetwork records a container joining a network.
+func (f *Fake) ConnectNetwork(ctx context.Context, network, container string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("connect-network %s %s", network, container)
+	if err := f.check(); err != nil {
+		return err
+	}
+	f.networks[network] = true
 	return nil
 }
 

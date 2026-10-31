@@ -20,6 +20,12 @@ type Account struct {
 	Name    string
 	Keys    [2]string // base64, as listKeys returns them
 	Created time.Time
+
+	mu         sync.RWMutex
+	containers map[string]*Container
+	// ServiceProps is the blob service settings document, kept as the exact
+	// XML last written so it round-trips byte for byte.
+	ServiceProps map[Service][]byte
 }
 
 // Store holds every emulated storage account. It is the data-plane counterpart
@@ -46,7 +52,11 @@ func (s *Store) CreateAccount(name string) *Account {
 	if a, ok := s.accounts[key(name)]; ok {
 		return a
 	}
-	a := &Account{Name: name, Keys: [2]string{newKey(), newKey()}, Created: time.Now().UTC()}
+	a := &Account{
+		Name: name, Keys: [2]string{newKey(), newKey()}, Created: time.Now().UTC(),
+		containers:   map[string]*Container{},
+		ServiceProps: map[Service][]byte{},
+	}
 	s.accounts[key(name)] = a
 	return a
 }

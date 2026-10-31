@@ -14,17 +14,17 @@ func TestParseHost(t *testing.T) {
 		wantOK  bool
 		comment string
 	}{
-		{host: "st1.blob.storage.nimbus.localhost:4701", want: Target{"st1", Blob}, wantOK: true},
-		{host: "st1.queue.storage.nimbus.localhost:4701", want: Target{"st1", Queue}, wantOK: true},
-		{host: "st1.table.storage.nimbus.localhost:4701", want: Target{"st1", Table}, wantOK: true},
-		{host: "st1.file.storage.nimbus.localhost:4701", want: Target{"st1", File}, wantOK: true},
+		{host: "st1.blob.storage.nimbus.localhost:4701", want: Target{"st1", ServiceBlob}, wantOK: true},
+		{host: "st1.queue.storage.nimbus.localhost:4701", want: Target{"st1", ServiceQueue}, wantOK: true},
+		{host: "st1.table.storage.nimbus.localhost:4701", want: Target{"st1", ServiceTable}, wantOK: true},
+		{host: "st1.file.storage.nimbus.localhost:4701", want: Target{"st1", ServiceFile}, wantOK: true},
 
 		// The Host header may omit the port even when the suffix carries it,
 		// and vice versa: both are compared without it.
-		{host: "st1.blob.storage.nimbus.localhost", want: Target{"st1", Blob}, wantOK: true},
+		{host: "st1.blob.storage.nimbus.localhost", want: Target{"st1", ServiceBlob}, wantOK: true},
 
 		// Casing is not significant in host names.
-		{host: "ST1.Blob.Storage.Nimbus.LOCALHOST:4701", want: Target{"st1", Blob}, wantOK: true},
+		{host: "ST1.Blob.Storage.Nimbus.LOCALHOST:4701", want: Target{"st1", ServiceBlob}, wantOK: true},
 
 		// Everything below is an ARM request or nonsense and must fall through.
 		{host: "localhost:4701", comment: "plain ARM host"},

@@ -32,9 +32,23 @@ func newTestServerWithBus(t *testing.T) (*httptest.Server, *core.Store, *core.Bu
 	var az *Server
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { az.ServeHTTP(w, r) }))
 	az = New(Config{PublicURL: srv.URL}, store, bus)
-	t.Cleanup(srv.Close)
+	testServers[srv] = az
+	t.Cleanup(func() { delete(testServers, srv); srv.Close() })
 	return srv, store, bus
 }
+
+// serverOf returns the azure Server behind a test server, for assertions that
+// need to look at the data-plane store directly.
+func serverOf(t *testing.T, srv *httptest.Server) *Server {
+	t.Helper()
+	s := testServers[srv]
+	if s == nil {
+		t.Fatal("no Server registered for this test server")
+	}
+	return s
+}
+
+var testServers = map[*httptest.Server]*Server{}
 
 func do(t *testing.T, srv *httptest.Server, method, path string, body any) (int, map[string]any) {
 	t.Helper()
@@ -633,5 +647,111 @@ func TestStorageAccountServerFieldsAndKeys(t *testing.T) {
 	}
 	if al[1].(map[string]any)["value"] == before {
 		t.Error("regenerating key2 did not change it")
+	}
+}
+
+// A storage account has four ARM child "service" resources that azurerm reads
+// right after creating it. They are not something a client creates -- Azure
+// materialises them with the account -- and if they 404, azurerm polls them
+// forever: the apply hangs with "Still creating..." and never fails.
+func TestStorageAccountHasDefaultServiceResources(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-svc"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	acct := rg + "/providers/Microsoft.Storage/storageAccounts/stnimbus3"
+	do(t, srv, "PUT", acct, map[string]any{
+		"location": "eastus", "kind": "StorageV2",
+		"sku": map[string]any{"name": "Standard_LRS"}, "properties": map[string]any{},
+	})
+
+	for _, svc := range []string{"blobServices", "fileServices", "queueServices", "tableServices"} {
+		code, body := do(t, srv, "GET", acct+"/"+svc+"/default", nil)
+		if code != 200 {
+			t.Errorf("GET %s/default = %d, want 200 (azurerm polls this until it exists)", svc, code)
+			continue
+		}
+		if body["name"] != "default" {
+			t.Errorf("%s/default name = %v", svc, body["name"])
+		}
+		if want := "Microsoft.Storage/storageAccounts/" + svc; !strings.EqualFold(str2(body["type"]), want) {
+			t.Errorf("%s type = %v, want %s", svc, body["type"], want)
+		}
+		if body["properties"] == nil {
+			t.Errorf("%s/default has no properties", svc)
+		}
+	}
+
+	// They belong to the account, so deleting it takes them with it.
+	do(t, srv, "DELETE", acct, nil)
+	if code, _ := do(t, srv, "GET", acct+"/blobServices/default", nil); code != 404 {
+		t.Errorf("service resource survived account deletion: %d", code)
+	}
+}
+
+func str2(v any) string { s, _ := v.(string); return s }
+
+// azurerm 4.x creates containers through ARM when the resource is given
+// storage_account_id, but azurerm_storage_blob always uses the data plane. A
+// container created one way must therefore exist the other way, or the apply
+// fails with ContainerNotFound on a container Terraform just made.
+func TestContainerCreatedThroughARMExistsInTheDataPlane(t *testing.T) {
+	srv, _ := newTestServer(t)
+	az := serverOf(t, srv)
+	rg := sub + "/resourceGroups/rg-c"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	acct := rg + "/providers/Microsoft.Storage/storageAccounts/stnimbusc"
+	do(t, srv, "PUT", acct, map[string]any{"location": "eastus", "kind": "StorageV2",
+		"sku": map[string]any{"name": "Standard_LRS"}, "properties": map[string]any{}})
+
+	cid := acct + "/blobServices/default/containers/uploads"
+	if code, _ := do(t, srv, "PUT", cid, map[string]any{"properties": map[string]any{"publicAccess": "None"}}); code != 201 {
+		t.Fatalf("ARM container create = %d", code)
+	}
+
+	a := az.storage.Store().Account("stnimbusc")
+	if a == nil {
+		t.Fatal("account missing from the data-plane store")
+	}
+	if a.Container("uploads") == nil {
+		t.Error("container created through ARM is not visible to the data plane")
+	}
+
+	// And deleting it through ARM removes the data-plane container too.
+	do(t, srv, "DELETE", cid, nil)
+	if a.Container("uploads") != nil {
+		t.Error("container deleted through ARM still exists in the data plane")
+	}
+}
+
+// Deleting a container through ARM is synchronous and answers 200. Our generic
+// delete returns 202 with an async-operation header, which azurerm rejects:
+//
+//	unexpected status 202 (202 Accepted) received with no body
+//
+// Resource-group and network deletes are genuinely async and keep their 202,
+// so this is per-type like CreateStatus.
+func TestARMContainerDeleteIsSynchronous(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-cd"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	acct := rg + "/providers/Microsoft.Storage/storageAccounts/stnimbuscd"
+	do(t, srv, "PUT", acct, map[string]any{"location": "eastus", "kind": "StorageV2",
+		"sku": map[string]any{"name": "Standard_LRS"}, "properties": map[string]any{}})
+	cid := acct + "/blobServices/default/containers/c1"
+	do(t, srv, "PUT", cid, map[string]any{"properties": map[string]any{}})
+
+	res := raw(t, srv, "DELETE", cid, "")
+	if res.StatusCode != 200 {
+		t.Errorf("ARM container delete = %d, want 200", res.StatusCode)
+	}
+	// The account delete is synchronous too, even though its create is async.
+	if res := raw(t, srv, "DELETE", acct, ""); res.StatusCode != 200 {
+		t.Errorf("storage account delete = %d, want 200", res.StatusCode)
+	}
+
+	// A route table delete is async and must still be 202.
+	do(t, srv, "PUT", rg+"/providers/Microsoft.Network/routeTables/rt", map[string]any{"location": "eastus"})
+	if res := raw(t, srv, "DELETE", rg+"/providers/Microsoft.Network/routeTables/rt", ""); res.StatusCode != 202 {
+		t.Errorf("route table delete = %d, want 202 (unchanged)", res.StatusCode)
 	}
 }

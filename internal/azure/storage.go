@@ -1,11 +1,17 @@
 package azure
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/Asere231/nimbus/internal/core"
 )
 
-const typeStorageAccount = "Microsoft.Storage/storageAccounts"
+const (
+	typeStorageAccount   = "Microsoft.Storage/storageAccounts"
+	typeStorageContainer = "Microsoft.Storage/storageAccounts/blobServices/containers"
+)
 
 // Storage accounts are the first resource Nimbus actually backs with something
 // real: ARM creates the account here, and the data plane at
@@ -19,8 +25,10 @@ func registerStorageHooks(s *Server) {
 	s.registerHook(typeStorageAccount, Hook{
 		Backing: "real",
 		// Azure answers a storage account create 202 and makes the client
-		// poll; its SDK client treats a 201 as a protocol error.
+		// poll; its SDK client treats a 201 as a protocol error. The delete,
+		// confusingly, is the other way round: synchronous, 200.
 		CreateStatus: 202,
+		DeleteStatus: 200,
 		BeforePut: func(s *Server, t target, body, existing map[string]any) *armError {
 			if !validAccountName(t.Name) {
 				return &armError{400, "AccountNameInvalid",
@@ -71,12 +79,146 @@ func registerStorageHooks(s *Server) {
 		},
 		AfterPut: func(s *Server, t target, body map[string]any) {
 			s.storage.Store().CreateAccount(t.Name)
+			s.ensureServiceResources(t)
 		},
 		AfterDelete: func(s *Server, t target) {
 			// Deleting the account deletes its data; there is no soft delete.
 			s.storage.Store().DeleteAccount(t.Name)
 		},
 	})
+}
+
+// Containers can be created two ways and must exist both ways.
+//
+// azurerm 4.x creates them through ARM when azurerm_storage_container is given
+// storage_account_id, but azurerm_storage_blob -- and `az`, and every SDK --
+// uses the data plane. A container made one way that is invisible the other
+// way fails an apply with ContainerNotFound on a container Terraform created
+// moments earlier.
+func registerContainerHooks(s *Server) {
+	s.registerHook(typeStorageContainer, Hook{
+		Backing: "real",
+		// ARM container delete is synchronous.
+		DeleteStatus: 200,
+		AfterPut: func(s *Server, t target, body map[string]any) {
+			a := s.storage.Store().Account(accountFromContainerID(t.ID))
+			if a == nil {
+				return
+			}
+			access := ""
+			if props, ok := body["properties"].(map[string]any); ok {
+				if p := str(props["publicAccess"]); p != "" && !eq(p, "None") {
+					access = strings.ToLower(p)
+				}
+			}
+			a.CreateContainer(t.Name, map[string]string{}, access)
+		},
+		AfterDelete: func(s *Server, t target) {
+			if a := s.storage.Store().Account(accountFromContainerID(t.ID)); a != nil {
+				a.DeleteContainer(t.Name)
+			}
+		},
+	})
+}
+
+// mirrorDataPlaneContainer is the other direction: a container created by
+// `az storage container create` or an SDK exists only in the data-plane store,
+// so it is mirrored into core.Store to appear in the graph and the inspector,
+// and so a later ARM read finds it.
+func (s *Server) mirrorDataPlaneContainer(account, container, action string) {
+	acct := s.store.List(func(r *core.Resource) bool {
+		return eq(r.Type, typeStorageAccount) && eq(r.Name, account)
+	})
+	if len(acct) == 0 {
+		return
+	}
+	id := acct[0].ID + "/blobServices/default/containers/" + container
+	switch action {
+	case "delete":
+		_ = s.store.Delete(id)
+	case "create":
+		if s.store.Exists(id) {
+			return
+		}
+		body, _ := json.Marshal(map[string]any{
+			"id": id, "name": container, "type": typeStorageContainer,
+			"properties": map[string]any{"publicAccess": "None", "provisioningState": "Succeeded"},
+		})
+		s.store.Put(&core.Resource{
+			Cloud: "azure", ID: id, Type: typeStorageContainer, Name: container,
+			ParentID: acct[0].ID, Backing: "real", Body: body,
+		})
+	}
+}
+
+// accountFromContainerID pulls the account out of
+// ".../storageAccounts/{account}/blobServices/default/containers/{name}".
+func accountFromContainerID(id string) string {
+	seg := strings.Split(strings.Trim(id, "/"), "/")
+	for i, s := range seg {
+		if strings.EqualFold(s, "storageAccounts") && i+1 < len(seg) {
+			return seg[i+1]
+		}
+	}
+	return ""
+}
+
+// ensureServiceResources materialises the four ARM child resources every
+// storage account has: blobServices/default and the file, queue and table
+// equivalents.
+//
+// These are not created by clients -- Azure brings them into being with the
+// account -- and azurerm GETs them while waiting for the account to settle.
+// If they 404 it polls forever: the apply sits on "Still creating..." and
+// never fails, which is a much worse failure than an error.
+//
+// Created only when absent, so a client that has configured, say, blob
+// retention policies does not have them reset by a later account update.
+func (s *Server) ensureServiceResources(t target) {
+	for _, svc := range []string{"blobServices", "fileServices", "queueServices", "tableServices"} {
+		id := t.ID + "/" + svc + "/default"
+		if s.store.Exists(id) {
+			continue
+		}
+		body := map[string]any{
+			"id":         id,
+			"name":       "default",
+			"type":       typeStorageAccount + "/" + svc,
+			"properties": defaultServiceProps(svc),
+		}
+		raw, _ := json.Marshal(body)
+		s.store.Put(&core.Resource{
+			Cloud: "azure", ID: id, Type: typeStorageAccount + "/" + svc,
+			Name: "default", ParentID: t.ID, Backing: "real", Body: raw,
+		})
+	}
+}
+
+// defaultServiceProps is what Azure reports for a fresh account. azurerm reads
+// these back into blob_properties / queue_properties / share_properties, so
+// the shapes have to be present even when everything is switched off.
+func defaultServiceProps(svc string) map[string]any {
+	cors := map[string]any{"corsRules": []any{}}
+	switch svc {
+	case "blobServices":
+		return map[string]any{
+			"cors":                           cors,
+			"deleteRetentionPolicy":          map[string]any{"enabled": false},
+			"containerDeleteRetentionPolicy": map[string]any{"enabled": false},
+			"isVersioningEnabled":            false,
+			"changeFeed":                     map[string]any{"enabled": false},
+			"restorePolicy":                  map[string]any{"enabled": false},
+			"lastAccessTimeTrackingPolicy":   map[string]any{"enable": false},
+		}
+	case "fileServices":
+		return map[string]any{
+			"cors":                       cors,
+			"shareDeleteRetentionPolicy": map[string]any{"enabled": true, "days": 7},
+			"protocolSettings":           map[string]any{"smb": map[string]any{}},
+		}
+	default: // queueServices, tableServices
+		return map[string]any{"cors": cors}
+	}
 }
 
 // storageEndpoints is the primaryEndpoints block. These carry our port for the

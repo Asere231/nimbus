@@ -47,8 +47,10 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		hooks:   map[string]Hook{},
 		storage: storage.NewHandler(storage.NewStore()),
 	}
+	s.storage.OnChange = s.mirrorDataPlaneContainer
 	registerNetworkHooks(s)
 	registerStorageHooks(s)
+	registerContainerHooks(s)
 	return s
 }
 

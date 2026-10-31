@@ -29,6 +29,14 @@ type Hook struct {
 	//
 	// Storage accounts are the first such type. Zero means 201.
 	CreateStatus int
+	// DeleteStatus overrides the status a successful delete returns. Most
+	// deletes are long-running and answer 202 with an async-operation header,
+	// but some are synchronous and their clients reject the 202:
+	//
+	//	unexpected status 202 (202 Accepted) received with no body
+	//
+	// Zero means 202.
+	DeleteStatus int
 }
 
 type armError struct {
@@ -124,6 +132,10 @@ func (s *Server) handleResource(w http.ResponseWriter, r *http.Request, t target
 		// starts containers. Noted in docs/ROADMAP.md under "Later".
 		if h := s.hookFor(t.Type); h.AfterDelete != nil {
 			h.AfterDelete(s, t)
+		}
+		if h := s.hookFor(t.Type); h.DeleteStatus != 0 {
+			w.WriteHeader(h.DeleteStatus)
+			return ""
 		}
 		s.markAsync(w, t)
 		w.WriteHeader(202)

@@ -11,10 +11,10 @@ import (
 type Service string
 
 const (
-	Blob  Service = "blob"
-	Queue Service = "queue"
-	Table Service = "table"
-	File  Service = "file"
+	ServiceBlob  Service = "blob"
+	ServiceQueue Service = "queue"
+	ServiceTable Service = "table"
+	ServiceFile  Service = "file"
 )
 
 // Target is what a data-plane Host header points at.
@@ -46,7 +46,7 @@ func ParseHost(host, suffix string) (Target, bool) {
 	}
 	account, svc := head[:dot], Service(head[dot+1:])
 	switch svc {
-	case Blob, Queue, Table, File:
+	case ServiceBlob, ServiceQueue, ServiceTable, ServiceFile:
 	default:
 		return Target{}, false
 	}
@@ -66,10 +66,20 @@ func stripPort(h string) string {
 // Handler serves the storage data plane.
 type Handler struct {
 	store *Store
+	// OnChange, if set, is called when a container is created, deleted or has
+	// its contents change, so the visualizer can mirror containers as
+	// resources without this package knowing anything about core.Store.
+	OnChange func(account, container, action string)
 }
 
 // NewHandler creates the data-plane handler over the given store.
 func NewHandler(store *Store) *Handler { return &Handler{store: store} }
+
+func (h *Handler) changed(account, container, action string) {
+	if h.OnChange != nil {
+		h.OnChange(account, container, action)
+	}
+}
 
 // Store exposes the underlying data store, so the ARM hook can create and
 // delete accounts alongside the control-plane resource.
@@ -79,15 +89,41 @@ func (h *Handler) Store() *Store { return h.store }
 // activity feed, so unimplemented operations are visible in the visualizer
 // while the service is being built out.
 func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, t Target) string {
-	if h.store.Account(t.Account) == nil {
+	a := h.store.Account(t.Account)
+	if a == nil {
 		// What Azure returns for a host whose account does not exist.
 		WriteError(w, http.StatusNotFound, "AccountNotFound",
 			"The specified account does not exist.")
 		return "unknown storage account: " + t.Account
 	}
+
+	// Shared Key is verified for real: a wrong key must fail here exactly as
+	// it would against Azure.
+	if res, msg := Authenticate(r, a, t.Service); res == AuthFailed {
+		WriteError(w, http.StatusForbidden, "AuthenticationFailed",
+			"Server failed to authenticate the request. "+msg)
+		return "storage auth failed: " + t.Account
+	}
+
+	switch t.Service {
+	case ServiceBlob:
+		return h.serveBlob(w, r, a)
+	case ServiceQueue, ServiceTable, ServiceFile:
+		// azurerm reads queue service properties immediately after creating an
+		// account, alongside the blob ones, and will not finish the apply
+		// without them. The settings document has the same shape for every
+		// service, so the blob handler serves them all; the queue and table
+		// operations proper are built out separately.
+		q := r.URL.Query()
+		if q.Get("restype") == "service" {
+			return h.serviceProperties(w, r, a, t.Service, q.Get("comp"))
+		}
+		return h.serveOther(w, r, a, t.Service)
+	}
+
 	WriteError(w, http.StatusNotImplemented, "FeatureNotYetImplemented",
-		fmt.Sprintf("Nimbus does not implement %s %s on the %s service yet.", r.Method, r.URL.Path, t.Service))
-	return fmt.Sprintf("unimplemented storage call: %s %s %s%s", t.Service, r.Method, r.URL.Path, queryNote(r))
+		fmt.Sprintf("Nimbus does not implement the %s service yet.", t.Service))
+	return fmt.Sprintf("unimplemented storage service: %s %s %s%s", t.Service, r.Method, r.URL.Path, queryNote(r))
 }
 
 func queryNote(r *http.Request) string {

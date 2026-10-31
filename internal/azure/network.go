@@ -74,7 +74,7 @@ func registerNetworkHooks(s *Server) {
 			}
 			for _, child := range s.store.Children(t.ID) {
 				if eq(child.Type, typeSubnet) && !want[strings.ToLower(child.ID)] {
-					_ = s.store.Delete(child.ID)
+					_, _ = s.store.Delete(child.ID)
 				}
 			}
 		},

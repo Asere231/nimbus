@@ -61,12 +61,6 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 ## Later
 
-- **Cascade delete does not run child hooks.** `handleResource` calls
-  `AfterDelete` only for the type being deleted; `store.Delete` removes
-  descendants without firing theirs. Harmless while every hook is pure state,
-  but it must be fixed before M3, or deleting a resource group will leave an
-  AKS k3s container running. Probably: have the store return what it deleted
-  and let the ARM layer run each type's hook, leaves first.
 - **Certificates expire yearly now** (397 days, forced by Apple's limit).
   `EnsureCerts` reissues the leaf automatically within 30 days of expiry and
   keeps the trusted CA, so no re-trust is needed — but this has only been

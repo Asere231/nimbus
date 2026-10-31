@@ -135,7 +135,7 @@ func (s *Server) mirrorDataPlaneContainer(account, container, action string) {
 	id := acct[0].ID + "/blobServices/default/containers/" + container
 	switch action {
 	case "delete":
-		_ = s.store.Delete(id)
+		_, _ = s.store.Delete(id)
 	case "create":
 		if s.store.Exists(id) {
 			return

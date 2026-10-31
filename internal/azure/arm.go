@@ -121,18 +121,12 @@ func (s *Server) handleResource(w http.ResponseWriter, r *http.Request, t target
 	case http.MethodPatch:
 		return s.put(w, r, t, true)
 	case http.MethodDelete:
-		if err := s.store.Delete(t.ID); err != nil {
+		deleted, err := s.store.Delete(t.ID)
+		if err != nil {
 			w.WriteHeader(204) // ARM: deleting something absent is a no-op
 			return "already absent"
 		}
-		// Only this type's hook runs. store.Delete cascades to children, but
-		// their AfterDelete hooks do not fire, so a type whose hook stops a
-		// real engine will leak it when an ancestor is deleted instead. Fine
-		// while every hook is pure state; it must be fixed before AKS (M3)
-		// starts containers. Noted in docs/ROADMAP.md under "Later".
-		if h := s.hookFor(t.Type); h.AfterDelete != nil {
-			h.AfterDelete(s, t)
-		}
+		s.runDeleteHooks(deleted)
 		if h := s.hookFor(t.Type); h.DeleteStatus != 0 {
 			w.WriteHeader(h.DeleteStatus)
 			return ""
@@ -253,6 +247,29 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 		return "accepted (state only): " + t.Type
 	}
 	return ""
+}
+
+// runDeleteHooks runs AfterDelete for every resource a cascade removed, not
+// just the one that was addressed.
+//
+// store.Delete returns them deepest first, and that order is kept: a child
+// cleans up before its parent, so it can still see the parent while doing so.
+// Without this, deleting a resource group would silently leave behind whatever
+// real engines its contents were running.
+func (s *Server) runDeleteHooks(deleted []*core.Resource) {
+	for _, res := range deleted {
+		h := s.hookFor(res.Type)
+		if h.AfterDelete == nil {
+			continue
+		}
+		// Rebuild the target from the stored resource: the path that triggered
+		// the delete addressed an ancestor, so t cannot be reused.
+		dt, ok := parseTarget(res.ID)
+		if !ok {
+			dt = target{Kind: "resource", ID: res.ID, Type: res.Type, Name: res.Name, ParentID: res.ParentID}
+		}
+		h.AfterDelete(s, dt)
+	}
 }
 
 // handleAction answers POST actions such as listKeys. Unknown actions return

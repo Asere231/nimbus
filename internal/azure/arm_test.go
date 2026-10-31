@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"testing"
 
+	"github.com/Asere231/nimbus/internal/azure/storage"
 	"github.com/Asere231/nimbus/internal/core"
 )
 
@@ -753,5 +755,111 @@ func TestARMContainerDeleteIsSynchronous(t *testing.T) {
 	do(t, srv, "PUT", rg+"/providers/Microsoft.Network/routeTables/rt", map[string]any{"location": "eastus"})
 	if res := raw(t, srv, "DELETE", rg+"/providers/Microsoft.Network/routeTables/rt", ""); res.StatusCode != 202 {
 		t.Errorf("route table delete = %d, want 202 (unchanged)", res.StatusCode)
+	}
+}
+
+// Deleting a resource must run AfterDelete for EVERY resource that goes, not
+// just the one addressed. store.Delete cascades to descendants, and a type
+// whose hook stops a real engine -- a k3s container, in M3 -- would otherwise
+// leak it whenever an ancestor is deleted instead of the resource itself.
+// Leaves must fire before their parents, so a child can still see its parent
+// while cleaning up.
+func TestCascadeDeleteRunsHooksForEveryResourceLeavesFirst(t *testing.T) {
+	srv, _ := newTestServer(t)
+	az := serverOf(t, srv)
+
+	var fired []string
+	az.registerHook("Nimbus.Test/parents", Hook{
+		AfterDelete: func(s *Server, t target) { fired = append(fired, "parent:"+t.Name) },
+	})
+	az.registerHook("Nimbus.Test/parents/children", Hook{
+		AfterDelete: func(s *Server, t target) { fired = append(fired, "child:"+t.Name) },
+	})
+
+	rg := sub + "/resourceGroups/rg-cascade-hooks"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	parent := rg + "/providers/Nimbus.Test/parents/p1"
+	do(t, srv, "PUT", parent, map[string]any{"location": "eastus"})
+	do(t, srv, "PUT", parent+"/children/c1", map[string]any{"properties": map[string]any{}})
+	do(t, srv, "PUT", parent+"/children/c2", map[string]any{"properties": map[string]any{}})
+
+	// Delete the PARENT. Both children go with it, and all three hooks must run.
+	if code, _ := do(t, srv, "DELETE", parent, nil); code != 202 {
+		t.Fatalf("DELETE parent = %d", code)
+	}
+
+	want := map[string]bool{"parent:p1": true, "child:c1": true, "child:c2": true}
+	if len(fired) != len(want) {
+		t.Fatalf("hooks fired for %v, want all of %v", fired, keysOf(want))
+	}
+	for _, f := range fired {
+		if !want[f] {
+			t.Errorf("unexpected hook fired: %s", f)
+		}
+	}
+	// The parent's own hook must come last: children clean up first.
+	if fired[len(fired)-1] != "parent:p1" {
+		t.Errorf("hook order was %v; the parent must fire last", fired)
+	}
+}
+
+// Deleting a resource group must reach grandchildren too, not just one level.
+func TestCascadeDeleteReachesGrandchildren(t *testing.T) {
+	srv, _ := newTestServer(t)
+	az := serverOf(t, srv)
+
+	var fired []string
+	az.registerHook("Nimbus.Test/parents/children", Hook{
+		AfterDelete: func(s *Server, t target) { fired = append(fired, t.Name) },
+	})
+
+	rg := sub + "/resourceGroups/rg-deep"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	parent := rg + "/providers/Nimbus.Test/parents/p1"
+	do(t, srv, "PUT", parent, map[string]any{"location": "eastus"})
+	do(t, srv, "PUT", parent+"/children/c1", map[string]any{"properties": map[string]any{}})
+
+	// Delete the RESOURCE GROUP: the child is two levels down.
+	do(t, srv, "DELETE", rg, nil)
+	if len(fired) != 1 || fired[0] != "c1" {
+		t.Errorf("grandchild hook did not run on a resource-group delete: %v", fired)
+	}
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// The concrete thing the cascade fix buys today: deleting a resource group
+// purges the storage data of every account inside it. Before AfterDelete ran
+// for descendants, the ARM resources vanished while the account's blobs stayed
+// in the data-plane store forever -- invisible, and still served if an account
+// of the same name was recreated.
+func TestDeletingResourceGroupPurgesStorageData(t *testing.T) {
+	srv, _ := newTestServer(t)
+	az := serverOf(t, srv)
+	rg := sub + "/resourceGroups/rg-purge"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	acct := rg + "/providers/Microsoft.Storage/storageAccounts/stnimbuspurge"
+	do(t, srv, "PUT", acct, map[string]any{"location": "eastus", "kind": "StorageV2",
+		"sku": map[string]any{"name": "Standard_LRS"}, "properties": map[string]any{}})
+
+	a := az.storage.Store().Account("stnimbuspurge")
+	if a == nil {
+		t.Fatal("account missing from the data-plane store")
+	}
+	c, _ := a.CreateContainer("data", nil, "")
+	c.PutBlob(&storage.Blob{Name: "secret.txt", Content: []byte("should not survive")})
+
+	// Delete the RESOURCE GROUP, not the account.
+	do(t, srv, "DELETE", rg, nil)
+
+	if az.storage.Store().Account("stnimbuspurge") != nil {
+		t.Error("storage account data survived deletion of its resource group")
 	}
 }

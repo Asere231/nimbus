@@ -106,11 +106,16 @@ func (s *Store) Put(r *Resource) bool {
 
 // Delete removes a resource and everything nested under it (children first),
 // publishing a delete event for each. It returns ErrNotFound if absent.
-func (s *Store) Delete(id string) error {
+//
+// The resources it removed are returned, deepest first, so a caller can run
+// per-type cleanup for every one of them -- a type whose hook stops a real
+// engine must get the chance to stop it when an ANCESTOR is deleted, not only
+// when it is deleted directly.
+func (s *Store) Delete(id string) ([]*Resource, error) {
 	s.mu.Lock()
 	if _, ok := s.resources[key(id)]; !ok {
 		s.mu.Unlock()
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	// Collect the resource and its descendants by ID prefix.
 	prefix := key(id) + "/"
@@ -131,7 +136,7 @@ func (s *Store) Delete(id string) error {
 		s.bus.Publish(Event{Kind: "resource", Action: "delete", Cloud: r.Cloud, ResourceID: r.ID, ResourceType: r.Type, Name: r.Name, ParentID: r.ParentID})
 	}
 	s.save()
-	return nil
+	return doomed, nil
 }
 
 // isDescendantLocked follows ParentID links (for resources whose IDs are not

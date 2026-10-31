@@ -23,8 +23,20 @@ func TestDeleteCascadesAndPublishesLeavesFirst(t *testing.T) {
 
 	ch, _, cancel := bus.Subscribe()
 	defer cancel()
-	if err := s.Delete("/SUBSCRIPTIONS/s/resourcegroups/RG"); err != nil {
+	deleted, err := s.Delete("/SUBSCRIPTIONS/s/resourcegroups/RG")
+	if err != nil {
 		t.Fatal(err)
+	}
+	// Delete reports what it removed, deepest first, so callers can run
+	// per-resource cleanup for descendants and not just the addressed one.
+	if len(deleted) != 3 {
+		t.Errorf("Delete reported %d removed resources, want 3", len(deleted))
+	}
+	for i := 1; i < len(deleted); i++ {
+		if len(deleted[i-1].ID) < len(deleted[i].ID) {
+			t.Errorf("Delete must report deepest first; got %s before %s",
+				deleted[i-1].ID, deleted[i].ID)
+		}
 	}
 	var order []string
 	for len(order) < 3 {

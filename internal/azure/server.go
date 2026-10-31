@@ -140,6 +140,10 @@ const (
 // blob-browsing interface.
 func (s *Server) BlobBrowser() *storage.Handler { return s.storage }
 
+// SecretBrowser returns the Key Vault data-plane handler, which implements the
+// visualizer's secret-browsing interface.
+func (s *Server) SecretBrowser() *keyvault.Handler { return s.keyvault }
+
 // Start begins background work: adopting clusters left running by a previous
 // process, and polling each one so the visualizer sees what is inside it.
 // Returns a stop function.

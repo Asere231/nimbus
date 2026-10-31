@@ -42,11 +42,37 @@
     "microsoft.containerregistry/registries": ["ACR", "#58a6ff", "Container registry"],
     "microsoft.keyvault/vaults": ["KV", "#e3b341", "Key vault"],
     "microsoft.managedidentity/userassignedidentities": ["ID", "#bc8cff", "Managed identity"],
+    "microsoft.authorization/roleassignments": ["ROLE", "#f0883e", "Role assignment"],
     "microsoft.operationalinsights/workspaces": ["LAW", "#8b949e", "Log Analytics"],
     "microsoft.web/serverfarms": ["ASP", "#1f6feb", "App Service plan"],
     "microsoft.web/sites": ["APP", "#388bfd", "App Service"],
     "microsoft.compute/virtualmachines": ["VM", "#f778ba", "Virtual machine"],
   };
+  // Built-in role names, for labelling assignments and their links. A display
+  // convenience only: the authoritative table is builtInRoles in
+  // internal/azure/authorization.go, and anything missing here falls back to
+  // the GUID, which is still correct, just unfriendly.
+  const ROLE_NAMES = {
+    "8e3af657-a8ff-443c-a75c-2fe8c4bcb635": "Owner",
+    "b24988ac-6180-42a0-ab88-20f7382dd24c": "Contributor",
+    "acdd72a7-3385-48ef-bd42-f606fba81ae7": "Reader",
+    "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9": "User Access Administrator",
+    "00482a5a-887f-4fb3-b363-3b7fe8e74483": "Key Vault Administrator",
+    "b86a8fe4-44ce-4948-aee5-eccb2c155cd7": "Key Vault Secrets Officer",
+    "4633458b-17de-408a-b874-0445c86b69e6": "Key Vault Secrets User",
+    "21090545-7ca7-4776-b22c-e363652d74d2": "Key Vault Reader",
+    "7f951dda-4ed3-4680-a7ca-43fe172d538d": "AcrPull",
+    "8311e382-0749-4cb8-b61a-304f252e45ec": "AcrPush",
+    "ba92f5b4-2d11-453d-a403-e96b0029c9fe": "Storage Blob Data Contributor",
+    "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1": "Storage Blob Data Reader",
+    "f1a07417-d97a-45cb-824c-7a7467783830": "Managed Identity Operator",
+    "4abbcc35-e782-43d8-92c5-2d3f1bd2253f": "AKS Cluster User",
+  };
+  function roleName(roleDefinitionId) {
+    const guid = String(roleDefinitionId || "").split("/").pop().toLowerCase();
+    return ROLE_NAMES[guid] || guid.slice(0, 8) || "role";
+  }
+
   function typeStyle(type) {
     const t = (type || "").toLowerCase();
     if (TYPES[t]) return TYPES[t];
@@ -264,6 +290,12 @@
   }
 
   function displayName(r) {
+    // A role assignment's name is a GUID nobody chose; the role it grants is
+    // the only part worth reading.
+    if ((r.type || "").toLowerCase() === "microsoft.authorization/roleassignments") {
+      const props = (r.body && r.body.properties) || {};
+      return roleName(props.roleDefinitionId);
+    }
     return (r.body && r.body.displayName) ? r.body.displayName + " (" + r.name.slice(0, 8) + ")" : r.name;
   }
 
@@ -305,6 +337,7 @@
         el("path", { class: "edge", d: `M${x1} ${y1} C${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}` }, edges);
       }
     }
+    drawIdentityLinks(nodes, el("g", {}, svg));
 
     for (const n of nodes) {
       const r = n.r;
@@ -332,6 +365,57 @@
     state.entered.clear();
     state.flashed.clear();
     if (state.selected) showInspector(state.selected);
+  }
+
+  // Role assignments are the one relationship that does not follow the
+  // parent/child tree: a principal somewhere in the graph is granted access to
+  // a resource somewhere else. They are drawn as dashed links so it is
+  // visible, without pretending they are containment.
+  function drawIdentityLinks(nodes, group) {
+    const byKey = new Map(nodes.map((n) => [n.key, n]));
+    // principalId -> the node that OWNS that principal. A user-assigned
+    // identity reports it in properties; everything else carries one in
+    // `identity`. A role assignment also has a principalId in properties, but
+    // it REFERS to a principal rather than owning one -- counting it would
+    // make every link start and end at the assignment itself.
+    const owners = new Map();
+    for (const n of nodes) {
+      const type = (n.r.type || "").toLowerCase();
+      if (type === "microsoft.authorization/roleassignments") continue;
+      const body = n.r.body || {};
+      const props = body.properties || {};
+      if (type === "microsoft.managedidentity/userassignedidentities" && props.principalId) {
+        owners.set(String(props.principalId).toLowerCase(), n);
+      }
+      if (body.identity && body.identity.principalId) {
+        owners.set(String(body.identity.principalId).toLowerCase(), n);
+      }
+    }
+    for (const n of nodes) {
+      if ((n.r.type || "").toLowerCase() !== "microsoft.authorization/roleassignments") continue;
+      const props = (n.r.body && n.r.body.properties) || {};
+      const from = owners.get(String(props.principalId || "").toLowerCase());
+      const to = byKey.get(String(props.scope || "").toLowerCase());
+      if (!from || !to || from === to) continue;
+      // Routed around the cards rather than through them: identity and scope
+      // are often in the same column, where a straight line between centres
+      // would be completely hidden behind the two nodes it connects.
+      const y1 = from.y + H / 2, y2 = to.y + H / 2;
+      let d;
+      if (Math.abs(from.x - to.x) < 1) {
+        const x = from.x, bow = Math.max(6, x - 30);
+        d = `M${x} ${y1} C${bow} ${y1}, ${bow} ${y2}, ${x} ${y2}`;
+      } else {
+        const rightwards = from.x < to.x;
+        const x1 = rightwards ? from.x + W : from.x;
+        const x2 = rightwards ? to.x : to.x + W;
+        const mx = (x1 + x2) / 2;
+        d = `M${x1} ${y1} C${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
+      }
+      const path = el("path", { class: "link-identity", d }, group);
+      const title = el("title", {}, path);
+      title.textContent = `${displayName(from.r)} → ${displayName(to.r)}: ${roleName(props.roleDefinitionId)}`;
+    }
   }
 
   // ---- inspector ------------------------------------------------------------
@@ -364,6 +448,7 @@
     }
     $("#i-json").innerHTML = highlight(JSON.stringify(r.body, null, 2));
     showBlobs(r);
+    showSecrets(r);
   }
 
   // Blobs are not graph nodes -- a container can hold thousands -- so they are
@@ -407,6 +492,71 @@
     }
     $("#i-blobs-list").innerHTML = "";
     $("#i-blobs-list").appendChild(list);
+  }
+
+  // Secrets are listed for whichever vault is selected, like blobs are for a
+  // container. Only NAMES and metadata are fetched: the value has its own
+  // endpoint, called when someone presses reveal, so a selected vault never
+  // puts secrets on screen -- or in a screenshot -- unasked.
+  async function showSecrets(r) {
+    const panel = $("#i-secrets");
+    if ((r.type || "").toLowerCase() !== "microsoft.keyvault/vaults") {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    $("#i-secrets-list").innerHTML = "<div class='muted'>Loading…</div>";
+    let secrets = [];
+    try {
+      const res = await fetch(`/api/keyvault/secrets?vault=${encodeURIComponent(r.name)}`);
+      secrets = await res.json();
+    } catch (e) {
+      $("#i-secrets-list").innerHTML = "<div class='muted'>Could not load secrets.</div>";
+      return;
+    }
+    $("#i-secrets-count").textContent = secrets.length === 1 ? "1 secret" : `${secrets.length} secrets`;
+    if (!secrets.length) {
+      $("#i-secrets-list").innerHTML = "<div class='muted'>This vault is empty.</div>";
+      return;
+    }
+    const list = document.createElement("div");
+    for (const s of secrets) {
+      const row = document.createElement("div");
+      row.className = "secret-row";
+      const name = document.createElement("span");
+      name.className = "secret-name" + (s.deleted ? " secret-deleted" : "");
+      name.textContent = s.name;
+      name.title = s.deleted ? "Deleted, recoverable" : (s.contentType || "");
+      const right = document.createElement("span");
+      right.className = "secret-meta";
+      const versions = document.createElement("span");
+      versions.textContent = s.versions === 1 ? "1 version" : `${s.versions} versions`;
+      const reveal = document.createElement("button");
+      reveal.className = "btn ghost small";
+      reveal.textContent = "Reveal";
+      reveal.addEventListener("click", async () => {
+        reveal.disabled = true;
+        reveal.textContent = "…";
+        try {
+          const res = await fetch(`/api/keyvault/secret?vault=${encodeURIComponent(r.name)}&name=${encodeURIComponent(s.name)}`);
+          if (!res.ok) throw new Error(res.status);
+          const body = await res.json();
+          const value = document.createElement("span");
+          value.className = "secret-value";
+          value.textContent = body.value === "" ? "(empty)" : body.value;
+          reveal.replaceWith(value);
+        } catch (e) {
+          reveal.disabled = false;
+          reveal.textContent = "Reveal";
+          reveal.title = "Could not read this secret";
+        }
+      });
+      right.append(versions, document.createTextNode(" "), reveal);
+      row.append(name, right);
+      list.appendChild(row);
+    }
+    $("#i-secrets-list").innerHTML = "";
+    $("#i-secrets-list").appendChild(list);
   }
 
   // The account name sits between /storageAccounts/ and the next segment.

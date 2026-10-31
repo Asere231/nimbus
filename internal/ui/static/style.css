@@ -148,3 +148,35 @@ button { font: inherit; color: inherit; }
 .blob-row a { color: var(--accent, #58a6ff); text-decoration: none; overflow-wrap: anywhere; }
 .blob-row a:hover { text-decoration: underline; }
 .blob-size { color: var(--muted, #8b949e); white-space: nowrap; }
+
+/* Secrets, in the inspector. Names are shown; a value only appears when the
+   reveal button is pressed, and goes away again when the panel is redrawn. */
+.secret-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line, #21262d);
+  font-size: 12px;
+}
+.secret-row:last-child { border-bottom: 0; }
+.secret-name { overflow-wrap: anywhere; }
+.secret-meta { color: var(--muted, #8b949e); white-space: nowrap; }
+.secret-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--accent, #58a6ff);
+  overflow-wrap: anywhere;
+}
+.secret-deleted { color: var(--muted, #8b949e); text-decoration: line-through; }
+
+/* A role assignment: dashed, because it is permission, not containment. */
+.link-identity {
+  fill: none;
+  stroke: #bc8cff;
+  stroke-opacity: 0.55;
+  stroke-width: 1.4;
+  stroke-dasharray: 5 4;
+  pointer-events: stroke;
+}
+.link-identity:hover { stroke-opacity: 0.95; }

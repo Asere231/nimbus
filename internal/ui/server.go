@@ -24,11 +24,12 @@ type Info struct {
 	DataDir string            `json:"dataDir"`
 }
 
-// Handler returns the visualizer's HTTP handler. blobs may be nil, in which
-// case the storage endpoints are simply not registered.
-func Handler(store *core.Store, bus *core.Bus, info Info, blobs BlobBrowser) http.Handler {
+// Handler returns the visualizer's HTTP handler. blobs and secrets may be
+// nil, in which case those endpoints are simply not registered.
+func Handler(store *core.Store, bus *core.Bus, info Info, blobs BlobBrowser, secrets SecretBrowser) http.Handler {
 	mux := http.NewServeMux()
 	registerBlobRoutes(mux, blobs)
+	registerSecretRoutes(mux, secrets)
 
 	sub, _ := fs.Sub(static, "static")
 	mux.Handle("/", http.FileServer(http.FS(sub)))

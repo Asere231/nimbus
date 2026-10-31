@@ -19,7 +19,7 @@ func newUI(t *testing.T) (*httptest.Server, *core.Store, *core.Bus) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(Handler(store, bus, Info{Version: "test", Clouds: map[string]string{"azure": "https://localhost:4701"}}, nil))
+	srv := httptest.NewServer(Handler(store, bus, Info{Version: "test", Clouds: map[string]string{"azure": "https://localhost:4701"}}, nil, nil))
 	t.Cleanup(srv.Close)
 	return srv, store, bus
 }
@@ -219,5 +219,93 @@ func TestStaticAppIsEmbedded(t *testing.T) {
 		if n == 0 {
 			t.Errorf("GET %s served an empty file", path)
 		}
+	}
+}
+
+// fakeSecrets stands in for the Key Vault data plane.
+type fakeSecrets struct{ reads int }
+
+func (f *fakeSecrets) ListSecrets(vault string) []SecretInfo {
+	if vault != "kv1" {
+		return nil
+	}
+	return []SecretInfo{{Name: "db-password", Version: "abc", Versions: 2, Enabled: true, Updated: time.Now()}}
+}
+
+func (f *fakeSecrets) ReadSecret(vault, name string) (string, bool) {
+	f.reads++
+	if vault != "kv1" || name != "db-password" {
+		return "", false
+	}
+	return "s3cret", true
+}
+
+// The secret list must carry no values: it is fetched whenever a vault is
+// selected, so anything in it is on screen without being asked for. The value
+// has its own endpoint, which is what the reveal button calls.
+func TestSecretRoutesListNamesAndRevealOnDemand(t *testing.T) {
+	bus := core.NewBus(10)
+	store, err := core.NewStore(bus, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := &fakeSecrets{}
+	srv := httptest.NewServer(Handler(store, bus, Info{Version: "test"}, nil, secrets))
+	t.Cleanup(srv.Close)
+
+	res, err := http.Get(srv.URL + "/api/keyvault/secrets?vault=kv1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw := make([]byte, 4096)
+	n, _ := res.Body.Read(raw)
+	listed := string(raw[:n])
+	if !strings.Contains(listed, "db-password") {
+		t.Fatalf("secret list = %s", listed)
+	}
+	if strings.Contains(listed, "s3cret") {
+		t.Error("the secret list leaked a value")
+	}
+	if secrets.reads != 0 {
+		t.Errorf("listing read %d values; it must read none", secrets.reads)
+	}
+
+	res2, err := http.Get(srv.URL + "/api/keyvault/secret?vault=kv1&name=db-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res2.Body.Close()
+	var got map[string]string
+	if err := json.NewDecoder(res2.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["value"] != "s3cret" {
+		t.Errorf("reveal returned %v", got)
+	}
+	if res2.Header.Get("Cache-Control") != "no-store" {
+		t.Errorf("a revealed secret must not be cacheable: %q", res2.Header.Get("Cache-Control"))
+	}
+
+	res3, _ := http.Get(srv.URL + "/api/keyvault/secret?vault=kv1&name=nope")
+	if res3 != nil {
+		res3.Body.Close()
+		if res3.StatusCode != 404 {
+			t.Errorf("unknown secret = %d", res3.StatusCode)
+		}
+	}
+}
+
+// Without a secret browser the endpoints simply are not there, rather than
+// answering with an empty list that looks like an empty vault.
+func TestSecretRoutesAbsentWithoutABrowser(t *testing.T) {
+	srv, _, _ := newUI(t)
+	res, err := http.Get(srv.URL + "/api/keyvault/secrets?vault=kv1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 404 {
+		t.Errorf("secrets endpoint = %d with no browser, want 404", res.StatusCode)
 	}
 }

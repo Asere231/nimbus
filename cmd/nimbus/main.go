@@ -3,6 +3,7 @@
 //	nimbus start            start Azure + the visualizer
 //	nimbus cert             print where the CA certificate is and how to trust it
 //	nimbus env azure        print environment variables for Terraform / the Azure SDKs
+//	nimbus az register      register Nimbus as a custom cloud for the az CLI
 //	nimbus version
 package main
 
@@ -17,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -25,6 +27,7 @@ import (
 	"time"
 
 	"github.com/Asere231/nimbus/internal/azure"
+	"github.com/Asere231/nimbus/internal/azure/keyvault"
 	"github.com/Asere231/nimbus/internal/azure/storage"
 	"github.com/Asere231/nimbus/internal/core"
 	"github.com/Asere231/nimbus/internal/ui"
@@ -44,6 +47,8 @@ func main() {
 		printCert(os.Args[2:])
 	case "env":
 		printEnv(os.Args[2:])
+	case "az":
+		azCLI(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("nimbus", version)
 	default:
@@ -59,6 +64,7 @@ Usage:
   nimbus start [--home DIR] [--ui-port 4700] [--azure-port 4701] [--persist]
   nimbus cert  [--home DIR]      where the CA is, and how to trust it on your OS
   nimbus env azure               environment variables for Terraform and the SDKs
+  nimbus az register [--run]     register Nimbus as a custom cloud for the az CLI
   nimbus version
 `)
 }
@@ -115,7 +121,7 @@ func start(args []string) {
 	azSrv := &http.Server{Addr: fmt.Sprintf(":%d", *azPort), Handler: az, TLSConfig: tlsCfg, ReadHeaderTimeout: 10 * time.Second}
 	uiSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", *uiPort),
-		Handler:           ui.Handler(store, bus, ui.Info{Version: version, Clouds: map[string]string{"azure": azURL}, DataDir: dataDir}, blobBrowser{az.BlobBrowser()}),
+		Handler:           ui.Handler(store, bus, ui.Info{Version: version, Clouds: map[string]string{"azure": azURL}, DataDir: dataDir}, blobBrowser{az.BlobBrowser()}, secretBrowser{az.SecretBrowser()}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -261,6 +267,80 @@ func printEnv(args []string) {
 	}
 }
 
+// azCLI implements `nimbus az register`, which teaches the az CLI about
+// Nimbus.
+//
+// The az CLI does not read our /metadata/endpoints document -- that is a
+// Terraform and Azure-SDK mechanism. az works from its own list of clouds, so
+// using it against Nimbus means registering one. A full custom-cloud story is
+// Milestone 5's job; this is the part Key Vault needs, because `az keyvault`
+// builds vault hostnames from the cloud's keyvault DNS suffix and would
+// otherwise talk to real Azure.
+func azCLI(args []string) {
+	if len(args) == 0 || args[0] != "register" {
+		fmt.Fprintln(os.Stderr, "usage: nimbus az register [--home DIR] [--azure-port 4701] [--name nimbus] [--run]")
+		os.Exit(2)
+	}
+	fs := flag.NewFlagSet("az register", flag.ExitOnError)
+	home := fs.String("home", defaultHome(), "directory holding the CA certificate")
+	azPort := fs.Int("azure-port", 4701, "the port Nimbus serves Azure on")
+	name := fs.String("name", "nimbus", "name for the registered cloud")
+	host := fs.String("host", "localhost", "hostname clients use to reach Nimbus")
+	run := fs.Bool("run", false, "run the az cloud commands instead of only printing them")
+	_ = fs.Parse(args[1:])
+
+	base := fmt.Sprintf("https://%s:%d", *host, *azPort)
+	ca := filepath.Join(*home, "certs", "nimbus-ca.pem")
+	// az wants the Key Vault suffix with a leading dot (".vault.azure.net"),
+	// and the storage one without. Both carry our port: nothing can bind 443
+	// without root.
+	kvSuffix := fmt.Sprintf(".%s:%d", core.KeyVaultSuffix, *azPort)
+	stSuffix := fmt.Sprintf("%s:%d", core.StorageSuffix, *azPort)
+
+	register := []string{
+		"cloud", "register", "-n", *name,
+		"--endpoint-resource-manager", base,
+		"--endpoint-active-directory", base,
+		"--endpoint-active-directory-resource-id", base + "/",
+		"--endpoint-active-directory-graph-resource-id", base + "/graph/",
+		"--endpoint-management", base,
+		"--suffix-keyvault-dns", kvSuffix,
+		"--suffix-storage-endpoint", stSuffix,
+	}
+	steps := [][]string{register, {"cloud", "set", "-n", *name}, {"cloud", "update", "--profile", "latest"}}
+
+	if *run {
+		for _, step := range steps {
+			fmt.Println("+ az", strings.Join(step, " "))
+			cmd := exec.Command("az", step...)
+			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+			if err := cmd.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "nimbus: az %s failed: %v\n", step[1], err)
+				os.Exit(1)
+			}
+		}
+	} else {
+		for _, step := range steps {
+			fmt.Println("az", strings.Join(step, " "))
+		}
+	}
+
+	// Sign in and trust the CA: printed either way, because both touch things
+	// outside Nimbus -- the az credential cache and your shell.
+	fmt.Println()
+	fmt.Println("# Then, in the shell you will use az from:")
+	if runtime.GOOS == "windows" {
+		fmt.Printf("$env:REQUESTS_CA_BUNDLE = \"%s\"\n", ca)
+	} else {
+		fmt.Printf("export REQUESTS_CA_BUNDLE=%s\n", ca)
+	}
+	fmt.Printf("az login --service-principal -u %s -p nimbus --tenant %s --allow-no-subscriptions\n",
+		azure.DefaultClientID, azure.DefaultTenantID)
+	fmt.Println()
+	fmt.Println("# To go back to real Azure:")
+	fmt.Println("az cloud set -n AzureCloud")
+}
+
 // storageKey asks the running server for an account key through ARM.
 func storageKey(port int, account string) (string, error) {
 	// The resource group is not known here, so find the account by listing
@@ -326,4 +406,24 @@ func nimbusClient() (*http.Client, error) {
 		Timeout:   10 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}},
 	}, nil
+}
+
+// secretBrowser adapts the Key Vault data plane to the visualizer's
+// interface, in the same place and for the same reason as blobBrowser.
+type secretBrowser struct{ h *keyvault.Handler }
+
+func (b secretBrowser) ListSecrets(vault string) []ui.SecretInfo {
+	out := []ui.SecretInfo{}
+	for _, s := range b.h.ListSecrets(vault) {
+		out = append(out, ui.SecretInfo{
+			Name: s.Name, Version: s.Version, Versions: s.Versions,
+			ContentType: s.ContentType, Enabled: s.Enabled,
+			Updated: s.Updated, Deleted: s.Deleted,
+		})
+	}
+	return out
+}
+
+func (b secretBrowser) ReadSecret(vault, name string) (string, bool) {
+	return b.h.ReadSecret(vault, name)
 }

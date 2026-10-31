@@ -337,6 +337,12 @@ func readBody(r *http.Request) (map[string]any, error) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(data, &m); err != nil {
+		// The az CLI sends a deployment's template spliced in under an
+		// unquoted key; see jsonc.go. Only retried after a strict parse has
+		// failed, so a well-formed body is never rewritten.
+		if repaired := quoteBareKeys(data); json.Unmarshal(repaired, &m) == nil {
+			return m, nil
+		}
 		return nil, fmt.Errorf("request body is not a JSON object: %w", err)
 	}
 	return m, nil

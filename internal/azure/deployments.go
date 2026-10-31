@@ -415,7 +415,14 @@ func (s *Server) deploymentAction(w http.ResponseWriter, t target, body map[stri
 }
 
 // differs reports whether anything the template states disagrees with what is
-// stored. Only keys the template mentions are compared, recursively.
+// stored. Only what the template mentions is compared -- which is also all a
+// template can change -- because the stored resource has server-filled fields
+// the template never mentions and never will.
+//
+// That subset rule has to reach inside arrays too. A security rule in a
+// template is {name, properties{...}}, while the stored one has also gained
+// an id, an etag and a provisioningState; comparing the arrays whole reports
+// Modify for a resource nothing has touched.
 func differs(want, have map[string]any) bool {
 	for k, wv := range want {
 		if strings.EqualFold(k, "name") || strings.EqualFold(k, "id") || strings.EqualFold(k, "type") {
@@ -425,21 +432,36 @@ func differs(want, have map[string]any) bool {
 		if !ok {
 			return true
 		}
-		wm, wIsMap := wv.(map[string]any)
-		hm, hIsMap := hv.(map[string]any)
-		if wIsMap && hIsMap {
-			if differs(wm, hm) {
-				return true
-			}
-			continue
-		}
-		wraw, _ := json.Marshal(wv)
-		hraw, _ := json.Marshal(hv)
-		if string(wraw) != string(hraw) {
+		if valueDiffers(wv, hv) {
 			return true
 		}
 	}
 	return false
+}
+
+func valueDiffers(want, have any) bool {
+	switch w := want.(type) {
+	case map[string]any:
+		h, ok := have.(map[string]any)
+		if !ok {
+			return true
+		}
+		return differs(w, h)
+	case []any:
+		h, ok := have.([]any)
+		if !ok || len(w) != len(h) {
+			return true
+		}
+		for i := range w {
+			if valueDiffers(w[i], h[i]) {
+				return true
+			}
+		}
+		return false
+	}
+	wraw, _ := json.Marshal(want)
+	hraw, _ := json.Marshal(have)
+	return string(wraw) != string(hraw)
 }
 
 func lookupFold(m map[string]any, key string) (any, bool) {

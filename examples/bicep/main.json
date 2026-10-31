@@ -4,7 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "comment": "Compiled from main.bicep. Regenerate with: az bicep build --file examples/bicep/main.bicep"
+      "version": "0.48.1.52935",
+      "templateHash": "16652287548002545910"
     }
   },
   "parameters": {
@@ -65,11 +66,6 @@
       "name": "[format('{0}-vnet', parameters('prefix'))]",
       "location": "[parameters('location')]",
       "properties": {
-        "addressSpace": {
-          "addressPrefixes": [
-            "10.20.0.0/16"
-          ]
-        },
         "copy": [
           {
             "name": "subnets",
@@ -84,7 +80,12 @@
               }
             }
           }
-        ]
+        ],
+        "addressSpace": {
+          "addressPrefixes": [
+            "10.20.0.0/16"
+          ]
+        }
       },
       "dependsOn": [
         "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg', parameters('prefix')))]"
@@ -116,7 +117,7 @@
     },
     "nsgRules": {
       "type": "int",
-      "value": "[length(reference(resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg', parameters('prefix')))).securityRules)]"
+      "value": "[length(reference(resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg', parameters('prefix'))), '2023-09-01').securityRules)]"
     }
   }
 }

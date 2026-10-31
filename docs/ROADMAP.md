@@ -30,8 +30,10 @@ az 2.90.0.
   DELETE. The visualizer counts what is still accepted-only.
 - ARM template deployments work at resource-group scope, including the Bicep
   expression subset, resource and property copy loops, dependency ordering,
-  outputs, `validate` and `what-if`. `examples/bicep` deploys through the real
-  `az` CLI and redeploys as a no-op.
+  outputs, `validate` and `what-if`. `az deployment group create
+  --template-file main.bicep` was run on macOS with az 2.90.0 and Bicep
+  0.48.1: it deploys, the outputs resolve, and a second what-if reports
+  NoChange for every resource.
 - CI is green on ubuntu, macos and windows, plus the SDK harness, the
   generator's tests, the Terraform apply/plan/destroy jobs and an az + Bicep
   deployment job.
@@ -72,12 +74,9 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 ## Left to confirm
 
-- **The M5 `az` commands have only been run in CI**, on Linux. `az group
-  create`, `az network vnet create`, `az resource list` and `az deployment
-  group create` all pass there against the committed example, but nobody has
-  run them on the owner's macOS machine yet, and `az bicep build` has never
-  been run at all — `examples/bicep/main.json` was written by hand to match
-  `main.bicep`, so the two could drift.
+- **`az bicep install` needs a shell without `REQUESTS_CA_BUNDLE`** set, since
+  that variable replaces the trust store rather than adding to it. Verified on
+  macOS with Bicep 0.48.1; `main.json` is now the compiler's own output.
 - **No Key Vault SDK harness.** `test/storage-sdk` drives blobs, queues and
   tables with Microsoft's Python SDKs; the vault has no equivalent, so the
   challenge flow is only proven against azurerm and the az CLI.

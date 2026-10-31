@@ -39,7 +39,7 @@ type Resource struct {
 // immediately before the PUT.
 func Expand(template map[string]any, params map[string]any, scope *Scope) (*Plan, error) {
 	s := *scope // a copy: expansion fills in parameters and variables
-	resolved, err := resolveParameters(template, params)
+	resolved, err := resolveParameters(template, params, &s)
 	if err != nil {
 		return nil, err
 	}
@@ -76,9 +76,15 @@ func Expand(template map[string]any, params map[string]any, scope *Scope) (*Plan
 // resolveParameters merges supplied values with the template's defaults. The
 // az CLI and ARM both send values wrapped as {"name": {"value": x}}, while a
 // caller inside Nimbus may pass them bare; both are accepted.
-func resolveParameters(template map[string]any, supplied map[string]any) (map[string]any, error) {
+func resolveParameters(template map[string]any, supplied map[string]any, scope *Scope) (map[string]any, error) {
 	declared, _ := template["parameters"].(map[string]any)
 	out := map[string]any{}
+
+	// A DEFAULT can be an expression -- "[resourceGroup().location]" is the
+	// commonest line in any Bicep file -- and may refer to another parameter,
+	// so defaults are evaluated, and repeated until they settle. Supplied
+	// values are literal JSON and are taken as they are.
+	pending := map[string]any{}
 	for name, raw := range declared {
 		spec, _ := raw.(map[string]any)
 		if v, ok := lookup(supplied, name); ok {
@@ -87,11 +93,31 @@ func resolveParameters(template map[string]any, supplied map[string]any) (map[st
 		}
 		if spec != nil {
 			if def, ok := spec["defaultValue"]; ok {
-				out[name] = def
+				pending[name] = def
 				continue
 			}
 		}
 		return nil, fmt.Errorf("no value was supplied for parameter %q and it has no default", name)
+	}
+
+	s := *scope
+	s.Parameters = out
+	for len(pending) > 0 {
+		progress := false
+		var lastErr error
+		for name, raw := range pending {
+			v, err := EvaluateDeep(raw, &s)
+			if err != nil {
+				lastErr = fmt.Errorf("default for parameter %q: %w", name, err)
+				continue
+			}
+			out[name] = v
+			delete(pending, name)
+			progress = true
+		}
+		if !progress {
+			return nil, lastErr
+		}
 	}
 	// A value for something the template does not declare is ignored rather
 	// than rejected, which is what ARM does.

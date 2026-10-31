@@ -29,6 +29,11 @@ anyone hand-writing a hook, and ARM/Bicep templates deploy.
   header counts how many are still accepted-only.
 - Etags are derived from the resource ID rather than regenerated per write,
   which is what made a redeploy a true no-op.
+- Three things running the real `az` CLI found, each fixed with a test: it
+  sends a deployment body that is not JSON (the template is spliced in under
+  an unquoted key); parameter defaults are expressions and have to be
+  evaluated; and a freshly started Nimbus listed no subscription, so `az
+  login` fell back to using the tenant id as the subscription id.
 
 ## 0.4.1 — 2026-10-31
 

@@ -238,9 +238,16 @@ func TestWhatIfSeesExistingResources(t *testing.T) {
 		} `json:"changes"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Changes) == 0 {
+		t.Fatal("whatIf reported no changes at all")
+	}
+	// NoChange specifically, not merely "not Create": asserting the weaker
+	// thing let a real `az deployment group what-if` report Modify for
+	// resources nothing had touched, because the stored copy has
+	// server-filled fields inside arrays that the template never mentions.
 	for _, c := range out.Changes {
-		if c.ChangeType == "Create" {
-			t.Error("whatIf says Create for a resource that already exists")
+		if c.ChangeType != "NoChange" {
+			t.Errorf("changeType = %s for an unchanged resource, want NoChange", c.ChangeType)
 		}
 	}
 }

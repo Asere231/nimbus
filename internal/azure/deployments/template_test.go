@@ -262,3 +262,37 @@ func TestReferenceResolvesAfterDeployment(t *testing.T) {
 		t.Errorf("reference(...).resourceGuid = %v, want abc", got)
 	}
 }
+
+// A parameter default is usually an expression -- "[resourceGroup().location]"
+// is the commonest line in any Bicep file -- and taking it literally leaves
+// the expression itself in the resource body. The deploy path hid this by
+// evaluating the body again later; what-if did not, and reported Modify for
+// resources nothing had touched.
+func TestParameterDefaultsAreEvaluated(t *testing.T) {
+	const tmpl = `{
+      "parameters": {
+        "location": { "type": "string", "defaultValue": "[resourceGroup().location]" },
+        "prefix":   { "type": "string", "defaultValue": "nim" },
+        "name":     { "type": "string", "defaultValue": "[concat(parameters('prefix'), '-pip')]" }
+      },
+      "resources": [{
+        "type": "Microsoft.Network/publicIPAddresses",
+        "apiVersion": "2023-09-01",
+        "name": "[parameters('name')]",
+        "location": "[parameters('location')]",
+        "properties": {}
+      }]
+    }`
+	plan := expand(t, tmpl, nil)
+	if got := plan.Parameters["location"]; got != "eastus" {
+		t.Errorf("location parameter = %#v, want eastus", got)
+	}
+	// A default that refers to another parameter resolves too, whatever order
+	// the map happens to iterate in.
+	if got := plan.Parameters["name"]; got != "nim-pip" {
+		t.Errorf("name parameter = %#v, want nim-pip", got)
+	}
+	if got := plan.Resources[0].Body["location"]; got != "eastus" {
+		t.Errorf("resource location = %#v, want eastus", got)
+	}
+}

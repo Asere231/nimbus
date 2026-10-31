@@ -14,6 +14,7 @@ import (
 
 	"github.com/Asere231/nimbus/internal/azure/storage"
 	"github.com/Asere231/nimbus/internal/core"
+	"github.com/Asere231/nimbus/internal/engines/docker"
 )
 
 // Config for the Azure emulator.
@@ -26,16 +27,41 @@ type Config struct {
 	// DataDir, when set, is where the storage data plane keeps blob content
 	// and the rest of its state so it survives a restart. Empty = memory only.
 	DataDir string
+
+	// K3sImage is the image AKS clusters run. Pinned rather than :latest so a
+	// machine that pre-pulled it stays offline-capable, and so the Kubernetes
+	// version matches what kubectl expects.
+	K3sImage string
+	// KubernetesVersion is reported to clients; it should track K3sImage.
+	KubernetesVersion string
+	// ClusterPortBase is the first host port tried for a cluster's API.
+	ClusterPortBase int
+	// ClusterTimeout bounds how long a cluster may take to become ready.
+	ClusterTimeout time.Duration
+	// KeepClusters leaves k3s containers running when Nimbus stops, so a
+	// restart reattaches instead of waiting for a fresh boot. Set with
+	// --persist; without it clusters are torn down on exit.
+	KeepClusters bool
 }
+
+// Defaults for the AKS engine.
+const (
+	DefaultK3sImage          = "rancher/k3s:v1.34.12-k3s1"
+	DefaultKubernetesVersion = "1.34.12"
+	DefaultClusterPortBase   = 6443
+	DefaultClusterTimeout    = 5 * time.Minute
+)
 
 // Server is the Azure plugin.
 type Server struct {
-	cfg     Config
-	store   *core.Store
-	bus     *core.Bus
-	hooks   map[string]Hook
-	storage *storage.Handler
-	ops     *operations
+	cfg      Config
+	store    *core.Store
+	bus      *core.Bus
+	hooks    map[string]Hook
+	storage  *storage.Handler
+	ops      *operations
+	docker   docker.Client
+	clusters *clusters
 }
 
 // New creates the Azure emulator.
@@ -46,12 +72,26 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	if cfg.ClientID == "" {
 		cfg.ClientID = DefaultClientID
 	}
+	if cfg.K3sImage == "" {
+		cfg.K3sImage = DefaultK3sImage
+	}
+	if cfg.KubernetesVersion == "" {
+		cfg.KubernetesVersion = DefaultKubernetesVersion
+	}
+	if cfg.ClusterPortBase == 0 {
+		cfg.ClusterPortBase = DefaultClusterPortBase
+	}
+	if cfg.ClusterTimeout == 0 {
+		cfg.ClusterTimeout = DefaultClusterTimeout
+	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	s := &Server{
 		cfg: cfg, store: store, bus: bus,
-		hooks:   map[string]Hook{},
-		storage: storage.NewHandler(storage.NewStore()),
-		ops:     newOperations(),
+		hooks:    map[string]Hook{},
+		storage:  storage.NewHandler(storage.NewStore()),
+		ops:      newOperations(),
+		docker:   docker.NewCLI(),
+		clusters: newClusters(),
 	}
 	if cfg.DataDir != "" {
 		if err := s.storage.Store().Persist(cfg.DataDir); err != nil {
@@ -62,6 +102,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	registerNetworkHooks(s)
 	registerStorageHooks(s)
 	registerContainerHooks(s)
+	registerAKSHooks(s)
 	return s
 }
 

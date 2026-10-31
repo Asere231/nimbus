@@ -398,6 +398,10 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, t target) 
 		writeError(w, 400, "InvalidRequestContent", "%v", err)
 		return ""
 	}
+	if out, ok := s.clusterAction(t, body); ok {
+		writeJSON(w, 200, out)
+		return ""
+	}
 	if out, ok := s.storageAccountAction(t, body); ok {
 		writeJSON(w, 200, out)
 		return ""

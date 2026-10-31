@@ -132,6 +132,14 @@ func registerAKSHooks(s *Server) {
 			if err := s.scaleAgents(ctx, cl, want); err != nil {
 				return err
 			}
+			// Wait for the nodes to actually REGISTER, not just for their
+			// containers to start. Real AKS finishes provisioning when the
+			// cluster is usable, and anyone who runs kubectl straight after
+			// `terraform apply` -- which the example tells them to do --
+			// would otherwise see fewer nodes than they asked for, or none.
+			if err := s.waitForNodes(ctx, cl, want); err != nil {
+				return err
+			}
 			s.recordClusterEndpoint(t, cl)
 			return nil
 		},
@@ -388,6 +396,34 @@ func (s *Server) updateClusterPools(clusterID, poolName string, poolBody map[str
 
 	res.Body, _ = json.Marshal(body)
 	s.store.Put(res)
+}
+
+// waitForNodes blocks until the cluster reports at least want nodes.
+func (s *Server) waitForNodes(ctx context.Context, cl *cluster, want int) error {
+	client := s.clusterClient(cl)
+	if client == nil {
+		return fmt.Errorf("no client for cluster %s", cl.Name)
+	}
+	deadline := time.Now().Add(s.cfg.ClusterTimeout)
+	var last int
+	for {
+		list, err := fetchList(ctx, client, cl.Port, "/api/v1/nodes")
+		if err == nil {
+			last = len(list.Items)
+			if last >= want {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("only %d of %d nodes joined within %s; check `docker logs %s`",
+				last, want, s.cfg.ClusterTimeout, cl.Container)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 // --- credential actions -----------------------------------------------------

@@ -208,8 +208,10 @@ jobs:
           terraform apply -auto-approve -input=false
 
           # The cluster must be a real one, not just an ARM record.
-          kubectl --kubeconfig ./kubeconfig wait --for=condition=Ready node --all --timeout=300s
+          # `wait --all` errors immediately when nothing matches, so check the
+          # nodes exist before waiting on their condition.
           kubectl --kubeconfig ./kubeconfig get nodes
+          kubectl --kubeconfig ./kubeconfig wait --for=condition=Ready node --all --timeout=300s
 
           set +e; terraform plan -detailed-exitcode -input=false; code=$?; set -e
           if [ "$code" -ne 0 ]; then

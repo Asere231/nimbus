@@ -21,6 +21,14 @@ type Hook struct {
 	AfterDelete func(s *Server, t target)
 	// Backing is "real" when a local engine actually runs this type.
 	Backing string
+	// CreateStatus overrides the status a successful create returns. Most
+	// types are happy with 201, but a few are declared long-running in the
+	// SDK and their generated clients reject anything else:
+	//
+	//	performing Create: unexpected status 201 (201 Created)
+	//
+	// Storage accounts are the first such type. Zero means 201.
+	CreateStatus int
 }
 
 type armError struct {
@@ -73,7 +81,7 @@ func (s *Server) handleARM(w http.ResponseWriter, r *http.Request) string {
 		return s.handleResource(w, r, t)
 	case "collection":
 		if r.Method == http.MethodPost {
-			return s.handleAction(w, t)
+			return s.handleAction(w, r, t)
 		}
 		s.listCollection(w, t)
 	default:
@@ -213,6 +221,9 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 	status := 200
 	if created && !patch {
 		status = 201
+		if h.CreateStatus != 0 {
+			status = h.CreateStatus
+		}
 	}
 	// Re-read: an AfterPut hook may have enriched the stored body.
 	if res, err := s.store.Get(t.ID); err == nil {
@@ -235,9 +246,18 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 // handleAction answers POST actions such as listKeys. Unknown actions return
 // an empty object and are flagged in the activity feed, so missing features
 // are easy to spot while you work.
-func (s *Server) handleAction(w http.ResponseWriter, t target) string {
+func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, t target) string {
 	if t.ID != "" && !s.store.Exists(t.ID) {
 		writeError(w, 404, "ResourceNotFound", "The Resource '%s' was not found.", t.ID)
+		return ""
+	}
+	body, err := readBody(r)
+	if err != nil {
+		writeError(w, 400, "InvalidRequestContent", "%v", err)
+		return ""
+	}
+	if out, ok := s.storageAccountAction(t, body); ok {
+		writeJSON(w, 200, out)
 		return ""
 	}
 	writeJSON(w, 200, map[string]any{})

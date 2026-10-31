@@ -3,6 +3,7 @@ package azure
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -502,5 +503,135 @@ func TestEveryHandlerResolvesIDsCaseInsensitively(t *testing.T) {
 	}
 	if code, _ := do(t, srv, "DELETE", lower, nil); code != 202 {
 		t.Errorf("DELETE lowercased vnet = %d, want 202", code)
+	}
+}
+
+// --- storage data-plane addressing -----------------------------------------
+
+// The azurerm provider builds data-plane URLs from the metadata suffix, with
+// the literal format strings (read out of the provider binary):
+//
+//	https://%s.blob.%s/   https://%s.queue.%s/   https://%s.table.%s/
+//
+// where the second %s is suffixes.storage. It does NOT use primaryEndpoints
+// for this. Azure's real suffix is a bare hostname, so the URL lands on port
+// 443 -- which Nimbus cannot bind without root. Carrying the port in the
+// suffix is what puts the data plane on our own HTTPS port instead.
+func TestStorageSuffixCarriesThePort(t *testing.T) {
+	srv, _ := newTestServer(t)
+	res, err := srv.Client().Get(srv.URL + "/metadata/endpoints?api-version=2022-09-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var m map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&m); err != nil {
+		t.Fatal(err)
+	}
+	suffix, _ := m["suffixes"].(map[string]any)["storage"].(string)
+
+	// Whatever port the server is on must be in the suffix, or clients go to 443.
+	u, _ := url.Parse(srv.URL)
+	if want := core.StorageSuffix + ":" + u.Port(); suffix != want {
+		t.Errorf("suffixes.storage = %q, want %q", suffix, want)
+	}
+
+	// And the URL azurerm builds from it must be valid and point back at us.
+	built := "https://stnimbus.blob." + suffix + "/"
+	bu, err := url.Parse(built)
+	if err != nil {
+		t.Fatalf("azurerm would build an unparseable URL %q: %v", built, err)
+	}
+	if bu.Port() != u.Port() {
+		t.Errorf("built URL %s targets port %q, want %q", built, bu.Port(), u.Port())
+	}
+	if bu.Hostname() != "stnimbus.blob."+core.StorageSuffix {
+		t.Errorf("built URL hostname = %q", bu.Hostname())
+	}
+}
+
+// Storage account create is declared long-running in the SDK, and its client
+// rejects anything but 202 -- azurerm fails the apply outright with
+//
+//	performing Create: unexpected status 201 (201 Created)
+//
+// even though the body is a perfectly good account. Most types are happy with
+// 201, so this is per-type, which is why Hook carries CreateStatus.
+func TestStorageAccountCreateReturns202(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-st"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	acct := rg + "/providers/Microsoft.Storage/storageAccounts/stnimbus1"
+
+	res := raw(t, srv, "PUT", acct, `{"location":"eastus","sku":{"name":"Standard_LRS"},"kind":"StorageV2","properties":{}}`)
+	if res.StatusCode != 202 {
+		t.Errorf("storage account create = %d, want 202", res.StatusCode)
+	}
+	if res.Header.Get("Azure-AsyncOperation") == "" {
+		t.Error("a 202 must say where to poll")
+	}
+
+	// An update of an existing account is not a create and stays 200.
+	res = raw(t, srv, "PUT", acct, `{"location":"eastus","sku":{"name":"Standard_LRS"},"kind":"StorageV2","properties":{}}`)
+	if res.StatusCode != 200 {
+		t.Errorf("storage account update = %d, want 200", res.StatusCode)
+	}
+
+	// Network types must keep their 201: this change is per-type.
+	res = raw(t, srv, "PUT", rg+"/providers/Microsoft.Network/routeTables/rt", `{"location":"eastus"}`)
+	if res.StatusCode != 201 {
+		t.Errorf("route table create = %d, want 201 (unchanged)", res.StatusCode)
+	}
+}
+
+func TestStorageAccountServerFieldsAndKeys(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rg := sub + "/resourceGroups/rg-st2"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	acct := rg + "/providers/Microsoft.Storage/storageAccounts/stnimbus2"
+	_, body := do(t, srv, "PUT", acct, map[string]any{
+		"location": "eastus", "kind": "StorageV2",
+		"sku": map[string]any{"name": "Standard_LRS"}, "properties": map[string]any{},
+	})
+	props := body["properties"].(map[string]any)
+	for _, f := range []string{"creationTime", "primaryLocation", "statusOfPrimary", "primaryEndpoints"} {
+		if props[f] == nil {
+			t.Errorf("missing server-generated field %q", f)
+		}
+	}
+	// Endpoints must carry our port, like the metadata suffix does.
+	blob := props["primaryEndpoints"].(map[string]any)["blob"].(string)
+	u, _ := url.Parse(srv.URL)
+	if !strings.Contains(blob, ":"+u.Port()) {
+		t.Errorf("primaryEndpoints.blob = %q, must carry port %s", blob, u.Port())
+	}
+
+	// listKeys is a POST action; keys never appear in a GET of the account.
+	_, got := do(t, srv, "GET", acct, nil)
+	if s := fmt.Sprint(got); strings.Contains(s, "keys") {
+		t.Error("GET of an account must not expose keys")
+	}
+	code, keys := do(t, srv, "POST", acct+"/listKeys", nil)
+	if code != 200 {
+		t.Fatalf("listKeys = %d", code)
+	}
+	list, _ := keys["keys"].([]any)
+	if len(list) != 2 {
+		t.Fatalf("listKeys returned %d keys, want 2: %v", len(list), keys)
+	}
+	k1 := list[0].(map[string]any)
+	if k1["keyName"] != "key1" || k1["value"] == "" {
+		t.Errorf("unexpected key shape: %v", k1)
+	}
+
+	// regenerateKey rotates only the named key.
+	before := list[1].(map[string]any)["value"]
+	_, after := do(t, srv, "POST", acct+"/regenerateKey", map[string]any{"keyName": "key2"})
+	al := after["keys"].([]any)
+	if al[0].(map[string]any)["value"] != k1["value"] {
+		t.Error("regenerating key2 changed key1")
+	}
+	if al[1].(map[string]any)["value"] == before {
+		t.Error("regenerating key2 did not change it")
 	}
 }

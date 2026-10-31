@@ -173,3 +173,40 @@ func TestExpiringCertIsReissued(t *testing.T) {
 		t.Error("a freshly issued certificate must not be reissued")
 	}
 }
+
+// The storage data plane lives at {account}.{service}.storage.nimbus.localhost.
+// A wildcard matches exactly ONE label, so "*.localhost" does not cover it and
+// "*.storage.nimbus.localhost" does not either -- each service level needs its
+// own wildcard.
+func TestServerCertCoversStorageDataPlaneNames(t *testing.T) {
+	c, err := EnsureCerts(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	crt := leaf(t, c)
+
+	for _, host := range []string{
+		"localhost",
+		"stnimbus.blob.storage.nimbus.localhost",
+		"stnimbus.queue.storage.nimbus.localhost",
+		"stnimbus.table.storage.nimbus.localhost",
+		"stnimbus.file.storage.nimbus.localhost",
+		"storage.nimbus.localhost",
+	} {
+		if err := crt.VerifyHostname(host); err != nil {
+			t.Errorf("certificate does not cover %s: %v\n  SANs: %v", host, err, crt.DNSNames)
+		}
+	}
+}
+
+// A certificate issued before the storage names existed must be replaced on the
+// next start, or upgrading users get a TLS failure with no hint that deleting a
+// file fixes it. The CA must survive, so no re-trust is needed.
+func TestCertMissingNewNamesIsReissued(t *testing.T) {
+	if coversAllNames(&x509.Certificate{DNSNames: []string{"localhost", "*.localhost"}}) {
+		t.Error("a certificate with only the old SANs must be treated as needing reissue")
+	}
+	if !coversAllNames(&x509.Certificate{DNSNames: serverDNSNames}) {
+		t.Error("a certificate with the current SANs must not be reissued")
+	}
+}

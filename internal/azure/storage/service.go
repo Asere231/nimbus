@@ -1,0 +1,126 @@
+package storage
+
+import (
+	"encoding/xml"
+	"fmt"
+	"net/http"
+	"strings"
+)
+
+// Service is one of the storage services a data-plane host can address.
+type Service string
+
+const (
+	Blob  Service = "blob"
+	Queue Service = "queue"
+	Table Service = "table"
+	File  Service = "file"
+)
+
+// Target is what a data-plane Host header points at.
+type Target struct {
+	Account string
+	Service Service
+}
+
+// ParseHost splits a data-plane host into account and service.
+//
+// Clients address storage as {account}.{service}.{suffix}, e.g.
+// "stnimbus.blob.storage.nimbus.localhost:4701". ok is false for anything that
+// is not such a name -- those are ARM requests and must be left alone.
+//
+// suffix may carry a port (ours does; see the metadata comment), and the Host
+// header may carry one whether or not the suffix does, so both are compared
+// without it.
+func ParseHost(host, suffix string) (Target, bool) {
+	h := strings.ToLower(stripPort(host))
+	sfx := strings.ToLower(stripPort(suffix))
+	if !strings.HasSuffix(h, "."+sfx) {
+		return Target{}, false
+	}
+	// What is left is "{account}.{service}".
+	head := strings.TrimSuffix(h, "."+sfx)
+	dot := strings.LastIndex(head, ".")
+	if dot <= 0 || dot == len(head)-1 {
+		return Target{}, false
+	}
+	account, svc := head[:dot], Service(head[dot+1:])
+	switch svc {
+	case Blob, Queue, Table, File:
+	default:
+		return Target{}, false
+	}
+	if strings.Contains(account, ".") { // only one label of account name
+		return Target{}, false
+	}
+	return Target{Account: account, Service: svc}, true
+}
+
+func stripPort(h string) string {
+	if i := strings.LastIndex(h, ":"); i != -1 && !strings.Contains(h[i:], "]") {
+		return h[:i]
+	}
+	return h
+}
+
+// Handler serves the storage data plane.
+type Handler struct {
+	store *Store
+}
+
+// NewHandler creates the data-plane handler over the given store.
+func NewHandler(store *Store) *Handler { return &Handler{store: store} }
+
+// Store exposes the underlying data store, so the ARM hook can create and
+// delete accounts alongside the control-plane resource.
+func (h *Handler) Store() *Store { return h.store }
+
+// Serve handles one data-plane request. It returns a short note for the
+// activity feed, so unimplemented operations are visible in the visualizer
+// while the service is being built out.
+func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, t Target) string {
+	if h.store.Account(t.Account) == nil {
+		// What Azure returns for a host whose account does not exist.
+		WriteError(w, http.StatusNotFound, "AccountNotFound",
+			"The specified account does not exist.")
+		return "unknown storage account: " + t.Account
+	}
+	WriteError(w, http.StatusNotImplemented, "FeatureNotYetImplemented",
+		fmt.Sprintf("Nimbus does not implement %s %s on the %s service yet.", r.Method, r.URL.Path, t.Service))
+	return fmt.Sprintf("unimplemented storage call: %s %s %s%s", t.Service, r.Method, r.URL.Path, queryNote(r))
+}
+
+func queryNote(r *http.Request) string {
+	if q := r.URL.RawQuery; q != "" {
+		return "?" + q
+	}
+	return ""
+}
+
+// storageError is the XML body Azure returns for a failed data-plane call.
+// Storage speaks XML, not the JSON that ARM uses.
+type storageError struct {
+	XMLName xml.Name `xml:"Error"`
+	Code    string   `xml:"Code"`
+	Message string   `xml:"Message"`
+}
+
+// WriteError writes an Azure-shaped storage error.
+func WriteError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/xml")
+	w.Header().Set("x-ms-error-code", code)
+	setCommonHeaders(w)
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(xml.Header))
+	_ = xml.NewEncoder(w).Encode(storageError{Code: code, Message: message})
+}
+
+// APIVersion is the x-ms-version Nimbus reports. Clients send their own and
+// expect it echoed; this is a recent one that the SDKs accept.
+const APIVersion = "2025-05-05"
+
+func setCommonHeaders(w http.ResponseWriter) {
+	w.Header().Set("x-ms-version", APIVersion)
+	w.Header().Set("x-ms-request-id", newRequestID())
+	w.Header().Set("Server", "Nimbus")
+}

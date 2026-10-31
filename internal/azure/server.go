@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/Asere231/nimbus/internal/azure/storage"
 	"github.com/Asere231/nimbus/internal/core"
 )
 
@@ -24,10 +26,11 @@ type Config struct {
 
 // Server is the Azure plugin.
 type Server struct {
-	cfg   Config
-	store *core.Store
-	bus   *core.Bus
-	hooks map[string]Hook
+	cfg     Config
+	store   *core.Store
+	bus     *core.Bus
+	hooks   map[string]Hook
+	storage *storage.Handler
 }
 
 // New creates the Azure emulator.
@@ -39,8 +42,13 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		cfg.ClientID = DefaultClientID
 	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
-	s := &Server{cfg: cfg, store: store, bus: bus, hooks: map[string]Hook{}}
+	s := &Server{
+		cfg: cfg, store: store, bus: bus,
+		hooks:   map[string]Hook{},
+		storage: storage.NewHandler(storage.NewStore()),
+	}
 	registerNetworkHooks(s)
+	registerStorageHooks(s)
 	return s
 }
 
@@ -52,6 +60,19 @@ const (
 	DefaultSubscriptionID = "00000000-0000-0000-0000-000000000000"
 	DefaultObjectID       = "00000000-0000-0000-0000-000000000003"
 )
+
+// storageSuffix is the DNS suffix for the storage data plane, including our
+// port. Clients join it as {account}.{service}.{suffix}; see the comment in
+// handleMetadata for why the port belongs in it.
+func (s *Server) storageSuffix() string {
+	suffix := core.StorageSuffix
+	if u, err := url.Parse(s.cfg.PublicURL); err == nil {
+		if p := u.Port(); p != "" {
+			suffix += ":" + p
+		}
+	}
+	return suffix
+}
 
 // ServeHTTP routes every request and records it on the event bus.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +92,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) route(w http.ResponseWriter, r *http.Request) (note string) {
+	// The storage data plane shares this listener and is told apart by Host:
+	// {account}.{service}.storage.nimbus.localhost. ARM requests arrive on the
+	// plain host, so this never shadows them.
+	if t, ok := storage.ParseHost(r.Host, s.storageSuffix()); ok {
+		return s.storage.Serve(w, r, t)
+	}
+
 	p := r.URL.Path
 	switch {
 	case p == "/metadata/endpoints":

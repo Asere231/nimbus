@@ -46,9 +46,17 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 		"logAnalyticsResourceId":                u + "/loganalytics/",
 		"ossrDbmsResourceId":                    u + "/ossrdbms/",
 		// Data-plane DNS suffixes. These stay on the .localhost family so that
-		// nothing ever resolves to real Azure; data planes arrive in later milestones.
+		// nothing ever resolves to real Azure.
+		//
+		// The storage suffix carries our PORT, which real Azure's never does.
+		// azurerm builds data-plane URLs as `https://%s.blob.%s/` with the
+		// suffix as the second argument, so a bare hostname would send it to
+		// port 443 -- which needs root to bind. Substituting
+		// "storage.nimbus.localhost:4701" produces a valid URL on the port we
+		// already serve, and SNI still sees the bare hostname so the
+		// certificate matches. See TestStorageSuffixCarriesThePort.
 		"suffixes": map[string]any{
-			"storage":                             "storage.nimbus.localhost",
+			"storage":                             s.storageSuffix(),
 			"keyVaultDns":                         "vault.nimbus.localhost",
 			"acrLoginServer":                      "acr.nimbus.localhost",
 			"sqlServerHostname":                   "sql.nimbus.localhost",

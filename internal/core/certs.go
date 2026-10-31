@@ -22,6 +22,47 @@ import (
 // rounding and clock-skew arguments.
 const certValidity = 397 * 24 * time.Hour
 
+// StorageSuffix is the DNS suffix the Azure storage data plane lives under.
+// Clients build {account}.{service}.{suffix} from the metadata document, so
+// these names must resolve to loopback and the certificate must cover them.
+const StorageSuffix = "storage.nimbus.localhost"
+
+// serverDNSNames is every name the server certificate must cover.
+//
+// A wildcard matches exactly ONE label: "*.localhost" covers "a.localhost" but
+// NOT "a.b.localhost". So each storage service level needs its own wildcard --
+// "*.storage.nimbus.localhost" would not match
+// "stnimbus.blob.storage.nimbus.localhost".
+var serverDNSNames = []string{
+	"localhost",
+	"*.localhost",
+	"nimbus",
+	"host.docker.internal",
+	StorageSuffix,
+	"*." + StorageSuffix,
+	"*.blob." + StorageSuffix,
+	"*.queue." + StorageSuffix,
+	"*.table." + StorageSuffix,
+	"*.file." + StorageSuffix,
+	"*.dfs." + StorageSuffix,
+}
+
+// coversAllNames reports whether an existing certificate carries every name in
+// serverDNSNames. Adding a name to that list must reissue certificates that
+// predate it, or an upgrading user gets an opaque TLS failure.
+func coversAllNames(crt *x509.Certificate) bool {
+	have := make(map[string]bool, len(crt.DNSNames))
+	for _, n := range crt.DNSNames {
+		have[n] = true
+	}
+	for _, want := range serverDNSNames {
+		if !have[want] {
+			return false
+		}
+	}
+	return true
+}
+
 // Certs holds the paths of the local CA and the server certificate.
 //
 // Why TLS at all: the Terraform azurerm provider and the Azure SDKs only talk
@@ -60,7 +101,7 @@ func EnsureCerts(dir string) (*Certs, error) {
 	// Nothing more to do if the server certificate is present and not close to
 	// expiring. The CA is deliberately not part of this check.
 	if fileExists(c.Cert) && fileExists(c.Key) {
-		if crt, err := readCert(c.Cert); err == nil && !needsReissue(crt.NotAfter) && spanOK(crt) {
+		if crt, err := readCert(c.Cert); err == nil && !needsReissue(crt.NotAfter) && spanOK(crt) && coversAllNames(crt) {
 			return c, nil
 		}
 	}
@@ -99,7 +140,7 @@ func EnsureCerts(dir string) (*Certs, error) {
 		NotAfter:     notBefore.Add(certValidity),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{"localhost", "*.localhost", "nimbus", "host.docker.internal"},
+		DNSNames:     serverDNSNames,
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 	}
 	srvDER, err := x509.CreateCertificate(rand.Reader, srvTmpl, caParsed, &srvKey.PublicKey, caKey)

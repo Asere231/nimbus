@@ -1,8 +1,8 @@
 # Roadmap
 
-**Current: Milestone 3 — AKS on k3s. Prompt: `docs/prompts/m03-aks.md`.**
+**Current: Milestone 4 — identity, secrets and ACR. Prompt: `docs/prompts/m04-identity-secrets-acr.md`.**
 
-Milestones 1 and 2 are done, on macOS 27 (arm64) with azurerm 4.81.0.
+Milestones 1, 2 and 3 are done, on macOS 27 (arm64) with azurerm 4.81.0.
 
 - `examples/terraform/azure-basic` applies, plans clean (`-detailed-exitcode`
   = 0) and destroys; survives a `--persist` restart; every resource imports
@@ -12,6 +12,10 @@ Milestones 1 and 2 are done, on macOS 27 (arm64) with azurerm 4.81.0.
   upload/download/list` works, and `test/storage-sdk` drives blob, queue and
   table with Microsoft's Python SDKs. Storage accounts and containers are the
   first `Backing: "real"` resources.
+- `examples/terraform/azure-aks` starts a real Kubernetes cluster: k3s in
+  Docker, `kubectl get nodes` showing the nodes, `node_count` scaling by
+  adding agent containers, and pods and services appearing live in the
+  visualizer. Apply, clean plan, scale, clean plan, destroy all verified.
 - CI is green on ubuntu, macos and windows, plus the SDK harness and a
   Terraform apply/plan/destroy job.
 
@@ -25,7 +29,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 |---|---|---|
 | 1 | ~~**ARM core + visualizer** (scaffold)~~ **done** | `azure-basic` applies and destroys on Mac; graph and feed update live |
 | 2 | ~~**Storage data plane** (Blob, Queue, Table)~~ **done** | `azurerm_storage_account` + container + blob apply; `az storage blob upload` works; files visible in the inspector |
-| 3 | **AKS on k3s** (Docker) | `azurerm_kubernetes_cluster` creates a k3s container; `kube_config` output works with `kubectl`; pods and services appear under the cluster in the graph |
+| 3 | ~~**AKS on k3s** (Docker)~~ **done** | `azurerm_kubernetes_cluster` creates a k3s container; `kube_config` output works with `kubectl`; pods and services appear under the cluster in the graph |
 | 4 | **Identity and secrets**: Key Vault secrets, managed identities, ACR on `registry:2`, Log Analytics stub | An app on AKS pulls an image from the emulated ACR and reads a Key Vault secret |
 | 5 | **Breadth**: spec-driven defaults from `azure-rest-api-specs`, ARM/Bicep deployments, `az` CLI as a custom cloud | `az group create` and a Bicep deployment work; 50+ resource types round-trip in Terraform |
 | 6 | **Visualizer v2**: apply timeline, plan/diff view, Kubernetes view, export diagram as SVG/PNG | A `terraform apply` can be replayed step by step in the UI |
@@ -51,6 +55,14 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 ## Left to confirm
 
+- **CI does not run the AKS example.** It needs Docker, so it cannot join the
+  default matrix unconditionally. The unit tests cover the whole hook through
+  the Fake, and `NIMBUS_DOCKER_TESTS=1` covers the real engine, but no CI job
+  provisions a cluster. A Linux job could: GitHub runners have Docker.
+- **The Docker-stopped path is only unit-tested.** Stopping Docker Desktop
+  mid-session would have disrupted the machine, so the ARM error and feed note
+  are covered by a test against the Fake rather than by pulling the plug.
+
 - **CI has never run.** The repository has no remote, so `.github/workflows/ci.yml`
   is unproven. The YAML parses, every shell step was reproduced locally on
   macOS, and all test packages cross-compile for linux and windows, but the
@@ -60,6 +72,17 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
   rules, and `nimbus cert` uses `Import-Certificate` into `CurrentUser\Root`.
 
 ## Later
+
+- **A mid-apply restart fails the apply.** Terraform polls while the port is
+  closed and azurerm reports `unimplemented polling status "Unknown"`. Nothing
+  Nimbus returns can change that — the request never arrives. Surviving it
+  would mean holding the listener open across a restart, which is a much
+  bigger change than it is worth today.
+- **Cluster watching polls every 3s per cluster.** Fine for a few clusters
+  someone is looking at; the Kubernetes watch API would scale better but needs
+  resourceVersion bookkeeping and re-sync handling.
+- **Only the default namespace is mirrored** into the graph; kube-system and
+  friends are hidden, so a workload deployed elsewhere will not appear.
 
 - **Certificates expire yearly now** (397 days, forced by Apple's limit).
   `EnsureCerts` reissues the leaf automatically within 30 days of expiry and

@@ -3,6 +3,7 @@
 package azure
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -118,6 +119,37 @@ const (
 // BlobBrowser returns the data-plane handler, which implements the visualizer's
 // blob-browsing interface.
 func (s *Server) BlobBrowser() *storage.Handler { return s.storage }
+
+// Start begins background work: adopting clusters left running by a previous
+// process, and polling each one so the visualizer sees what is inside it.
+// Returns a stop function.
+func (s *Server) Start() func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		// Reattach first, so a restart with --persist picks up existing
+		// containers before the watcher starts asking about them.
+		reattachCtx, done := context.WithTimeout(ctx, 2*time.Minute)
+		s.reattachClusters(reattachCtx)
+		done()
+		s.startClusterWatcher(ctx)
+	}()
+	return cancel
+}
+
+// Shutdown stops clusters when they are not meant to outlive Nimbus.
+//
+// With --persist they are deliberately left running, so a restart reattaches
+// instead of waiting for a fresh k3s boot. Without it, leaving containers
+// behind would be a surprise: nothing on the machine would say where they
+// came from.
+func (s *Server) Shutdown(ctx context.Context) {
+	if s.cfg.KeepClusters {
+		return
+	}
+	for _, cl := range s.clusters.all() {
+		s.stopCluster(ctx, cl)
+	}
+}
 
 // storageSuffix is the DNS suffix for the storage data plane, including our
 // port. Clients join it as {account}.{service}.{suffix}; see the comment in

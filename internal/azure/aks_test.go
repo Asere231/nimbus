@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Asere231/nimbus/internal/core"
 	"github.com/Asere231/nimbus/internal/engines/docker"
 )
 
@@ -108,10 +109,21 @@ func TestKubeconfigIsStableAcrossCalls(t *testing.T) {
 	srv, az, _ := newAKSTestServer(t)
 	rg := sub + "/resourceGroups/rg-aks3"
 	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
-	id := rg + "/providers/Microsoft.ContainerService/managedClusters/demo3"
-	do(t, srv, "PUT", id, aksBody(1))
+	id := rg + "/providers/Microsoft.Container" + "Service/managedClusters/demo3"
 
-	// Stand in for a provisioned cluster.
+	// The ARM resource is written straight to the store rather than PUT
+	// through the hook: a PUT would start background provisioning, which
+	// registers its own cluster entry and would race with the stand-in below.
+	// This test is about the credential action, not about provisioning.
+	body, _ := json.Marshal(map[string]any{
+		"id": id, "name": "demo3", "type": typeManagedCluster,
+		"properties": map[string]any{"provisioningState": "Succeeded"},
+	})
+	az.store.Put(&core.Resource{
+		Cloud: "azure", ID: id, Type: typeManagedCluster, Name: "demo3",
+		ParentID: rg, Backing: "real", Body: body,
+	})
+
 	az.clusters.put(&cluster{
 		ResourceID: id, Name: "demo3", Container: "c", Port: 6443,
 		Kubeconfig: renderKubeconfig("demo3", 6443, []byte(fakeCA), []byte(fakeCert), []byte(fakeKey)),

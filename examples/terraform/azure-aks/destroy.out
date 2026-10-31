@@ -1,0 +1,195 @@
+azurerm_resource_group.aks: Refreshing state... [id=/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev]
+azurerm_virtual_network.aks: Refreshing state... [id=/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev/providers/Microsoft.Network/virtualNetworks/vnet-aks-dev]
+azurerm_subnet.nodes: Refreshing state... [id=/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev/providers/Microsoft.Network/virtualNetworks/vnet-aks-dev/subnets/snet-nodes]
+azurerm_kubernetes_cluster.demo: Refreshing state... [id=/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev/providers/Microsoft.ContainerService/managedClusters/aks-nimbus-dev]
+local_file.kubeconfig: Refreshing state... [id=a0536e272d7eb57c714a92cbc9a131ba44d7a5ad]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  - destroy
+
+Terraform will perform the following actions:
+
+  # azurerm_kubernetes_cluster.demo will be destroyed
+  - resource "azurerm_kubernetes_cluster" "demo" {
+      - ai_toolchain_operator_enabled       = false -> null
+      - azure_policy_enabled                = false -> null
+      - cost_analysis_enabled               = false -> null
+      - current_kubernetes_version          = "1.34.12" -> null
+      - custom_ca_trust_certificates_base64 = [] -> null
+      - dns_prefix                          = "nimbusdev" -> null
+      - fqdn                                = "nimbusdev-80f41ee3.hcp.eastus.nimbus.localhost" -> null
+      - http_application_routing_enabled    = false -> null
+      - id                                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev/providers/Microsoft.ContainerService/managedClusters/aks-nimbus-dev" -> null
+      - kube_admin_config                   = (sensitive value) -> null
+      - kube_config                         = (sensitive value) -> null
+      - kube_config_raw                     = (sensitive value) -> null
+      - kubernetes_version                  = "1.34.12" -> null
+      - local_account_disabled              = false -> null
+      - location                            = "eastus" -> null
+      - name                                = "aks-nimbus-dev" -> null
+      - node_os_upgrade_channel             = "NodeImage" -> null
+      - node_resource_group                 = "MC_rg-aks-dev_aks-nimbus-dev_eastus" -> null
+      - node_resource_group_id              = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/MC_rg-aks-dev_aks-nimbus-dev_eastus" -> null
+      - oidc_issuer_enabled                 = false -> null
+      - open_service_mesh_enabled           = false -> null
+      - private_cluster_enabled             = false -> null
+      - private_cluster_public_fqdn_enabled = false -> null
+      - resource_group_name                 = "rg-aks-dev" -> null
+      - role_based_access_control_enabled   = true -> null
+      - run_command_enabled                 = true -> null
+      - sku_tier                            = "Free" -> null
+      - support_plan                        = "KubernetesOfficial" -> null
+      - tags                                = {} -> null
+      - workload_identity_enabled           = false -> null
+        # (10 unchanged attributes hidden)
+
+      - default_node_pool {
+          - auto_scaling_enabled          = false -> null
+          - fips_enabled                  = false -> null
+          - host_encryption_enabled       = false -> null
+          - max_count                     = 0 -> null
+          - max_pods                      = 110 -> null
+          - min_count                     = 0 -> null
+          - name                          = "default" -> null
+          - node_count                    = 3 -> null
+          - node_labels                   = {} -> null
+          - node_public_ip_enabled        = false -> null
+          - only_critical_addons_enabled  = false -> null
+          - orchestrator_version          = "1.34.12" -> null
+          - os_disk_size_gb               = 0 -> null
+          - os_disk_type                  = "Managed" -> null
+          - os_sku                        = "Ubuntu" -> null
+          - scale_down_mode               = "Delete" -> null
+          - tags                          = {} -> null
+          - type                          = "VirtualMachineScaleSets" -> null
+          - ultra_ssd_enabled             = false -> null
+          - vm_size                       = "Standard_DS2_v2" -> null
+          - vnet_subnet_id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev/providers/Microsoft.Network/virtualNetworks/vnet-aks-dev/subnets/snet-nodes" -> null
+          - zones                         = [] -> null
+            # (11 unchanged attributes hidden)
+        }
+
+      - identity {
+          - identity_ids = [] -> null
+          - type         = "SystemAssigned" -> null
+            # (2 unchanged attributes hidden)
+        }
+
+      - kubelet_identity {
+          - client_id                 = "3bbd005a-b837-a6f8-be3e-299213746e56" -> null
+          - object_id                 = "418b8e25-5344-b1bb-6d75-af37d42d9566" -> null
+          - user_assigned_identity_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/MC_rg-aks-dev_aks-nimbus-dev_eastus/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aks-nimbus-dev-agentpool" -> null
+        }
+
+      - network_profile {
+          - dns_service_ip      = "10.0.0.10" -> null
+          - ip_versions         = [] -> null
+          - load_balancer_sku   = "standard" -> null
+          - network_data_plane  = "azure" -> null
+          - network_plugin      = "kubenet" -> null
+          - outbound_type       = "loadBalancer" -> null
+          - pod_cidr            = "10.244.0.0/16" -> null
+          - pod_cidrs           = [] -> null
+          - service_cidr        = "10.0.0.0/16" -> null
+          - service_cidrs       = [] -> null
+            # (3 unchanged attributes hidden)
+        }
+    }
+
+  # azurerm_resource_group.aks will be destroyed
+  - resource "azurerm_resource_group" "aks" {
+      - id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev" -> null
+      - location   = "eastus" -> null
+      - name       = "rg-aks-dev" -> null
+      - tags       = {} -> null
+        # (1 unchanged attribute hidden)
+    }
+
+  # azurerm_subnet.nodes will be destroyed
+  - resource "azurerm_subnet" "nodes" {
+      - address_prefixes                              = [
+          - "10.10.1.0/24",
+        ] -> null
+      - default_outbound_access_enabled               = true -> null
+      - id                                            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev/providers/Microsoft.Network/virtualNetworks/vnet-aks-dev/subnets/snet-nodes" -> null
+      - name                                          = "snet-nodes" -> null
+      - private_endpoint_network_policies             = "Disabled" -> null
+      - private_link_service_network_policies_enabled = true -> null
+      - resource_group_name                           = "rg-aks-dev" -> null
+      - service_endpoint_policy_ids                   = [] -> null
+      - service_endpoints                             = [] -> null
+      - virtual_network_name                          = "vnet-aks-dev" -> null
+        # (1 unchanged attribute hidden)
+    }
+
+  # azurerm_virtual_network.aks will be destroyed
+  - resource "azurerm_virtual_network" "aks" {
+      - address_space                  = [
+          - "10.10.0.0/16",
+        ] -> null
+      - dns_servers                    = [] -> null
+      - flow_timeout_in_minutes        = 0 -> null
+      - guid                           = "4af91a3d-6c14-4a8b-b6db-828ea1b8da97" -> null
+      - id                             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev/providers/Microsoft.Network/virtualNetworks/vnet-aks-dev" -> null
+      - location                       = "eastus" -> null
+      - name                           = "vnet-aks-dev" -> null
+      - private_endpoint_vnet_policies = "Disabled" -> null
+      - resource_group_name            = "rg-aks-dev" -> null
+      - subnet                         = [
+          - {
+              - address_prefixes                              = [
+                  - "10.10.1.0/24",
+                ]
+              - default_outbound_access_enabled               = true
+              - delegation                                    = []
+              - id                                            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev/providers/Microsoft.Network/virtualNetworks/vnet-aks-dev/subnets/snet-nodes"
+              - name                                          = "snet-nodes"
+              - private_endpoint_network_policies             = "Disabled"
+              - private_link_service_network_policies_enabled = true
+              - service_endpoint_policy_ids                   = []
+              - service_endpoints                             = []
+                # (2 unchanged attributes hidden)
+            },
+        ] -> null
+      - tags                           = {} -> null
+        # (2 unchanged attributes hidden)
+    }
+
+  # local_file.kubeconfig will be destroyed
+  - resource "local_file" "kubeconfig" {
+      - content              = (sensitive value) -> null
+      - content_base64sha256 = "2mHXjRRPSxmCMm4EDD/H8IJ2jnQkLwcgg73G2utuHE8=" -> null
+      - content_base64sha512 = "QgZig3AToOSC0twPTYO1BM+3x5hUqhmkrHUIh27smB+pMN6L76g2uwTrjezLr7LDXjpRX+GKXNTFQV1KkxG5mA==" -> null
+      - content_md5          = "b2e785a4b1ed7d668cbc21c9f0f874bb" -> null
+      - content_sha1         = "a0536e272d7eb57c714a92cbc9a131ba44d7a5ad" -> null
+      - content_sha256       = "da61d78d144f4b1982326e040c3fc7f082768e74242f072083bdc6daeb6e1c4f" -> null
+      - content_sha512       = "420662837013a0e482d2dc0f4d83b504cfb7c79854aa19a4ac7508876eec981fa930de8befa836bb04eb8deccbafb2c35e3a515fe18a5cd4c5415d4a9311b998" -> null
+      - directory_permission = "0777" -> null
+      - file_permission      = "0600" -> null
+      - filename             = "./kubeconfig" -> null
+      - id                   = "a0536e272d7eb57c714a92cbc9a131ba44d7a5ad" -> null
+    }
+
+Plan: 0 to add, 0 to change, 5 to destroy.
+
+Changes to Outputs:
+  - cluster_fqdn = "nimbusdev-80f41ee3.hcp.eastus.nimbus.localhost" -> null
+  - kubectl      = "kubectl --kubeconfig ./kubeconfig get nodes" -> null
+local_file.kubeconfig: Destroying... [id=a0536e272d7eb57c714a92cbc9a131ba44d7a5ad]
+local_file.kubeconfig: Destruction complete after 0s
+azurerm_kubernetes_cluster.demo: Destroying... [id=/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev/providers/Microsoft.ContainerService/managedClusters/aks-nimbus-dev]
+azurerm_kubernetes_cluster.demo: Still destroying... [id=/subscriptions/00000000-0000-0000-0000-...Service/managedClusters/aks-nimbus-dev, 00m10s elapsed]
+azurerm_kubernetes_cluster.demo: Destruction complete after 10s
+azurerm_subnet.nodes: Destroying... [id=/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev/providers/Microsoft.Network/virtualNetworks/vnet-aks-dev/subnets/snet-nodes]
+azurerm_subnet.nodes: Still destroying... [id=/subscriptions/00000000-0000-0000-0000-...tworks/vnet-aks-dev/subnets/snet-nodes, 00m10s elapsed]
+azurerm_subnet.nodes: Destruction complete after 10s
+azurerm_virtual_network.aks: Destroying... [id=/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev/providers/Microsoft.Network/virtualNetworks/vnet-aks-dev]
+azurerm_virtual_network.aks: Still destroying... [id=/subscriptions/00000000-0000-0000-0000-...t.Network/virtualNetworks/vnet-aks-dev, 00m10s elapsed]
+azurerm_virtual_network.aks: Destruction complete after 10s
+azurerm_resource_group.aks: Destroying... [id=/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev]
+azurerm_resource_group.aks: Still destroying... [id=/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev, 00m10s elapsed]
+azurerm_resource_group.aks: Still destroying... [id=/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-dev, 00m20s elapsed]
+azurerm_resource_group.aks: Destruction complete after 20s
+
+Destroy complete! Resources: 5 destroyed.

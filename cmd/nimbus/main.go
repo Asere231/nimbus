@@ -30,7 +30,7 @@ import (
 	"github.com/Asere231/nimbus/internal/ui"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -107,7 +107,9 @@ func start(args []string) {
 	if dataDir != "" {
 		azCfg.DataDir = filepath.Join(dataDir, "storage")
 	}
+	azCfg.KeepClusters = *persist
 	az := azure.New(azCfg, store, bus)
+	stopBackground := az.Start()
 	uiURL := fmt.Sprintf("http://%s:%d", *host, *uiPort)
 
 	azSrv := &http.Server{Addr: fmt.Sprintf(":%d", *azPort), Handler: az, TLSConfig: tlsCfg, ReadHeaderTimeout: 10 * time.Second}
@@ -152,10 +154,19 @@ func start(args []string) {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
+	stopBackground()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_ = azSrv.Shutdown(ctx)
 	_ = uiSrv.Shutdown(ctx)
+
+	// Clusters are torn down unless --persist asked for them to survive.
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelShutdown()
+	if !*persist {
+		fmt.Println("  stopping clusters (use --persist to leave them running)...")
+	}
+	az.Shutdown(shutdownCtx)
 }
 
 // blobBrowser adapts the Azure storage handler to the visualizer's interface.

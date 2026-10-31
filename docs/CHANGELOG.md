@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.3.0 — 2026-10-30
+
+Milestone 3: AKS. `azurerm_kubernetes_cluster` starts a real Kubernetes
+cluster — k3s in Docker — and `kubectl` talks to its actual API.
+
+- **`internal/engines/docker`**: the `docker` CLI driven through
+  `exec.Command`, with a `Fake` so the whole AKS hook is testable without a
+  daemon. Daemon-down is recognised across runtimes and never mistaken for an
+  operational failure; every call is timeout-bounded, because a hang tells you
+  nothing while an error names Docker.
+- **Real async operations.** The operation endpoint tracks per-operation
+  state instead of always answering `Succeeded`, and `Hook` gained
+  `Provision`/`Deprovision`, which run in the background while the write is
+  answered immediately with `provisioningState: Creating`.
+- **`examples/terraform/azure-aks`** applies, plans clean, scales
+  `node_count` by adding agent containers, plans clean again, and destroys
+  every container.
+- **Credentials** are built from k3s's PEM files read out of the container,
+  not from `k3s.yaml` — generating a kubeconfig is string formatting, parsing
+  YAML is the one thing the stdlib cannot do. The same certificates give
+  Nimbus an HTTPS client for the cluster API, so no `client-go` either.
+- **The visualizer shows what is inside the cluster**: nodes, deployments,
+  pods and services polled every few seconds and mirrored into the resource
+  store, so the browser needs no Kubernetes knowledge.
+- With `--persist`, clusters survive a restart and Nimbus reattaches to them,
+  rebuilding the identical kubeconfig from the same container's certificates.
+
+Bugs found by running the real provider: `kubeletidentity.resourceId` must be
+a full ARM ID, not a name; and azurerm scales a node pool by writing the
+`agentPools` child and reading the count back off the parent, so the two must
+be mirrored.
+
 ## 0.2.0 — 2026-10-30
 
 Milestone 2: the storage data plane. Storage accounts and containers are the

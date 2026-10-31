@@ -34,6 +34,11 @@
     "microsoft.storage/storageaccounts/tableservices": ["TSVC", "#8b949e", "Table service"],
     "microsoft.storage/storageaccounts/fileservices": ["FSVC", "#8b949e", "File service"],
     "microsoft.containerservice/managedclusters": ["AKS", "#326ce5", "Kubernetes cluster"],
+    "microsoft.containerservice/managedclusters/agentpools": ["POOL", "#5b8def", "Node pool"],
+    "nimbus.kubernetes/nodes": ["NODE", "#326ce5", "Node"],
+    "nimbus.kubernetes/deployments": ["DEPL", "#7aa2f7", "Deployment"],
+    "nimbus.kubernetes/pods": ["POD", "#3fb950", "Pod"],
+    "nimbus.kubernetes/services": ["SVC", "#ffa657", "Service"],
     "microsoft.containerregistry/registries": ["ACR", "#58a6ff", "Container registry"],
     "microsoft.keyvault/vaults": ["KV", "#e3b341", "Key vault"],
     "microsoft.managedidentity/userassignedidentities": ["ID", "#bc8cff", "Managed identity"],
@@ -225,7 +230,8 @@
     return roots;
   }
 
-  const ORDER = ["subscriptions", "resourcegroups", "virtualnetworks", "subnets", "networksecuritygroups", "storageaccounts", "containers"];
+  const ORDER = ["subscriptions", "resourcegroups", "virtualnetworks", "subnets", "networksecuritygroups",
+    "storageaccounts", "containers", "managedclusters", "agentpools", "nodes", "deployments", "services", "pods"];
   function typeOrder(type) {
     const last = type.toLowerCase().split("/").pop();
     const i = ORDER.indexOf(last);

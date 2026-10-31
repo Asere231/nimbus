@@ -953,13 +953,20 @@ func TestSynchronousTypesStillReportSucceededImmediately(t *testing.T) {
 	}
 }
 
-// An unknown operation ID must 404 rather than claim success, or a client
-// polling a stale URL would believe work it never started had finished.
+// An unknown operation 404s, as real ARM does, and must never be reported as
+// success -- a client polling a stale URL would otherwise believe work it
+// never started had finished, and for a delete, that the resource was gone.
+//
+// Measured against azurerm 4.81.0: the 404 is not mistaken for success.
 func TestUnknownOperationIs404(t *testing.T) {
 	srv, _ := newTestServer(t)
 	path := sub + operationsPath + "00000000-0000-0000-0000-00000000dead"
-	if code, _ := do(t, srv, "GET", path, nil); code != 404 {
+	code, body := do(t, srv, "GET", path, nil)
+	if code != 404 {
 		t.Errorf("unknown operation = %d, want 404", code)
+	}
+	if body["status"] == "Succeeded" {
+		t.Error("an unknown operation must never report success")
 	}
 }
 

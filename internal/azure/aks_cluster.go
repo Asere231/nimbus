@@ -41,6 +41,11 @@ type cluster struct {
 	// M2's Content-MD5, where inventing a value per request made the plan
 	// never settle.
 	Kubeconfig []byte
+	// The PEM material behind that kubeconfig, kept so Nimbus can talk to the
+	// cluster API itself without re-parsing what it generated.
+	CA   []byte
+	Cert []byte
+	Key  []byte
 
 	Agents []string // agent container names, in pool order
 }
@@ -246,6 +251,7 @@ func (s *Server) waitForCluster(ctx context.Context, cl *cluster) error {
 		}
 	}
 
+	cl.CA, cl.Cert, cl.Key = serverCA, adminCert, adminKey
 	cl.Kubeconfig = renderKubeconfig(cl.Name, cl.Port, serverCA, adminCert, adminKey)
 
 	// 2. Wait for the API to answer through the PUBLISHED port, which is the

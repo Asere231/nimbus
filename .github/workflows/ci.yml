@@ -163,6 +163,82 @@ jobs:
         working-directory: test/storage-sdk
         run: ./run.sh stnimbusdata
 
+  # AKS needs Docker, so it is its own job rather than part of the matrix.
+  # GitHub's Linux runners have a daemon, so this really does boot k3s.
+  aks:
+    name: terraform azure-aks (k3s)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Docker and k3s image
+        run: |
+          docker version --format '{{.Server.Version}}'
+          docker pull rancher/k3s:v1.34.12-k3s1
+
+      - name: Engine tests against a real daemon
+        run: NIMBUS_DOCKER_TESTS=1 go test ./internal/engines/... -count=1
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus cert
+          ./bin/nimbus start --persist &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, kubectl, scale, destroy
+        working-directory: examples/terraform/azure-aks
+        run: |
+          set -euo pipefail
+          export SSL_CERT_FILE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          # The cluster must be a real one, not just an ARM record.
+          kubectl --kubeconfig ./kubeconfig wait --for=condition=Ready node --all --timeout=300s
+          kubectl --kubeconfig ./kubeconfig get nodes
+
+          set +e; terraform plan -detailed-exitcode -input=false; code=$?; set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::plan -detailed-exitcode returned $code; expected 0"
+            exit 1
+          fi
+
+          # node_count is real: scaling must add a node.
+          terraform apply -auto-approve -input=false -var node_count=3
+          for i in $(seq 1 40); do
+            n=$(kubectl --kubeconfig ./kubeconfig get nodes --no-headers | wc -l)
+            [ "$n" -ge 3 ] && break
+            sleep 5
+          done
+          kubectl --kubeconfig ./kubeconfig get nodes
+          [ "$(kubectl --kubeconfig ./kubeconfig get nodes --no-headers | wc -l)" -ge 3 ] || {
+            echo "::error::scaling to node_count=3 did not add a node"; exit 1; }
+
+          terraform destroy -auto-approve -input=false -var node_count=3
+
+      - name: No containers left behind
+        run: |
+          left=$(docker ps -aq --filter label=nimbus.cluster)
+          if [ -n "$left" ]; then
+            echo "::error::destroy left containers running:"
+            docker ps -a --filter label=nimbus.cluster
+            exit 1
+          fi
+
   terraform:
     name: terraform examples
     runs-on: ubuntu-latest

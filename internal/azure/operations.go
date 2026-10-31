@@ -131,9 +131,21 @@ func (s *Server) handleOperation(w http.ResponseWriter, r *http.Request) string 
 	id := operationIDFromPath(r.URL.Path)
 	op := s.ops.get(id)
 	if op == nil {
-		// An unknown ID must not be reported as success. A client polling a
-		// stale URL would otherwise believe work it never started had
-		// finished -- and for a delete, that it had been deleted.
+		// 404, as real ARM does.
+		//
+		// Measured against azurerm 4.81.0: a 404 here is NOT mistaken for
+		// success, so a client polling a stale URL will not believe work it
+		// never started had finished -- which is the failure that matters.
+		//
+		// Restarting Nimbus mid-apply does fail the apply, with
+		//
+		//	polling after CreateOrUpdate: unimplemented polling status "Unknown"
+		//
+		// but that comes from the poll hitting a CLOSED PORT while Nimbus is
+		// down, not from this response: the status is "Unknown", which is how
+		// the SDK reports a connection error, and it never reaches here.
+		// Returning something friendlier than a 404 would therefore change
+		// nothing, so this matches ARM instead.
 		writeError(w, 404, "OperationNotFound",
 			"No operation with ID '%s'. Operations do not survive a restart of Nimbus.", id)
 		return "unknown operation"

@@ -22,8 +22,10 @@ provider_installation {
 }
 ```
 
-From Milestone 3 (AKS on k3s), also pre-pull the images while online:
+From Milestone 3 (AKS on k3s), also pre-pull the k3s image while online. The
+tag is pinned in `internal/azure/server.go` (`DefaultK3sImage`) and matched to
+a kubectl minor version, so keep the two in step if you change it:
 
 ```bash
-docker pull rancher/k3s:v1.30.6-k3s1
+docker pull rancher/k3s:v1.34.12-k3s1
 ```

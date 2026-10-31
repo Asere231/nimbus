@@ -1,8 +1,9 @@
 # Roadmap
 
-**Current: Milestone 5 — breadth. Prompt: `docs/prompts/m05-breadth.md`.**
+**Current: Milestone 6 — visualizer v2. Prompt: `docs/prompts/m06-visualizer-v2.md`.**
 
-Milestones 1 to 4 are done, on macOS 27 (arm64) with azurerm 4.81.0.
+Milestones 1 to 5 are done, on macOS 27 (arm64) with azurerm 4.81.0 and
+az 2.90.0.
 
 - `examples/terraform/azure-basic` applies, plans clean (`-detailed-exitcode`
   = 0) and destroys; survives a `--persist` restart; every resource imports
@@ -23,8 +24,17 @@ Milestones 1 to 4 are done, on macOS 27 (arm64) with azurerm 4.81.0.
 - `nimbus az register` makes the `az` CLI talk to Nimbus: `az login`,
   `az account list`, and `az keyvault secret show`/`set` against the vault
   Terraform created, all verified on macOS with az 2.90.0.
-- CI is green on ubuntu, macos and windows, plus the SDK harness and the
-  Terraform apply/plan/destroy jobs.
+- 53 resource types are modelled from Microsoft's own OpenAPI specs rather
+  than hand-written hooks: `tools/specgen` emits the table, `put()` applies it,
+  and a test matrix round-trips every one of them through PUT, GET, list and
+  DELETE. The visualizer counts what is still accepted-only.
+- ARM template deployments work at resource-group scope, including the Bicep
+  expression subset, resource and property copy loops, dependency ordering,
+  outputs, `validate` and `what-if`. `examples/bicep` deploys through the real
+  `az` CLI and redeploys as a no-op.
+- CI is green on ubuntu, macos and windows, plus the SDK harness, the
+  generator's tests, the Terraform apply/plan/destroy jobs and an az + Bicep
+  deployment job.
 
 Each milestone has a session prompt in `docs/prompts/` (see its README).
 
@@ -38,7 +48,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 | 2 | ~~**Storage data plane** (Blob, Queue, Table)~~ **done** | `azurerm_storage_account` + container + blob apply; `az storage blob upload` works; files visible in the inspector |
 | 3 | ~~**AKS on k3s** (Docker)~~ **done** | `azurerm_kubernetes_cluster` creates a k3s container; `kube_config` output works with `kubectl`; pods and services appear under the cluster in the graph |
 | 4 | ~~**Identity and secrets**: Key Vault secrets, managed identities, ACR on `registry:2`, Log Analytics stub~~ **done** | An app on AKS pulls an image from the emulated ACR and reads a Key Vault secret |
-| 5 | **Breadth**: spec-driven defaults from `azure-rest-api-specs`, ARM/Bicep deployments, `az` CLI as a custom cloud | `az group create` and a Bicep deployment work; 50+ resource types round-trip in Terraform |
+| 5 | ~~**Breadth**: spec-driven defaults from `azure-rest-api-specs`, ARM/Bicep deployments, `az` CLI as a custom cloud~~ **done** | `az group create` and a Bicep deployment work; 50+ resource types round-trip in Terraform |
 | 6 | **Visualizer v2**: apply timeline, plan/diff view, Kubernetes view, export diagram as SVG/PNG | A `terraform apply` can be replayed step by step in the UI |
 
 ## Phase 2 — AWS (port 4702)
@@ -62,6 +72,12 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 ## Left to confirm
 
+- **The M5 `az` commands have only been run in CI**, on Linux. `az group
+  create`, `az network vnet create`, `az resource list` and `az deployment
+  group create` all pass there against the committed example, but nobody has
+  run them on the owner's macOS machine yet, and `az bicep build` has never
+  been run at all — `examples/bicep/main.json` was written by hand to match
+  `main.bicep`, so the two could drift.
 - **No Key Vault SDK harness.** `test/storage-sdk` drives blobs, queues and
   tables with Microsoft's Python SDKs; the vault has no equivalent, so the
   challenge flow is only proven against azurerm and the az CLI.
@@ -76,6 +92,13 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
   `nimbus cert` uses `Import-Certificate` into `CurrentUser\Root`.
 
 ## Later
+
+- **Deployments are resource-group scope only.** `az deployment sub create`,
+  management-group and tenant scope, nested deployments, `templateLink` (which
+  would fetch over the network) and Complete mode are all unimplemented.
+- **Two spec types have nothing to fill**: `Microsoft.Compute/sshPublicKeys`
+  and `Microsoft.Sql/servers/firewallRules` genuinely declare no read-only
+  field and no default, so the table skips them.
 
 - **Only secrets are emulated in Key Vault.** Keys and certificates answer 501
   NotSupported, except the certificate CONTACTS list, which exists because

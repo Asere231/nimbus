@@ -65,18 +65,24 @@ eval "$(./bin/nimbus env azure)"          # PowerShell: ./bin/nimbus.exe env azu
 | Tier | Resource types | Behaviour |
 |---|---|---|
 | Real | Storage accounts and containers, AKS clusters and node pools, Key Vaults, container registries | Something actually runs: bytes on disk, k3s in Docker, a `registry:2` container, secrets you can read back with a client |
-| Modelled | Resource groups, virtual networks, subnets, managed identities, role assignments and definitions, Log Analytics workspaces | Validation, server-generated fields, parent/child sync, cascade delete |
+| Modelled by hand | Resource groups, virtual networks, subnets, managed identities, role assignments and definitions, Log Analytics workspaces | Validation, server-generated fields, parent/child sync, cascade delete |
+| Modelled from the specs | 53 more types across networking, compute, web, data and integration | Read-only fields and defaults taken from Microsoft's own OpenAPI specs, applied generically — no hook per type |
 | Accepted | Any other ARM type | Stored and returned with `provisioningState: Succeeded`; nothing runs behind it |
 | Actions | `listKeys`, `listClusterUserCredential`, `listCredentials`, `sharedKeys`, … | Answered for the types above; anything else returns `{}` and shows as "unimplemented" in the activity feed |
 
 Data planes: Blob, Queue and Table (Shared Key verified, real bytes), and Key
-Vault secrets (challenge auth, versions, soft delete). `az storage blob` works
-from a connection string, and `nimbus az register` sets `az` up as a custom
-cloud for `az keyvault`.
+Vault secrets (challenge auth, versions, soft delete).
 
-Not yet: AWS and GCP, ARM/Bicep deployments, and the breadth of types a
-spec-driven generator would bring. Those are the next milestones — see
-`docs/ROADMAP.md`.
+**ARM and Bicep templates deploy**: `az deployment group create --template-file
+main.bicep` expands the template and creates each resource through the normal
+path, so it appears in the visualizer as it goes. See `examples/bicep`.
+
+**The `az` CLI works** as a custom cloud — `nimbus az register --run`, then
+`az group create`, `az network vnet create`, `az resource list`, `az keyvault
+secret set/show` and `az storage blob`.
+
+Not yet: AWS and GCP, deployments at subscription scope or above, and the
+timeline/diff views the visualizer is getting next — see `docs/ROADMAP.md`.
 
 ## Repo layout
 
@@ -84,8 +90,11 @@ spec-driven generator would bring. Those are the next milestones — see
 cmd/nimbus/            CLI: start, cert, env, az register
 internal/core/         cloud-agnostic engine: store, event bus, certs, persistence
 internal/azure/        ARM emulator: routing, identity/metadata, generic CRUD, per-type hooks
+internal/azure/deployments/  ARM template expressions, copy loops, dependency ordering
 internal/ui/           visualizer API + SSE, and the embedded web app (static/)
+tools/specgen/         generates the spec-derived type table (separate Go module; the only thing that fetches anything)
 examples/terraform/    configs to apply against Nimbus
+examples/bicep/        an ARM/Bicep template to deploy with az
 test/sdkcompat/        drives Nimbus with hashicorp/go-azure-sdk (separate Go module)
 docs/                  roadmap, offline setup
 ```

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.5.0 — 2026-10-31
+
+Milestone 5: breadth. Most Azure types now have the right shape without
+anyone hand-writing a hook, and ARM/Bicep templates deploy.
+
+- **Spec-driven types.** `tools/specgen` (its own module; the main module
+  stays stdlib-only) reads Microsoft's published OpenAPI specs and emits the
+  table of fields the server owns — 53 types, 444 fields, from the AZ-104/305
+  scope. `put()` applies it to any type with no hook, so a NAT gateway comes
+  back with `etag`, `resourceGuid`, `provisioningState` and an empty `subnets`
+  array that nobody wrote code for. The specs are fetched and cached; only the
+  generated table is committed.
+- **Three rules the table obeys**, each tested: never overwrite what the
+  client sent, never invent a nested object the client did not ask for, and
+  derive every generated value from the resource ID so two identical writes
+  read back identically.
+- **Template deployments.** `Microsoft.Resources/deployments` expands a
+  template and creates each resource by PUTting it back through the same
+  server, so hooks run and the visualizer draws each one appearing. Includes
+  the expression language Bicep emits, resource *and* property copy loops,
+  dependency ordering from `dependsOn` and from any `resourceId()` in a body,
+  outputs with `reference()`, `validate`, `what-if` and deployment operations.
+- **`examples/bicep`** deploys a VNet, its subnets, an NSG and a storage
+  account through the real `az` CLI, and redeploying it changes nothing.
+- **A third tier in the visualizer.** Resources are now "accepted (state
+  only)", "modelled from the API spec" or "backed by a local engine", and the
+  header counts how many are still accepted-only.
+- Etags are derived from the resource ID rather than regenerated per write,
+  which is what made a redeploy a true no-op.
+
 ## 0.4.1 — 2026-10-31
 
 Fixes found while proving `az keyvault` against Nimbus on macOS, which is now

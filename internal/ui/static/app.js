@@ -20,6 +20,7 @@
   const TYPES = {
     "microsoft.resources/subscriptions": ["SUB", "#a371f7", "Subscription"],
     "microsoft.resources/resourcegroups": ["RG", "#4aa3ff", "Resource group"],
+    "microsoft.resources/deployments": ["DEPLOY", "#a371f7", "Template deployment"],
     "microsoft.network/virtualnetworks": ["VNET", "#39c5cf", "Virtual network"],
     "microsoft.network/virtualnetworks/subnets": ["SNET", "#56d4bc", "Subnet"],
     "microsoft.network/networksecuritygroups": ["NSG", "#f0883e", "Network security group"],

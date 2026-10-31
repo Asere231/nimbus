@@ -62,17 +62,18 @@ const (
 
 // Server is the Azure plugin.
 type Server struct {
-	cfg        Config
-	store      *core.Store
-	bus        *core.Bus
-	hooks      map[string]Hook
-	storage    *storage.Handler
-	keyvault   *keyvault.Handler
-	ops        *operations
-	vaults     *deletedVaults
-	docker     docker.Client
-	clusters   *clusters
-	registries *registries
+	cfg           Config
+	store         *core.Store
+	bus           *core.Bus
+	hooks         map[string]Hook
+	storage       *storage.Handler
+	keyvault      *keyvault.Handler
+	ops           *operations
+	deploymentOps *deploymentOperations
+	vaults        *deletedVaults
+	docker        docker.Client
+	clusters      *clusters
+	registries    *registries
 }
 
 // New creates the Azure emulator.
@@ -104,14 +105,15 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	s := &Server{
 		cfg: cfg, store: store, bus: bus,
-		hooks:      map[string]Hook{},
-		storage:    storage.NewHandler(storage.NewStore()),
-		keyvault:   keyvault.NewHandler(keyvault.NewStore()),
-		ops:        newOperations(),
-		vaults:     newDeletedVaults(),
-		docker:     docker.NewCLI(),
-		clusters:   newClusters(),
-		registries: newRegistries(),
+		hooks:         map[string]Hook{},
+		storage:       storage.NewHandler(storage.NewStore()),
+		keyvault:      keyvault.NewHandler(keyvault.NewStore()),
+		ops:           newOperations(),
+		deploymentOps: newDeploymentOperations(),
+		vaults:        newDeletedVaults(),
+		docker:        docker.NewCLI(),
+		clusters:      newClusters(),
+		registries:    newRegistries(),
 	}
 	// The challenge a Key Vault client gets points at our own login endpoint,
 	// and asks for a token for Azure's Key Vault audience -- which our token
@@ -136,6 +138,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	registerAuthorizationHooks(s)
 	registerLogAnalyticsHooks(s)
 	registerKeyVaultHooks(s)
+	registerDeploymentHooks(s)
 	registerACRHooks(s)
 	return s
 }

@@ -95,6 +95,11 @@ func (s *Server) handleARM(w http.ResponseWriter, r *http.Request) string {
 	if isKeyVaultSubscriptionPath(t) {
 		return s.handleKeyVaultSubscriptionPath(w, r, t)
 	}
+	// A deployment's operations list is a collection with no resources of its
+	// own: it is served from what the deployment recorded as it ran.
+	if isDeploymentOperationsPath(t) && r.Method == http.MethodGet {
+		return s.handleDeploymentOperations(w, t)
+	}
 
 	switch t.Kind {
 	case "subscriptions":
@@ -445,13 +450,19 @@ func (s *Server) runDeleteHooks(deleted []*core.Resource) {
 // an empty object and are flagged in the activity feed, so missing features
 // are easy to spot while you work.
 func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, t target) string {
-	if t.ID != "" && !s.store.Exists(t.ID) {
-		writeError(w, 404, "ResourceNotFound", "The Resource '%s' was not found.", t.ID)
-		return ""
-	}
 	body, err := readBody(r)
 	if err != nil {
 		writeError(w, 400, "InvalidRequestContent", "%v", err)
+		return ""
+	}
+	// validate and what-if are asked about a deployment that does not exist
+	// yet -- that is the point of them -- so they come before the existence
+	// check every other action needs.
+	if s.deploymentAction(w, t, body) {
+		return ""
+	}
+	if t.ID != "" && !s.store.Exists(t.ID) {
+		writeError(w, 404, "ResourceNotFound", "The Resource '%s' was not found.", t.ID)
 		return ""
 	}
 	if out, ok := s.clusterAction(t, body); ok {

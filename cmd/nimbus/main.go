@@ -125,21 +125,29 @@ func start(args []string) {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// Bind both ports and KEEP the listeners. Probing a port and closing it
+	// again leaves a gap in which something else can take it -- including the
+	// previous Nimbus you just stopped -- and the failure then surfaces from
+	// inside a goroutine, after the banner has already claimed success.
+	listeners := make([]net.Listener, 0, 2)
 	for _, addr := range []string{azSrv.Addr, uiSrv.Addr} {
-		if ln, err := net.Listen("tcp", addr); err != nil {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			for _, open := range listeners {
+				open.Close()
+			}
 			log.Fatalf("port %s is busy: %v", addr, err)
-		} else {
-			ln.Close()
 		}
+		listeners = append(listeners, ln)
 	}
 
 	go func() {
-		if err := azSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := azSrv.ServeTLS(listeners[0], "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("azure: %v", err)
 		}
 	}()
 	go func() {
-		if err := uiSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := uiSrv.Serve(listeners[1]); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("ui: %v", err)
 		}
 	}()

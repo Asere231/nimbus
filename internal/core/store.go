@@ -24,7 +24,7 @@ type Resource struct {
 	Name      string          `json:"name"`      // short name
 	ParentID  string          `json:"parentId"`  // containing resource: RG, VNet, subscription, account...
 	Location  string          `json:"location"`  // region, if any
-	Backing   string          `json:"backing"`   // "state" (accepted only) or "real" (a local engine runs it)
+	Backing   string          `json:"backing"`   // "state" (accepted only), "modelled" (shape known) or "real" (a local engine runs it)
 	Body      json.RawMessage `json:"body"`      // the API representation
 	CreatedAt time.Time       `json:"createdAt"` //
 	UpdatedAt time.Time       `json:"updatedAt"` //

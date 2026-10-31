@@ -261,6 +261,10 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 	// than in a per-type hook. Hooks run after this and can still override.
 	fillIdentity(s, t, body, existing)
 
+	// Fields Microsoft's own specs say the server owns, for the types nobody
+	// wrote a hook for. Runs before the hook so a hook always wins.
+	applySpecDefaults(t, body)
+
 	h := s.hookFor(t.Type)
 	if h.BeforePut != nil {
 		if aerr := h.BeforePut(s, t, body, existing); aerr != nil {
@@ -271,9 +275,15 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 
 	raw, _ := json.Marshal(body)
 	loc, _ := body["location"].(string)
+	// Three tiers, which the visualizer draws and counts: a local engine
+	// really runs it, the shape is modelled (a hook or the spec table), or it
+	// is merely accepted and stored.
 	backing := h.Backing
 	if backing == "" {
 		backing = "state"
+		if s.isModelled(t.Type) {
+			backing = "modelled"
+		}
 	}
 	created := s.store.Put(&core.Resource{
 		Cloud: "azure", ID: t.ID, Type: t.Type, Name: t.Name, ParentID: t.ParentID,
@@ -316,7 +326,7 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 		s.markAsync(w, t)
 	}
 	writeRaw(w, status, raw)
-	if _, known := s.hooks[strings.ToLower(t.Type)]; !known && t.Kind == "resource" {
+	if t.Kind == "resource" && !s.isModelled(t.Type) {
 		return "accepted (state only): " + t.Type
 	}
 	return ""

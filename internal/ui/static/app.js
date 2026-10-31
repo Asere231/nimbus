@@ -47,7 +47,66 @@
     "microsoft.web/serverfarms": ["ASP", "#1f6feb", "App Service plan"],
     "microsoft.web/sites": ["APP", "#388bfd", "App Service"],
     "microsoft.compute/virtualmachines": ["VM", "#f778ba", "Virtual machine"],
+    "microsoft.compute/virtualmachines/extensions": ["EXT", "#f9a8d4", "VM extension"],
+    "microsoft.compute/virtualmachinescalesets": ["VMSS", "#f778ba", "Scale set"],
+    "microsoft.compute/disks": ["DISK", "#d2a8ff", "Managed disk"],
+    "microsoft.compute/snapshots": ["SNAP", "#b392f0", "Snapshot"],
+    "microsoft.compute/availabilitysets": ["AVSET", "#8b949e", "Availability set"],
+    "microsoft.compute/images": ["IMG", "#8b949e", "Image"],
+    "microsoft.compute/galleries": ["GAL", "#8b949e", "Compute gallery"],
+    "microsoft.compute/sshpublickeys": ["SSH", "#8b949e", "SSH public key"],
+    "microsoft.compute/proximityplacementgroups": ["PPG", "#8b949e", "Proximity placement group"],
+    "microsoft.network/networksecuritygroups/securityrules": ["RULE", "#f0883e", "Security rule"],
+    "microsoft.network/natgateways": ["NAT", "#39c5cf", "NAT gateway"],
+    "microsoft.network/routetables/routes": ["ROUTE", "#a5d6ff", "Route"],
+    "microsoft.network/virtualnetworks/virtualnetworkpeerings": ["PEER", "#56d4bc", "VNet peering"],
+    "microsoft.network/privateendpoints": ["PE", "#79c0ff", "Private endpoint"],
+    "microsoft.network/privatednszones": ["PDNS", "#a5d6ff", "Private DNS zone"],
+    "microsoft.network/privatednszones/virtualnetworklinks": ["LINK", "#a5d6ff", "Private DNS link"],
+    "microsoft.network/dnszones": ["DNS", "#a5d6ff", "DNS zone"],
+    "microsoft.network/applicationgateways": ["AGW", "#ffa657", "Application gateway"],
+    "microsoft.network/azurefirewalls": ["FW", "#f0883e", "Azure Firewall"],
+    "microsoft.network/firewallpolicies": ["FWP", "#f0883e", "Firewall policy"],
+    "microsoft.network/bastionhosts": ["BAS", "#d2a8ff", "Bastion host"],
+    "microsoft.network/applicationsecuritygroups": ["ASG", "#f0883e", "Application security group"],
+    "microsoft.network/virtualnetworkgateways": ["VGW", "#39c5cf", "VNet gateway"],
+    "microsoft.network/networkwatchers": ["NW", "#8b949e", "Network watcher"],
+    "microsoft.web/sites/slots": ["SLOT", "#388bfd", "Deployment slot"],
+    "microsoft.web/staticsites": ["SWA", "#388bfd", "Static web app"],
+    "microsoft.insights/components": ["AI", "#bc8cff", "Application Insights"],
+    "microsoft.insights/autoscalesettings": ["SCALE", "#8b949e", "Autoscale setting"],
+    "microsoft.insights/actiongroups": ["AG", "#8b949e", "Action group"],
+    "microsoft.insights/metricalerts": ["ALERT", "#f0883e", "Metric alert"],
+    "microsoft.sql/servers": ["SQL", "#3fb950", "SQL server"],
+    "microsoft.sql/servers/databases": ["DB", "#2ea043", "SQL database"],
+    "microsoft.sql/servers/firewallrules": ["SQLFW", "#8b949e", "SQL firewall rule"],
+    "microsoft.documentdb/databaseaccounts": ["COSMOS", "#39c5cf", "Cosmos DB account"],
+    "microsoft.cache/redis": ["REDIS", "#f85149", "Redis cache"],
+    "microsoft.dbforpostgresql/flexibleservers": ["PG", "#58a6ff", "PostgreSQL server"],
+    "microsoft.dbformysql/flexibleservers": ["MYSQL", "#58a6ff", "MySQL server"],
+    "microsoft.servicebus/namespaces": ["SB", "#a371f7", "Service Bus namespace"],
+    "microsoft.servicebus/namespaces/queues": ["SBQ", "#b392f0", "Service Bus queue"],
+    "microsoft.servicebus/namespaces/topics": ["SBT", "#b392f0", "Service Bus topic"],
+    "microsoft.eventhub/namespaces": ["EH", "#a371f7", "Event Hubs namespace"],
+    "microsoft.eventhub/namespaces/eventhubs": ["HUB", "#b392f0", "Event hub"],
+    "microsoft.containerinstance/containergroups": ["ACI", "#58a6ff", "Container group"],
+    "microsoft.app/managedenvironments": ["ENV", "#1f6feb", "Container Apps environment"],
+    "microsoft.app/containerapps": ["CAPP", "#388bfd", "Container app"],
+    "microsoft.logic/workflows": ["FLOW", "#ffa657", "Logic app"],
+    "microsoft.authorization/policydefinitions": ["POL", "#8b949e", "Policy definition"],
+    "microsoft.authorization/policyassignments": ["PASG", "#8b949e", "Policy assignment"],
   };
+  // How much Nimbus really knows about a resource: a local engine runs it,
+  // its shape is modelled (a hook or Microsoft's own API spec), or it is
+  // merely accepted and stored.
+  const TIER_LABELS = {
+    real: "local engine",
+    modelled: "modelled from the API spec",
+    state: "accepted, state only",
+  };
+  const tierOf = (r) =>
+    r.backing === "real" ? "real" : r.backing === "modelled" ? "modelled" : "state";
+
   // Built-in role names, for labelling assignments and their links. A display
   // convenience only: the authoritative table is builtInRoles in
   // internal/azure/authorization.go, and anything missing here falls back to
@@ -310,8 +369,13 @@
     const nodes = layout(roots);
     const count = state.resources.size;
     $("#empty").hidden = count > 0;
-    const real = [...state.resources.values()].filter((r) => r.backing === "real").length;
-    $("#counts").textContent = `${count} resources · ${real} running locally`;
+    // Three tiers, counted separately: the accepted-only number is the one
+    // that should keep falling as more types get modelled.
+    const all = [...state.resources.values()];
+    const real = all.filter((r) => r.backing === "real").length;
+    const accepted = all.filter((r) => r.backing !== "real" && r.backing !== "modelled").length;
+    $("#counts").textContent =
+      `${count} resources · ${real} running locally · ${accepted} accepted only`;
 
     const filter = $("#filter").value.trim().toLowerCase();
     const matches = (r) => !filter || r.name.toLowerCase().includes(filter) || r.type.toLowerCase().includes(filter);
@@ -342,7 +406,7 @@
     for (const n of nodes) {
       const r = n.r;
       const [abbr, color, label] = typeStyle(r.type);
-      const classes = ["node", r.backing === "real" ? "real" : "state"];
+      const classes = ["node", tierOf(r)];
       if (state.selected === n.key) classes.push("selected");
       if (!matches(r)) classes.push("dim");
       if (state.entered.has(n.key)) classes.push("enter");
@@ -435,7 +499,7 @@
     const meta = $("#i-meta");
     meta.innerHTML = "";
     const rows = [
-      ["Backing", r.backing === "real" ? "local engine" : "state only"],
+      ["Backing", TIER_LABELS[tierOf(r)]],
       ["Location", r.location || "—"],
       ["Created", new Date(r.createdAt).toLocaleString()],
       ["Updated", new Date(r.updatedAt).toLocaleString()],

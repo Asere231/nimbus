@@ -54,6 +54,11 @@ export function render() {
     const place = state.view === "network" ? networkLayout : kubernetesLayout;
     const paint = state.view === "network" ? drawNetwork : drawKubernetes;
     const model = build(view);
+    // A view with nothing in it has to SAY so. An apply with no VNets in it
+    // -- examples/terraform/azure-app is exactly that -- left the network
+    // view a blank canvas, which reads as a broken page rather than as a
+    // true answer about the stack.
+    showEmptyView(state.view, model, count);
     const size = place(model);
     fitCanvas(svg, size.width, size.height);
     paint(svg, model, { selected: state.selected, filter, onSelect: select });
@@ -61,8 +66,37 @@ export function render() {
     return;
   }
 
+  showEmptyView(state.view, null, count);
   renderTopology(svg, view, filter);
   if (state.selected) showInspector(view.get(state.selected));
+}
+
+// EMPTY says what each view draws, for when it has nothing to draw.
+const EMPTY = {
+  network: {
+    title: "No networks here",
+    body: "This stack has no virtual networks. Create an <code>azurerm_virtual_network</code> " +
+      "and its subnets, their security groups and route tables, and any peering appear here.",
+  },
+  kubernetes: {
+    title: "No clusters here",
+    body: "This stack has no Kubernetes clusters. Create an <code>azurerm_kubernetes_cluster</code> " +
+      "\u2014 Nimbus runs it as k3s in Docker \u2014 and its namespaces, workloads, services and nodes appear here.",
+  },
+};
+
+function showEmptyView(name, model, count) {
+  const panel = $("#empty-view");
+  const drawsSomething = model &&
+    ((model.vnets && (model.vnets.length || model.orphans.length)) ||
+     (model.clusters && model.clusters.length));
+  // With nothing at all in the store the "no resources yet" panel already
+  // covers it, and two explanations are worse than one.
+  const show = Boolean(EMPTY[name]) && !drawsSomething && count > 0;
+  panel.hidden = !show;
+  if (!show) return;
+  $("#empty-view-title").textContent = EMPTY[name].title;
+  $("#empty-view-body").innerHTML = EMPTY[name].body;
 }
 
 // fitCanvas sizes the SVG and shrinks a drawing that is wider than the pane.

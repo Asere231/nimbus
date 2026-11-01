@@ -1,9 +1,9 @@
 # Roadmap
 
-**Current: Milestone 6 — visualizer v2. Prompt: `docs/prompts/m06-visualizer-v2.md`.**
+**Current: Milestone 7 — AWS core. Prompt: `docs/prompts/` (not written yet).**
 
-Milestones 1 to 5 are done, on macOS 27 (arm64) with azurerm 4.81.0 and
-az 2.90.0.
+Milestones 1 to 6 are done, on macOS 27 (arm64) with azurerm 4.81.0,
+az 2.90.0 and Terraform 1.16.4.
 
 - `examples/terraform/azure-basic` applies, plans clean (`-detailed-exitcode`
   = 0) and destroys; survives a `--persist` restart; every resource imports
@@ -34,9 +34,14 @@ az 2.90.0.
   --template-file main.bicep` was run on macOS with az 2.90.0 and Bicep
   0.48.1: it deploys, the outputs resolve, and a second what-if reports
   NoChange for every resource.
+- The visualizer has three views (topology, network, Kubernetes), replays a
+  `terraform apply` step by step from a persisted event journal, overlays a
+  `terraform plan` before it is applied, and exports any view as SVG or PNG.
+  It is ES modules with no build step, and its pure parts have unit tests run
+  by `node --test test/ui/`.
 - CI is green on ubuntu, macos and windows, plus the SDK harness, the
-  generator's tests, the Terraform apply/plan/destroy jobs and an az + Bicep
-  deployment job.
+  generator's tests, the visualizer's node tests, the Terraform
+  apply/plan/destroy jobs and an az + Bicep deployment job.
 
 Each milestone has a session prompt in `docs/prompts/` (see its README).
 
@@ -51,7 +56,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 | 3 | ~~**AKS on k3s** (Docker)~~ **done** | `azurerm_kubernetes_cluster` creates a k3s container; `kube_config` output works with `kubectl`; pods and services appear under the cluster in the graph |
 | 4 | ~~**Identity and secrets**: Key Vault secrets, managed identities, ACR on `registry:2`, Log Analytics stub~~ **done** | An app on AKS pulls an image from the emulated ACR and reads a Key Vault secret |
 | 5 | ~~**Breadth**: spec-driven defaults from `azure-rest-api-specs`, ARM/Bicep deployments, `az` CLI as a custom cloud~~ **done** | `az group create` and a Bicep deployment work; 50+ resource types round-trip in Terraform |
-| 6 | **Visualizer v2**: apply timeline, plan/diff view, Kubernetes view, export diagram as SVG/PNG | A `terraform apply` can be replayed step by step in the UI |
+| 6 | ~~**Visualizer v2**: apply timeline, plan/diff view, Kubernetes view, export diagram as SVG/PNG~~ **done** | A `terraform apply` can be replayed step by step in the UI |
 
 ## Phase 2 — AWS (port 4702)
 
@@ -92,6 +97,25 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 ## Later
 
+- **Runs are inferred from gaps, not announced.** `core.RunGap` is 30 s,
+  measured against azurerm's silent ~20 s resource-group wait. Two things
+  done within half a minute of each other merge into one run, and a pause
+  longer than 30 s inside one apply would split it. A `nimbus run --
+  terraform apply` wrapper that marked the boundaries explicitly would remove
+  the guess; the heuristic needs no new CLI surface, so it went first.
+- **The activity feed still starts empty after a restart**, because the SSE
+  stream replays the bus's in-memory ring and the journal is deliberately not
+  streamed. The timeline is how history is reached now; seeding the feed from
+  the journal on connect is a small change if it ever grates.
+- **The plan overlay's azurerm → ARM type table is partial** (`armTypes` in
+  `internal/ui/plan.go`). An unmapped type still draws, labelled with its
+  Terraform address; add a line when an example needs one.
+- **Plan overlays are topology-only.** The network and Kubernetes views draw
+  the live graph and ignore a loaded plan.
+- **The Kubernetes view has only been checked against the fixture and one
+  real cluster shape.** Namespaces other than `default` are still filtered
+  out by the watcher, so a workload deployed elsewhere appears in neither
+  view.
 - **`REQUESTS_CA_BUNDLE` replaces the trust store rather than adding to it**,
   so while it points at the Nimbus CA, `az` cannot reach any real host — which
   breaks `az bicep install`, `az upgrade` and anything else that downloads.

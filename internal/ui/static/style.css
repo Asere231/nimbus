@@ -138,6 +138,18 @@ button { font: inherit; color: inherit; }
   .layout { grid-template-columns: 1fr; grid-template-rows: 1fr 45%; }
   .side { border-left: 0; border-top: 1px solid var(--line); }
   .legend { display: none; }
+  /* The header is a single 56px row on a desktop. At phone width that row
+     cannot hold the brand, the cloud picker and the status, and the status
+     -- which is where the resource counts and Reset live -- was simply
+     pushed off the right edge where nothing suggested it existed. So it
+     wraps instead, and the decorative parts go. */
+  .top { height: auto; flex-wrap: wrap; gap: 8px 14px; padding: 8px 12px; }
+  .brand .tag { display: none; }
+  .status { font-size: 12px; }
+}
+@media (max-width: 620px) {
+  /* The clouds that are not built yet are not worth a third of the header. */
+  .cloud:disabled { display: none; }
 }
 
 /* Blob list in the inspector */

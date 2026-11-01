@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.6.0 — 2026-10-31
+
+Milestone 6: visualizer v2. The visualizer stops being only a live picture
+and becomes something you can replay, predict with, and publish from.
+
+- **Replay an apply.** Events are kept in a journal (`events.jsonl`, with
+  `--persist`) and grouped into runs; the bar under the canvas steps through
+  one, resources appearing in the order the provider created them, with the
+  API call behind each step. Replay needs no snapshots: an event already
+  names the resource completely, which is what lets a resource that has since
+  been destroyed still be drawn.
+- **Network view.** VNets as containers with their subnets and address
+  ranges, the NSG and route table attached to each subnet, peerings as arcs,
+  and a column of network resources attached to nothing — which the tree
+  cannot show at all.
+- **Kubernetes view.** Namespaces holding deployments, replica sets and pods,
+  nested by ownerReferences rather than by name, with each service joined to
+  the pods its selector matches, pod phase and restarts. The watcher now
+  mirrors replica sets, service selectors and restart counts.
+- **Plan view.** `nimbus plan-view plan.out` draws a `terraform plan` on the
+  graph before it is applied: `+`, `~`, `-` and `-/+` in Terraform's own
+  notation, with a ghost card for each resource that does not exist yet.
+- **Export.** Any view as a standalone SVG or a 2× PNG, light-themed.
+- **ES modules.** `app.js` is now eleven modules with no build step and no
+  CDN, and the pure ones have unit tests run by `node --test test/ui/` — the
+  visualizer's first. A Go test walks the import graph so a typo in a module
+  path fails the build rather than the browser.
+- **`?fixture`** renders a sample stack with no server state, which is how the
+  browser, theme and phone-width checks are done.
+- Phone width: the header wraps instead of pushing the resource counts and
+  Reset off the right-hand edge.
+
 ## 0.5.0 — 2026-10-31
 
 Milestone 5: breadth. Most Azure types now have the right shape without

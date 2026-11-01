@@ -81,21 +81,44 @@ path, so it appears in the visualizer as it goes. See `examples/bicep`.
 `az group create`, `az network vnet create`, `az resource list`, `az keyvault
 secret set/show` and `az storage blob`.
 
-Not yet: AWS and GCP, deployments at subscription scope or above, and the
-timeline/diff views the visualizer is getting next — see `docs/ROADMAP.md`.
+## The visualizer
+
+`http://localhost:4700`, served from inside the binary: no build step, no CDN,
+works with the network off.
+
+- **Three views.** *Topology* is the containment tree. *Network* draws VNets as
+  containers with their subnets, address ranges, the NSG and route table on
+  each subnet, peerings between them, and anything attached to nothing.
+  *Kubernetes* draws a cluster as namespaces holding deployments, replica sets
+  and pods, with each service joined to the pods its selector matches.
+- **Replay an apply.** Events are grouped into runs; the bar under the canvas
+  steps through one, resources appearing in the order the provider created
+  them, with the API call behind each step. With `--persist`, runs survive a
+  restart.
+- **See a plan before you apply it.** `nimbus plan-view plan.out` draws
+  `terraform plan` on the graph: `+` on what will be created, `~` on what will
+  change, `-` on what goes.
+- **Export.** SVG or PNG of whichever view is showing, in a light theme, for a
+  README or a slide.
+- `?fixture` renders a sample stack with no server state, which is how the
+  browser and layout checks are done.
+
+Not yet: AWS and GCP, and deployments at subscription scope or above — see
+`docs/ROADMAP.md`.
 
 ## Repo layout
 
 ```
-cmd/nimbus/            CLI: start, cert, env, az register
+cmd/nimbus/            CLI: start, cert, env, az register, plan-view
 internal/core/         cloud-agnostic engine: store, event bus, certs, persistence
 internal/azure/        ARM emulator: routing, identity/metadata, generic CRUD, per-type hooks
 internal/azure/deployments/  ARM template expressions, copy loops, dependency ordering
-internal/ui/           visualizer API + SSE, and the embedded web app (static/)
+internal/ui/           visualizer API + SSE, the plan overlay, and the embedded web app (static/, ES modules)
 tools/specgen/         generates the spec-derived type table (separate Go module; the only thing that fetches anything)
 examples/terraform/    configs to apply against Nimbus
 examples/bicep/        an ARM/Bicep template to deploy with az
 test/sdkcompat/        drives Nimbus with hashicorp/go-azure-sdk (separate Go module)
+test/ui/               the visualizer's own unit tests, run by node (no npm, no package.json)
 docs/                  roadmap, offline setup
 ```
 
@@ -103,5 +126,6 @@ docs/                  roadmap, offline setup
 
 ```bash
 go test ./...                              # unit + HTTP tests, no network
+node --test test/ui/                       # the visualizer's pure modules
 cd test/sdkcompat && go run . -endpoint https://localhost:4701   # real Azure SDK against a running Nimbus
 ```

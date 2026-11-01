@@ -183,3 +183,6 @@ button { font: inherit; color: inherit; }
   pointer-events: stroke;
 }
 .link-identity:hover { stroke-opacity: 0.95; }
+
+/* Export buttons, beside the canvas controls. */
+.exports { display: flex; gap: 4px; }

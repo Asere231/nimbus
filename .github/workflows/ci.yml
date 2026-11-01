@@ -87,6 +87,24 @@ jobs:
       - run: go build ./...
       - run: go test ./...
 
+  visualizer:
+    name: visualizer (node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The visualizer has no build step and no dependencies, so there is
+      # nothing to install: node's own test runner runs the modules straight
+      # from internal/ui/static. The Go side checks that every import in
+      # those modules resolves (TestEveryModuleImportResolves).
+      #
+      # No package.json anywhere in the repo, so node decides these .js files
+      # are ES modules by reading them -- syntax detection, on by default
+      # since 22.7. Hence a pinned major rather than whatever is oldest.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test test/ui/
+
   specgen:
     name: spec generator
     runs-on: ubuntu-latest

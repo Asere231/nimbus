@@ -35,6 +35,10 @@
       <div class="canvas-toolbar">
         <input id="filter" type="search" placeholder="Filter by name or type" autocomplete="off">
         <label class="toggle"><input type="checkbox" id="show-subs" checked> subscriptions</label>
+        <div class="exports">
+          <button class="btn ghost small" id="export-svg" title="Download this graph as an SVG">SVG</button>
+          <button class="btn ghost small" id="export-png" title="Download this graph as a PNG">PNG</button>
+        </div>
         <div class="legend">
           <span><i class="sw state"></i>accepted (state only)</span>
           <span><i class="sw modelled"></i>modelled from the API spec</span>
@@ -84,6 +88,6 @@
     </aside>
   </main>
 
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

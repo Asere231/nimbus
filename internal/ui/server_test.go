@@ -3,8 +3,10 @@ package ui
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -219,6 +221,66 @@ func TestStaticAppIsEmbedded(t *testing.T) {
 		if n == 0 {
 			t.Errorf("GET %s served an empty file", path)
 		}
+	}
+}
+
+// The visualizer is ES modules with no build step, so nothing resolves
+// imports before a browser does. A typo in a module path is a blank page at
+// runtime and nothing at all at compile time -- so the import graph is walked
+// here, from index.html's entry point outwards, and every file it reaches must
+// really be served.
+func TestEveryModuleImportResolves(t *testing.T) {
+	srv, _, _ := newUI(t)
+
+	get := func(path string) string {
+		t.Helper()
+		res, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		body, _ := io.ReadAll(res.Body)
+		if res.StatusCode != 200 {
+			t.Fatalf("GET %s = %d", path, res.StatusCode)
+		}
+		return string(body)
+	}
+
+	index := get("/")
+	entry := regexp.MustCompile(`<script type="module" src="([^"]+)"`).FindStringSubmatch(index)
+	if entry == nil {
+		t.Fatal("index.html does not load a module entry point")
+	}
+
+	// Relative specifiers only: the visualizer has no CDN and no bare
+	// package names, which is the rule this also enforces.
+	imports := regexp.MustCompile(`(?m)^\s*(?:import|export)[^"']*from\s*["']([^"']+)["']`)
+	seen := map[string]bool{}
+	var walk func(file string)
+	walk = func(file string) {
+		if seen[file] {
+			return
+		}
+		seen[file] = true
+		src := get("/" + file)
+		for _, m := range imports.FindAllStringSubmatch(src, -1) {
+			spec := m[1]
+			if !strings.HasPrefix(spec, "./") {
+				t.Errorf("%s imports %q: only relative paths are allowed, no CDN and no bare specifiers", file, spec)
+				continue
+			}
+			walk(strings.TrimPrefix(spec, "./"))
+		}
+	}
+	walk(entry[1])
+
+	if len(seen) < 5 {
+		t.Errorf("walked only %d modules (%v); the app should be split into more than that", len(seen), seen)
+	}
+	// fixture.json is fetched by api.js rather than imported, so the walk
+	// never reaches it, but ?fixture is broken without it.
+	if get("/fixture.json") == "" {
+		t.Error("fixture.json is not served")
 	}
 }
 

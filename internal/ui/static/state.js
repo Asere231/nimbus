@@ -3,6 +3,7 @@
 
 export const state = {
   cloud: "azure",
+  view: "topology", // which canvas view is showing: see render.js
   resources: new Map(), // lowercased id -> resource
   selected: null,
   entered: new Set(),   // ids to animate in on next render

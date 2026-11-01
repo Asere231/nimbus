@@ -13,6 +13,7 @@
 //   feed.js       the activity feed
 //   inspector.js  the selected resource, its blobs and its secrets
 //   export.js     SVG and PNG download
+//   network.js    the network view: VNets, subnets and peerings
 //   replay.js     rebuilding the graph partway through a run  (pure)
 //   timeline.js   the replay bar under the canvas
 //
@@ -112,6 +113,12 @@ function connect() {
 // ---- wiring ---------------------------------------------------------------
 document.querySelectorAll(".tab").forEach((t) =>
   t.addEventListener("click", () => switchTab(t.dataset.tab)));
+document.querySelectorAll(".view").forEach((b) =>
+  b.addEventListener("click", () => {
+    state.view = b.dataset.view;
+    document.querySelectorAll(".view").forEach((o) => o.classList.toggle("active", o === b));
+    render();
+  }));
 $("#filter").addEventListener("input", scheduleRender);
 window.addEventListener("resize", scheduleRender);
 $("#show-subs").addEventListener("change", scheduleRender);

@@ -33,8 +33,12 @@
   <main class="layout">
     <section class="canvas-wrap" aria-label="Resource topology">
       <div class="canvas-toolbar">
+        <nav class="views" id="views" aria-label="View">
+          <button class="view active" data-view="topology">Topology</button>
+          <button class="view" data-view="network">Network</button>
+        </nav>
         <input id="filter" type="search" placeholder="Filter by name or type" autocomplete="off">
-        <label class="toggle"><input type="checkbox" id="show-subs" checked> subscriptions</label>
+        <label class="toggle" id="subs-toggle"><input type="checkbox" id="show-subs" checked> subscriptions</label>
         <div class="exports">
           <button class="btn ghost small" id="export-svg" title="Download this graph as an SVG">SVG</button>
           <button class="btn ghost small" id="export-png" title="Download this graph as a PNG">PNG</button>

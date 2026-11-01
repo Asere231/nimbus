@@ -1,10 +1,14 @@
-// Drawing the topology view: cards, containment edges and identity links.
+// Drawing the canvas. The shared part -- picking which resource map is in
+// charge, the counts, the filter, sizing the SVG -- lives here; each view
+// then draws into it. Topology (cards, containment edges and identity links)
+// is in this file; the others have their own modules.
 
 import { $, el, fit, switchTab } from "./dom.js";
 import { state } from "./state.js";
 import { typeStyle, tierOf, displayName, roleName } from "./types.js";
 import { buildForest, layout, extent, label, W, H } from "./graph.js";
 import { showInspector } from "./inspector.js";
+import { networkModel, networkLayout, draw as drawNetwork } from "./network.js";
 
 let renderQueued = false;
 export function scheduleRender() {
@@ -22,11 +26,9 @@ export function select(key) {
 export function render() {
   const svg = $("#graph");
   svg.innerHTML = "";
-  // The timeline replaces the view while it replays a run; everything below
+  // The timeline replaces the view while it replays a run; every view below
   // draws whichever map is in charge, so replay needs no second renderer.
   const view = state.replay || state.resources;
-  const roots = buildForest(view, { showSubs: $("#show-subs").checked });
-  const nodes = layout(roots);
   const count = view.size;
   $("#empty").hidden = count > 0 || state.replay !== null;
   // Three tiers, counted separately: the accepted-only number is the one
@@ -38,19 +40,42 @@ export function render() {
     `${count} resources · ${real} running locally · ${accepted} accepted only`;
 
   const filter = $("#filter").value.trim().toLowerCase();
-  const matches = (r) => !filter || r.name.toLowerCase().includes(filter) || r.type.toLowerCase().includes(filter);
+  // The subscriptions toggle only means anything to the tree.
+  $("#subs-toggle").hidden = state.view !== "topology";
 
-  // Shrink wide trees so the hierarchy fits. The floor is 0.5 rather than
-  // something higher because storage adds a fourth level (subscription ->
-  // resource group -> account -> container) and at 0.7 the deepest node
-  // lands off-screen, which reads as "the container was not created" even
-  // though it is there and reachable by scrolling.
-  const { width: cw, height: ch } = extent(nodes);
+  if (state.view === "network") {
+    const model = networkModel(view);
+    const size = networkLayout(model);
+    fitCanvas(svg, size.width, size.height);
+    drawNetwork(svg, model, { selected: state.selected, filter, onSelect: select });
+    if (state.selected) showInspector(view.get(state.selected));
+    return;
+  }
+
+  renderTopology(svg, view, filter);
+  if (state.selected) showInspector(view.get(state.selected));
+}
+
+// fitCanvas sizes the SVG and shrinks a drawing that is wider than the pane.
+// The floor is 0.5 rather than something higher because storage adds a
+// fourth level (subscription -> resource group -> account -> container) and
+// at 0.7 the deepest node lands off-screen, which reads as "the container
+// was not created" even though it is there and reachable by scrolling.
+function fitCanvas(svg, cw, ch) {
   const avail = $("#canvas").clientWidth || cw;
   const scale = Math.min(1, Math.max(0.5, avail / cw));
   svg.setAttribute("viewBox", `0 0 ${cw} ${ch}`);
   svg.setAttribute("width", Math.round(cw * scale));
   svg.setAttribute("height", Math.round(ch * scale));
+}
+
+function renderTopology(svg, view, filter) {
+  const roots = buildForest(view, { showSubs: $("#show-subs").checked });
+  const nodes = layout(roots);
+  const matches = (r) => !filter || r.name.toLowerCase().includes(filter) || r.type.toLowerCase().includes(filter);
+
+  const { width: cw, height: ch } = extent(nodes);
+  fitCanvas(svg, cw, ch);
 
   const edges = el("g", {}, svg);
   for (const n of nodes) {
@@ -87,7 +112,6 @@ export function render() {
   }
   state.entered.clear();
   state.flashed.clear();
-  if (state.selected) showInspector(view.get(state.selected));
 }
 
 // Role assignments are the one relationship that does not follow the

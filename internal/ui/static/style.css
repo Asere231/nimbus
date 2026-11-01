@@ -60,6 +60,8 @@ button { font: inherit; color: inherit; }
 .canvas-toolbar { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 #filter { background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text); border-radius: 6px; padding: 5px 10px; width: 240px; }
 .toggle { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
+/* display:flex beats the hidden attribute, so say so explicitly. */
+.toggle[hidden] { display: none; }
 .legend { margin-left: auto; display: flex; gap: 14px; color: var(--muted); font-size: 12px; }
 .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 .sw.state { border: 1.5px dashed var(--state); }
@@ -209,3 +211,31 @@ button { font: inherit; color: inherit; }
   .tl-row { flex-wrap: wrap; }
   #tl-run { max-width: 100%; flex: 1 1 100%; }
 }
+
+/* View switcher, beside the filter. */
+.views { display: flex; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
+.view { border: 0; background: transparent; padding: 4px 11px; border-radius: 6px; cursor: pointer; color: var(--muted); font-size: 13px; }
+.view.active { background: var(--panel); color: var(--text); box-shadow: 0 0 0 1px var(--line-2); }
+
+/* Network view: VNets as containers, subnets inside them. */
+.net-box { fill: color-mix(in srgb, var(--panel) 70%, transparent); stroke: var(--line-2); stroke-width: 1.2; }
+.net-vnet.selected .net-box { stroke: var(--accent); stroke-width: 2.2; }
+.net-vnet.dim { opacity: .25; }
+.net-title { fill: var(--text); font-weight: 650; font-size: 14px; }
+.net-sub { fill: var(--muted); font-size: 11.5px; font-family: var(--mono); }
+.net-subnet { cursor: pointer; }
+.net-sub-box { fill: var(--bg-2); stroke: var(--line); stroke-width: 1; }
+.net-subnet:hover .net-sub-box { stroke: var(--accent); }
+.net-subnet.selected .net-sub-box { stroke: var(--accent); stroke-width: 2; }
+.net-sub-name { fill: var(--text); font-weight: 600; font-size: 12.5px; }
+.net-cidr { fill: var(--muted); font-size: 11px; font-family: var(--mono); }
+.net-chip rect { fill: color-mix(in srgb, var(--warn) 16%, transparent); stroke: var(--warn); stroke-opacity: .5; }
+.net-chip text { fill: var(--warn); font-size: 10.5px; font-family: var(--mono); }
+.net-chip.rt rect { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); stroke-opacity: .5; }
+.net-chip.rt text { fill: var(--accent); }
+.net-chip { cursor: pointer; }
+.net-orphan .card { stroke-dasharray: 5 3; }
+
+/* A peering: two networks joined, not one containing the other. */
+.link-peering { fill: none; stroke: #39c5cf; stroke-opacity: .6; stroke-width: 1.6; stroke-dasharray: 7 4; pointer-events: stroke; }
+.link-peering:hover { stroke-opacity: 1; }

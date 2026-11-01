@@ -14,4 +14,7 @@ export const state = {
   // touched. `resources` above stays the live store throughout.
   replay: null,
   current: null,
+  // The pending plan, pushed in by `nimbus plan-view`: what is about to
+  // change, drawn over the graph before it does.
+  plan: null,
 };

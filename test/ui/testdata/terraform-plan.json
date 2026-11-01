@@ -1,0 +1,631 @@
+{
+ "format_version": "1.2",
+ "terraform_version": "1.16.4",
+ "resource_changes": [
+  {
+   "address": "azurerm_network_security_group.app",
+   "mode": "managed",
+   "type": "azurerm_network_security_group",
+   "name": "app",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/networkSecurityGroups/nsg-app",
+     "location": "eastus",
+     "name": "nsg-app",
+     "resource_group_name": "rg-platform-dev",
+     "security_rule": [
+      {
+       "access": "Allow",
+       "description": "",
+       "destination_address_prefix": "*",
+       "destination_address_prefixes": [],
+       "destination_application_security_group_ids": [],
+       "destination_port_range": "443",
+       "destination_port_ranges": [],
+       "direction": "Inbound",
+       "name": "allow-https",
+       "priority": 100,
+       "protocol": "Tcp",
+       "source_address_prefix": "*",
+       "source_address_prefixes": [],
+       "source_application_security_group_ids": [],
+       "source_port_range": "*",
+       "source_port_ranges": []
+      }
+     ],
+     "tags": {},
+     "timeouts": null
+    },
+    "after": {
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/networkSecurityGroups/nsg-app",
+     "location": "eastus",
+     "name": "nsg-app",
+     "resource_group_name": "rg-platform-dev",
+     "security_rule": [
+      {
+       "access": "Allow",
+       "description": "",
+       "destination_address_prefix": "*",
+       "destination_address_prefixes": [],
+       "destination_application_security_group_ids": [],
+       "destination_port_range": "443",
+       "destination_port_ranges": [],
+       "direction": "Inbound",
+       "name": "allow-https",
+       "priority": 100,
+       "protocol": "Tcp",
+       "source_address_prefix": "*",
+       "source_address_prefixes": [],
+       "source_application_security_group_ids": [],
+       "source_port_range": "*",
+       "source_port_ranges": []
+      }
+     ],
+     "tags": {},
+     "timeouts": null
+    },
+    "after_unknown": {},
+    "before_sensitive": {
+     "security_rule": [
+      {
+       "destination_address_prefixes": [],
+       "destination_application_security_group_ids": [],
+       "destination_port_ranges": [],
+       "source_address_prefixes": [],
+       "source_application_security_group_ids": [],
+       "source_port_ranges": []
+      }
+     ],
+     "tags": {}
+    },
+    "after_sensitive": {
+     "security_rule": [
+      {
+       "destination_address_prefixes": [],
+       "destination_application_security_group_ids": [],
+       "destination_port_ranges": [],
+       "source_address_prefixes": [],
+       "source_application_security_group_ids": [],
+       "source_port_ranges": []
+      }
+     ],
+     "tags": {}
+    },
+    "before_identity": {
+     "name": "nsg-app",
+     "resource_group_name": "rg-platform-dev",
+     "subscription_id": "00000000-0000-0000-0000-000000000000"
+    },
+    "after_identity": {
+     "name": "nsg-app",
+     "resource_group_name": "rg-platform-dev",
+     "subscription_id": "00000000-0000-0000-0000-000000000000"
+    }
+   }
+  },
+  {
+   "address": "azurerm_public_ip.egress",
+   "mode": "managed",
+   "type": "azurerm_public_ip",
+   "name": "egress",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "before": null,
+    "after": {
+     "allocation_method": "Static",
+     "ddos_protection_mode": "VirtualNetworkInherited",
+     "ddos_protection_plan_id": null,
+     "domain_name_label": null,
+     "domain_name_label_scope": null,
+     "edge_zone": null,
+     "idle_timeout_in_minutes": 4,
+     "ip_tags": null,
+     "ip_version": "IPv4",
+     "location": "eastus",
+     "name": "pip-egress",
+     "public_ip_prefix_id": null,
+     "resource_group_name": "rg-platform-dev",
+     "reverse_fqdn": null,
+     "sku": "Standard",
+     "sku_tier": "Regional",
+     "tags": null,
+     "timeouts": null,
+     "zones": null
+    },
+    "after_unknown": {
+     "fqdn": true,
+     "id": true,
+     "ip_address": true
+    },
+    "before_sensitive": false,
+    "after_sensitive": {},
+    "after_identity": {
+     "name": null,
+     "resource_group_name": null,
+     "subscription_id": null
+    }
+   }
+  },
+  {
+   "address": "azurerm_resource_group.platform",
+   "mode": "managed",
+   "type": "azurerm_resource_group",
+   "name": "platform",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev",
+     "location": "eastus",
+     "managed_by": "",
+     "name": "rg-platform-dev",
+     "tags": {
+      "env": "dev",
+      "owner": "nimbus"
+     },
+     "timeouts": null
+    },
+    "after": {
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev",
+     "location": "eastus",
+     "managed_by": "",
+     "name": "rg-platform-dev",
+     "tags": {
+      "env": "dev",
+      "owner": "nimbus"
+     },
+     "timeouts": null
+    },
+    "after_unknown": {},
+    "before_sensitive": {
+     "tags": {}
+    },
+    "after_sensitive": {
+     "tags": {}
+    },
+    "before_identity": {
+     "name": "rg-platform-dev",
+     "subscription_id": "00000000-0000-0000-0000-000000000000"
+    },
+    "after_identity": {
+     "name": "rg-platform-dev",
+     "subscription_id": "00000000-0000-0000-0000-000000000000"
+    }
+   }
+  },
+  {
+   "address": "azurerm_route_table.app",
+   "mode": "managed",
+   "type": "azurerm_route_table",
+   "name": "app",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "bgp_route_propagation_enabled": true,
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/routeTables/rt-app",
+     "location": "eastus",
+     "name": "rt-app",
+     "resource_group_name": "rg-platform-dev",
+     "route": [],
+     "subnets": [],
+     "tags": {},
+     "timeouts": null
+    },
+    "after": {
+     "bgp_route_propagation_enabled": true,
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/routeTables/rt-app",
+     "location": "eastus",
+     "name": "rt-app",
+     "resource_group_name": "rg-platform-dev",
+     "route": [],
+     "subnets": [],
+     "tags": {},
+     "timeouts": null
+    },
+    "after_unknown": {},
+    "before_sensitive": {
+     "route": [],
+     "subnets": [],
+     "tags": {}
+    },
+    "after_sensitive": {
+     "route": [],
+     "subnets": [],
+     "tags": {}
+    },
+    "before_identity": {
+     "name": "rt-app",
+     "resource_group_name": "rg-platform-dev",
+     "subscription_id": "00000000-0000-0000-0000-000000000000"
+    },
+    "after_identity": {
+     "name": "rt-app",
+     "resource_group_name": "rg-platform-dev",
+     "subscription_id": "00000000-0000-0000-0000-000000000000"
+    }
+   }
+  },
+  {
+   "address": "azurerm_subnet.aks",
+   "mode": "managed",
+   "type": "azurerm_subnet",
+   "name": "aks",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "address_prefixes": [
+      "10.0.1.0/24"
+     ],
+     "default_outbound_access_enabled": true,
+     "delegation": [],
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev/subnets/snet-aks",
+     "ip_address_pool": [],
+     "name": "snet-aks",
+     "private_endpoint_network_policies": "Disabled",
+     "private_link_service_network_policies_enabled": true,
+     "resource_group_name": "rg-platform-dev",
+     "service_endpoint_policy_ids": [],
+     "service_endpoints": [],
+     "sharing_scope": "",
+     "timeouts": null,
+     "virtual_network_name": "vnet-hub-dev"
+    },
+    "after": {
+     "address_prefixes": [
+      "10.0.1.0/24"
+     ],
+     "default_outbound_access_enabled": true,
+     "delegation": [],
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev/subnets/snet-aks",
+     "ip_address_pool": [],
+     "name": "snet-aks",
+     "private_endpoint_network_policies": "Disabled",
+     "private_link_service_network_policies_enabled": true,
+     "resource_group_name": "rg-platform-dev",
+     "service_endpoint_policy_ids": [],
+     "service_endpoints": [],
+     "sharing_scope": "",
+     "timeouts": null,
+     "virtual_network_name": "vnet-hub-dev"
+    },
+    "after_unknown": {},
+    "before_sensitive": {
+     "address_prefixes": [
+      false
+     ],
+     "delegation": [],
+     "ip_address_pool": [],
+     "service_endpoint_policy_ids": [],
+     "service_endpoints": []
+    },
+    "after_sensitive": {
+     "address_prefixes": [
+      false
+     ],
+     "delegation": [],
+     "ip_address_pool": [],
+     "service_endpoint_policy_ids": [],
+     "service_endpoints": []
+    },
+    "before_identity": {
+     "name": "snet-aks",
+     "resource_group_name": "rg-platform-dev",
+     "subscription_id": "00000000-0000-0000-0000-000000000000",
+     "virtual_network_name": "vnet-hub-dev"
+    },
+    "after_identity": {
+     "name": "snet-aks",
+     "resource_group_name": "rg-platform-dev",
+     "subscription_id": "00000000-0000-0000-0000-000000000000",
+     "virtual_network_name": "vnet-hub-dev"
+    }
+   }
+  },
+  {
+   "address": "azurerm_subnet.app",
+   "mode": "managed",
+   "type": "azurerm_subnet",
+   "name": "app",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "address_prefixes": [
+      "10.0.2.0/24"
+     ],
+     "default_outbound_access_enabled": true,
+     "delegation": [],
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev/subnets/snet-app",
+     "ip_address_pool": [],
+     "name": "snet-app",
+     "private_endpoint_network_policies": "Disabled",
+     "private_link_service_network_policies_enabled": true,
+     "resource_group_name": "rg-platform-dev",
+     "service_endpoint_policy_ids": [],
+     "service_endpoints": [],
+     "sharing_scope": "",
+     "timeouts": null,
+     "virtual_network_name": "vnet-hub-dev"
+    },
+    "after": {
+     "address_prefixes": [
+      "10.0.2.0/24"
+     ],
+     "default_outbound_access_enabled": true,
+     "delegation": [],
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev/subnets/snet-app",
+     "ip_address_pool": [],
+     "name": "snet-app",
+     "private_endpoint_network_policies": "Disabled",
+     "private_link_service_network_policies_enabled": true,
+     "resource_group_name": "rg-platform-dev",
+     "service_endpoint_policy_ids": [],
+     "service_endpoints": [],
+     "sharing_scope": "",
+     "timeouts": null,
+     "virtual_network_name": "vnet-hub-dev"
+    },
+    "after_unknown": {},
+    "before_sensitive": {
+     "address_prefixes": [
+      false
+     ],
+     "delegation": [],
+     "ip_address_pool": [],
+     "service_endpoint_policy_ids": [],
+     "service_endpoints": []
+    },
+    "after_sensitive": {
+     "address_prefixes": [
+      false
+     ],
+     "delegation": [],
+     "ip_address_pool": [],
+     "service_endpoint_policy_ids": [],
+     "service_endpoints": []
+    },
+    "before_identity": {
+     "name": "snet-app",
+     "resource_group_name": "rg-platform-dev",
+     "subscription_id": "00000000-0000-0000-0000-000000000000",
+     "virtual_network_name": "vnet-hub-dev"
+    },
+    "after_identity": {
+     "name": "snet-app",
+     "resource_group_name": "rg-platform-dev",
+     "subscription_id": "00000000-0000-0000-0000-000000000000",
+     "virtual_network_name": "vnet-hub-dev"
+    }
+   }
+  },
+  {
+   "address": "azurerm_subnet_network_security_group_association.app",
+   "mode": "managed",
+   "type": "azurerm_subnet_network_security_group_association",
+   "name": "app",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev/subnets/snet-app",
+     "network_security_group_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/networkSecurityGroups/nsg-app",
+     "subnet_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev/subnets/snet-app",
+     "timeouts": null
+    },
+    "after": {
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev/subnets/snet-app",
+     "network_security_group_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/networkSecurityGroups/nsg-app",
+     "subnet_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev/subnets/snet-app",
+     "timeouts": null
+    },
+    "after_unknown": {},
+    "before_sensitive": {},
+    "after_sensitive": {}
+   }
+  },
+  {
+   "address": "azurerm_virtual_network.hub",
+   "mode": "managed",
+   "type": "azurerm_virtual_network",
+   "name": "hub",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "change": {
+    "actions": [
+     "update"
+    ],
+    "before": {
+     "address_space": [
+      "10.0.0.0/16"
+     ],
+     "bgp_community": "",
+     "ddos_protection_plan": [],
+     "dns_servers": [],
+     "edge_zone": "",
+     "encryption": [],
+     "flow_timeout_in_minutes": 0,
+     "guid": "02301274-c7de-4d42-b674-8226e3eb69ed",
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev",
+     "ip_address_pool": [],
+     "location": "eastus",
+     "name": "vnet-hub-dev",
+     "private_endpoint_vnet_policies": "Disabled",
+     "resource_group_name": "rg-platform-dev",
+     "subnet": [
+      {
+       "address_prefixes": [
+        "10.0.1.0/24"
+       ],
+       "default_outbound_access_enabled": true,
+       "delegation": [],
+       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev/subnets/snet-aks",
+       "name": "snet-aks",
+       "private_endpoint_network_policies": "Disabled",
+       "private_link_service_network_policies_enabled": true,
+       "route_table_id": "",
+       "security_group": "",
+       "service_endpoint_policy_ids": [],
+       "service_endpoints": []
+      },
+      {
+       "address_prefixes": [
+        "10.0.2.0/24"
+       ],
+       "default_outbound_access_enabled": true,
+       "delegation": [],
+       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev/subnets/snet-app",
+       "name": "snet-app",
+       "private_endpoint_network_policies": "Disabled",
+       "private_link_service_network_policies_enabled": true,
+       "route_table_id": "",
+       "security_group": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/networkSecurityGroups/nsg-app",
+       "service_endpoint_policy_ids": [],
+       "service_endpoints": []
+      }
+     ],
+     "tags": {},
+     "timeouts": null
+    },
+    "after": {
+     "address_space": [
+      "10.0.0.0/16"
+     ],
+     "bgp_community": "",
+     "ddos_protection_plan": [],
+     "dns_servers": [],
+     "edge_zone": "",
+     "encryption": [],
+     "flow_timeout_in_minutes": 0,
+     "guid": "02301274-c7de-4d42-b674-8226e3eb69ed",
+     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev",
+     "ip_address_pool": [],
+     "location": "eastus",
+     "name": "vnet-hub-dev",
+     "private_endpoint_vnet_policies": "Disabled",
+     "resource_group_name": "rg-platform-dev",
+     "subnet": [
+      {
+       "address_prefixes": [
+        "10.0.1.0/24"
+       ],
+       "default_outbound_access_enabled": true,
+       "delegation": [],
+       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev/subnets/snet-aks",
+       "name": "snet-aks",
+       "private_endpoint_network_policies": "Disabled",
+       "private_link_service_network_policies_enabled": true,
+       "route_table_id": "",
+       "security_group": "",
+       "service_endpoint_policy_ids": [],
+       "service_endpoints": []
+      },
+      {
+       "address_prefixes": [
+        "10.0.2.0/24"
+       ],
+       "default_outbound_access_enabled": true,
+       "delegation": [],
+       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev/subnets/snet-app",
+       "name": "snet-app",
+       "private_endpoint_network_policies": "Disabled",
+       "private_link_service_network_policies_enabled": true,
+       "route_table_id": "",
+       "security_group": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-platform-dev/providers/Microsoft.Network/networkSecurityGroups/nsg-app",
+       "service_endpoint_policy_ids": [],
+       "service_endpoints": []
+      }
+     ],
+     "tags": {
+      "owner": "platform-team"
+     },
+     "timeouts": null
+    },
+    "after_unknown": {},
+    "before_sensitive": {
+     "address_space": [
+      false
+     ],
+     "ddos_protection_plan": [],
+     "dns_servers": [],
+     "encryption": [],
+     "ip_address_pool": [],
+     "subnet": [
+      {
+       "address_prefixes": [
+        false
+       ],
+       "delegation": [],
+       "service_endpoint_policy_ids": [],
+       "service_endpoints": []
+      },
+      {
+       "address_prefixes": [
+        false
+       ],
+       "delegation": [],
+       "service_endpoint_policy_ids": [],
+       "service_endpoints": []
+      }
+     ],
+     "tags": {}
+    },
+    "after_sensitive": {
+     "address_space": [
+      false
+     ],
+     "ddos_protection_plan": [],
+     "dns_servers": [],
+     "encryption": [],
+     "ip_address_pool": [],
+     "subnet": [
+      {
+       "address_prefixes": [
+        false
+       ],
+       "delegation": [],
+       "service_endpoint_policy_ids": [],
+       "service_endpoints": []
+      },
+      {
+       "address_prefixes": [
+        false
+       ],
+       "delegation": [],
+       "service_endpoint_policy_ids": [],
+       "service_endpoints": []
+      }
+     ],
+     "tags": {}
+    },
+    "before_identity": {
+     "name": "vnet-hub-dev",
+     "resource_group_name": "rg-platform-dev",
+     "subscription_id": "00000000-0000-0000-0000-000000000000"
+    },
+    "after_identity": {
+     "name": "vnet-hub-dev",
+     "resource_group_name": "rg-platform-dev",
+     "subscription_id": "00000000-0000-0000-0000-000000000000"
+    }
+   }
+  }
+ ]
+}

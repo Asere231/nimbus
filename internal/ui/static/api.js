@@ -100,3 +100,17 @@ export async function getRun(id) {
     return null;
   }
 }
+
+export async function getPlan() {
+  if (fixtureMode) return (await fixture()).plan || { changes: [] };
+  try {
+    return await json("/api/plan");
+  } catch (_) {
+    return { changes: [] };
+  }
+}
+
+export async function clearPlan() {
+  if (fixtureMode) return;
+  await fetch("/api/plan", { method: "DELETE" });
+}

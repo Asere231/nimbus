@@ -10,6 +10,7 @@ import { buildForest, layout, extent, label, W, H } from "./graph.js";
 import { showInspector } from "./inspector.js";
 import { networkModel, networkLayout, draw as drawNetwork } from "./network.js";
 import { kubernetesModel, kubernetesLayout, draw as drawKubernetes } from "./kubernetes.js";
+import { planIndex, withGhosts, actionFor, MARKS } from "./plan.js";
 
 let renderQueued = false;
 export function scheduleRender() {
@@ -29,12 +30,16 @@ export function render() {
   svg.innerHTML = "";
   // The timeline replaces the view while it replays a run; every view below
   // draws whichever map is in charge, so replay needs no second renderer.
-  const view = state.replay || state.resources;
-  const count = view.size;
+  // A plan is a prediction laid over the live graph, so the resources it
+  // would create are merged in as ghosts -- never into the store itself.
+  // While a run is being replayed the plan is irrelevant and is left off.
+  const live = state.replay || state.resources;
+  const view = state.replay ? live : withGhosts(state.plan, live);
+  const count = live.size;
   $("#empty").hidden = count > 0 || state.replay !== null;
   // Three tiers, counted separately: the accepted-only number is the one
   // that should keep falling as more types get modelled.
-  const all = [...view.values()];
+  const all = [...live.values()];
   const real = all.filter((r) => r.backing === "real").length;
   const accepted = all.filter((r) => r.backing !== "real" && r.backing !== "modelled").length;
   $("#counts").textContent =
@@ -74,6 +79,7 @@ function fitCanvas(svg, cw, ch) {
 }
 
 function renderTopology(svg, view, filter) {
+  const pending = planIndex(state.plan);
   const roots = buildForest(view, { showSubs: $("#show-subs").checked });
   const nodes = layout(roots);
   const matches = (r) => !filter || r.name.toLowerCase().includes(filter) || r.type.toLowerCase().includes(filter);
@@ -94,6 +100,9 @@ function renderTopology(svg, view, filter) {
     const r = n.r;
     const [abbr, color] = typeStyle(r.type);
     const classes = ["node", tierOf(r)];
+    const pendingAction = actionFor(pending, r);
+    if (pendingAction) classes.push("plan-" + pendingAction);
+    if (r.ghost) classes.push("ghost");
     if (state.selected === n.key) classes.push("selected");
     if (state.current === n.key) classes.push("current");
     if (!matches(r)) classes.push("dim");
@@ -108,8 +117,14 @@ function renderTopology(svg, view, filter) {
     nm.textContent = fit(displayName(r), 20);
     const ty = el("text", { class: "ty", x: 62, y: 40 }, g);
     ty.textContent = fit(label(r), 26);
+    if (pendingAction) {
+      const mark = el("text", { class: "plan-badge", x: W - 10, y: 20, "text-anchor": "end" }, g);
+      mark.textContent = MARKS[pendingAction] || "?";
+    }
     const title = el("title", {}, g);
-    title.textContent = `${r.name}\n${r.type}\n${r.id}`;
+    title.textContent = r.ghost
+      ? `${r.name}\n${r.type || "unmapped type"}\nto be created by ${r.planAddress}`
+      : `${r.name}\n${r.type}\n${r.id}` + (pendingAction ? `\nplan: ${pendingAction}` : "");
     g.addEventListener("mousedown", (ev) => ev.preventDefault()); // no focus-scroll on click
     g.addEventListener("click", () => select(n.key));
     g.addEventListener("keydown", (ev) => { if (ev.key === "Enter") select(n.key); });

@@ -8,12 +8,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -49,6 +51,8 @@ func main() {
 		printEnv(os.Args[2:])
 	case "az":
 		azCLI(os.Args[2:])
+	case "plan-view":
+		planView(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("nimbus", version)
 	default:
@@ -65,6 +69,7 @@ Usage:
   nimbus cert  [--home DIR]      where the CA is, and how to trust it on your OS
   nimbus env azure               environment variables for Terraform and the SDKs
   nimbus az register [--run]     register Nimbus as a custom cloud for the az CLI
+  nimbus plan-view PLAN          show a terraform plan on the graph before applying it
   nimbus version
 `)
 }
@@ -482,4 +487,94 @@ func (b secretBrowser) ListSecrets(vault string) []ui.SecretInfo {
 
 func (b secretBrowser) ReadSecret(vault, name string) (string, bool) {
 	return b.h.ReadSecret(vault, name)
+}
+
+// planView reads a Terraform plan and shows it on the graph as an overlay,
+// so what is about to change is visible before anything changes.
+//
+// It takes either a saved plan (`terraform plan -out plan.out`), which it
+// converts by running `terraform show -json`, or JSON that has already been
+// converted. The two are told apart by looking at the file: Terraform's
+// saved plan is a zip archive, so it never starts with '{'.
+func planView(args []string) {
+	fs := flag.NewFlagSet("plan-view", flag.ExitOnError)
+	uiURL := fs.String("ui", "http://localhost:4700", "the visualizer to send the plan to")
+	clear := fs.Bool("clear", false, "remove the overlay instead of adding one")
+	_ = fs.Parse(args)
+
+	if *clear {
+		req, _ := http.NewRequest(http.MethodDelete, *uiURL+"/api/plan", nil)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Fatalf("clearing the overlay: %v", err)
+		}
+		res.Body.Close()
+		fmt.Println("Plan overlay cleared.")
+		return
+	}
+
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: nimbus plan-view [--ui URL] PLAN")
+		fmt.Fprintln(os.Stderr, "   or: nimbus plan-view --clear")
+		fmt.Fprintln(os.Stderr, "\nMake a plan first:  terraform plan -out plan.out")
+		os.Exit(2)
+	}
+	path := fs.Arg(0)
+
+	jsonPlan, err := planJSON(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	overlay, err := ui.ReadPlan(bytes.NewReader(jsonPlan))
+	if err != nil {
+		log.Fatal(err)
+	}
+	overlay.Source = filepath.Base(path)
+
+	body, err := json.Marshal(overlay)
+	if err != nil {
+		log.Fatal(err)
+	}
+	res, err := http.Post(*uiURL+"/api/plan", "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Fatalf("sending the plan to %s: %v\n  Is Nimbus running?", *uiURL, err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 400 {
+		out, _ := io.ReadAll(res.Body)
+		log.Fatalf("%s rejected the plan: %s", *uiURL, strings.TrimSpace(string(out)))
+	}
+
+	fmt.Printf("Plan: %s.\n", overlay.Summary())
+	for _, c := range overlay.Changes {
+		fmt.Printf("  %-8s %s\n", c.Action, c.Address)
+	}
+	fmt.Printf("\nShown on the graph at %s. Clear it with: nimbus plan-view --clear\n", *uiURL)
+}
+
+// planJSON returns the plan as `terraform show -json` output, converting a
+// saved plan file if that is what it was given.
+func planJSON(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	trimmed := bytes.TrimLeft(data, " \t\r\n")
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		return data, nil
+	}
+
+	// A saved plan only means anything inside the working directory that
+	// produced it, so terraform runs there.
+	dir := filepath.Dir(path)
+	cmd := exec.Command("terraform", "show", "-json", filepath.Base(path))
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("running `terraform show -json %s` in %s: %v\n%s",
+			filepath.Base(path), dir, err, strings.TrimSpace(stderr.String()))
+	}
+	return out, nil
 }

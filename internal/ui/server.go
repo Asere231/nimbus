@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/Asere231/nimbus/internal/core"
@@ -30,6 +31,43 @@ func Handler(store *core.Store, bus *core.Bus, info Info, blobs BlobBrowser, sec
 	mux := http.NewServeMux()
 	registerBlobRoutes(mux, blobs)
 	registerSecretRoutes(mux, secrets)
+
+	// The plan overlay, pushed in by `nimbus plan-view`. One at a time, in
+	// memory: it describes what is about to happen, so it is worthless the
+	// moment the apply runs and there is nothing to persist.
+	var planMu sync.Mutex
+	var plan *Overlay
+
+	mux.HandleFunc("/api/plan", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			planMu.Lock()
+			current := plan
+			planMu.Unlock()
+			if current == nil {
+				writeJSON(w, map[string]any{"changes": []PlanChange{}})
+				return
+			}
+			writeJSON(w, current)
+		case http.MethodPost:
+			var incoming Overlay
+			if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+				http.Error(w, "bad plan: "+err.Error(), 400)
+				return
+			}
+			planMu.Lock()
+			plan = &incoming
+			planMu.Unlock()
+			writeJSON(w, map[string]any{"status": "loaded", "changes": len(incoming.Changes)})
+		case http.MethodDelete:
+			planMu.Lock()
+			plan = nil
+			planMu.Unlock()
+			writeJSON(w, map[string]any{"status": "cleared"})
+		default:
+			http.Error(w, "GET, POST or DELETE", 405)
+		}
+	})
 
 	sub, _ := fs.Sub(static, "static")
 	mux.Handle("/", http.FileServer(http.FS(sub)))

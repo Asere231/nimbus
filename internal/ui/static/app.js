@@ -15,6 +15,7 @@
 //   export.js     SVG and PNG download
 //   network.js    the network view: VNets, subnets and peerings
 //   kubernetes.js the Kubernetes view: namespaces, workloads and services
+//   plan.js       the terraform plan overlay                     (pure)
 //   replay.js     rebuilding the graph partway through a run  (pure)
 //   timeline.js   the replay bar under the canvas
 //
@@ -27,6 +28,7 @@ import { addToFeed, clearFeed, setShowReads } from "./feed.js";
 import { render, scheduleRender, select } from "./render.js";
 import { downloadSVG, downloadPNG } from "./export.js";
 import { initTimeline, refreshRuns, isReplaying } from "./timeline.js";
+import { summarise as summarisePlan } from "./plan.js";
 
 // ---- data loading ---------------------------------------------------------
 async function loadInfo() {
@@ -70,6 +72,19 @@ async function refreshOne(id) {
   if (!r) return;
   state.resources.set(r.id.toLowerCase(), r);
   if (!isReplaying()) scheduleRender();
+}
+
+// The plan overlay is pushed in by `nimbus plan-view` while the page is
+// already open, so it is polled rather than waited for. Half a minute is
+// plenty: a plan is something you look at, not something that races.
+async function loadPlan() {
+  const overlay = await api.getPlan();
+  const had = state.plan && (state.plan.changes || []).length;
+  state.plan = overlay && (overlay.changes || []).length ? overlay : null;
+  $("#planbar").hidden = !state.plan;
+  $("#plan-summary").textContent = state.plan ? summarisePlan(state.plan) : "";
+  if (!!state.plan !== !!had) render();
+  else if (state.plan) render();
 }
 
 // ---- live events ----------------------------------------------------------
@@ -129,6 +144,7 @@ $("#reset").addEventListener("click", async () => {
   if (!confirm("Delete every emulated resource?")) return;
   await api.reset();
 });
+$("#plan-clear").addEventListener("click", async () => { await api.clearPlan(); await loadPlan(); });
 $("#export-svg").addEventListener("click", () => downloadSVG($("#graph")));
 $("#export-png").addEventListener("click", () => downloadPNG($("#graph")));
 $("#copy-json").addEventListener("click", () => {
@@ -137,4 +153,6 @@ $("#copy-json").addEventListener("click", () => {
 });
 
 initTimeline();
+loadPlan().catch(() => {});
+setInterval(() => loadPlan().catch(() => {}), 30000);
 loadInfo().then(loadAll).catch(() => {}).finally(connect);

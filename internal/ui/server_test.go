@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -369,5 +370,53 @@ func TestSecretRoutesAbsentWithoutABrowser(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != 404 {
 		t.Errorf("secrets endpoint = %d with no browser, want 404", res.StatusCode)
+	}
+}
+
+// The timeline fetches runs as summaries first, then one run with its events
+// -- so the picker does not pull every event the journal holds.
+func TestRunsAreListedAsSummariesAndFetchedWithEvents(t *testing.T) {
+	srv, _, bus := newUI(t)
+	now := time.Now().UTC()
+	for i, e := range []core.Event{
+		{Kind: "request", Action: "call", Method: "GET", Path: "/x", Status: 200},
+		{Kind: "resource", Action: "create", Cloud: "azure", ResourceID: "/id/rg", ResourceType: "Microsoft.Resources/resourceGroups", Name: "rg"},
+		{Kind: "resource", Action: "create", Cloud: "azure", ResourceID: "/id/v", ResourceType: "Microsoft.Network/virtualNetworks", Name: "v", ParentID: "/id/rg"},
+	} {
+		e.Time = now.Add(time.Duration(i) * time.Second)
+		bus.Publish(e)
+	}
+
+	var runs []core.Run
+	if code := getJSON(t, srv.URL+"/api/runs", &runs); code != 200 {
+		t.Fatalf("GET /api/runs = %d", code)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("listed %d runs, want 1", len(runs))
+	}
+	if runs[0].Steps != 2 || runs[0].Created != 2 || runs[0].Requests != 1 {
+		t.Errorf("summary = %+v", runs[0])
+	}
+	if runs[0].Events != nil {
+		t.Error("the list must not carry every run's events")
+	}
+
+	var run core.Run
+	if code := getJSON(t, srv.URL+"/api/run?id="+url.QueryEscape(runs[0].ID), &run); code != 200 {
+		t.Fatalf("GET /api/run = %d", code)
+	}
+	if len(run.Events) != 3 {
+		t.Fatalf("the run carries %d events, want 3", len(run.Events))
+	}
+	// Replay rebuilds the graph from these alone, so each one has to name a
+	// resource fully: no second lookup is possible for something since
+	// deleted.
+	last := run.Events[2]
+	if last.ResourceID == "" || last.ResourceType == "" || last.Name == "" || last.ParentID == "" {
+		t.Errorf("a resource event is missing what a card needs to be drawn: %+v", last)
+	}
+
+	if code := getJSON(t, srv.URL+"/api/run?id=nope", nil); code != 404 {
+		t.Errorf("GET /api/run for an unknown id = %d, want 404", code)
 	}
 }

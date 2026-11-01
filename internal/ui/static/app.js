@@ -13,6 +13,8 @@
 //   feed.js       the activity feed
 //   inspector.js  the selected resource, its blobs and its secrets
 //   export.js     SVG and PNG download
+//   replay.js     rebuilding the graph partway through a run  (pure)
+//   timeline.js   the replay bar under the canvas
 //
 // The pure modules are unit tested by node, in test/ui.
 
@@ -22,6 +24,7 @@ import * as api from "./api.js";
 import { addToFeed, clearFeed, setShowReads } from "./feed.js";
 import { render, scheduleRender, select } from "./render.js";
 import { downloadSVG, downloadPNG } from "./export.js";
+import { initTimeline, refreshRuns, isReplaying } from "./timeline.js";
 
 // ---- data loading ---------------------------------------------------------
 async function loadInfo() {
@@ -51,11 +54,20 @@ async function loadAll() {
   render();
 }
 
+// The run list is rebuilt a moment after activity stops, rather than on every
+// event: a run does not exist until the gap that ends it has passed, so
+// asking sooner just returns the same list again.
+let runsTimer = null;
+function runsSoon() {
+  if (runsTimer) clearTimeout(runsTimer);
+  runsTimer = setTimeout(refreshRuns, 6000);
+}
+
 async function refreshOne(id) {
   const r = await api.getResource(id);
   if (!r) return;
   state.resources.set(r.id.toLowerCase(), r);
-  scheduleRender();
+  if (!isReplaying()) scheduleRender();
 }
 
 // ---- live events ----------------------------------------------------------
@@ -66,13 +78,14 @@ function onEvent(e) {
   const isReplay = new Date(e.time).getTime() < pageLoadedAt;
   addToFeed(e, !isReplay, select);
   if (isReplay) return;
-  if (e.kind === "reset") { state.resources.clear(); state.selected = null; scheduleRender(); return; }
+  runsSoon();
+  if (e.kind === "reset") { state.resources.clear(); state.selected = null; if (!isReplaying()) scheduleRender(); return; }
   if (e.kind !== "resource" || (e.cloud && e.cloud !== state.cloud)) return;
   const key = e.resourceId.toLowerCase();
   if (e.action === "delete") {
     state.resources.delete(key);
     if (state.selected === key) state.selected = null;
-    scheduleRender();
+    if (!isReplaying()) scheduleRender();
   } else {
     (e.action === "create" ? state.entered : state.flashed).add(key);
     refreshOne(e.resourceId);
@@ -115,4 +128,5 @@ $("#copy-json").addEventListener("click", () => {
   if (r && navigator.clipboard) navigator.clipboard.writeText(JSON.stringify(r.body, null, 2));
 });
 
+initTimeline();
 loadInfo().then(loadAll).catch(() => {}).finally(connect);

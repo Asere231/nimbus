@@ -22,13 +22,16 @@ export function select(key) {
 export function render() {
   const svg = $("#graph");
   svg.innerHTML = "";
-  const roots = buildForest(state.resources, { showSubs: $("#show-subs").checked });
+  // The timeline replaces the view while it replays a run; everything below
+  // draws whichever map is in charge, so replay needs no second renderer.
+  const view = state.replay || state.resources;
+  const roots = buildForest(view, { showSubs: $("#show-subs").checked });
   const nodes = layout(roots);
-  const count = state.resources.size;
-  $("#empty").hidden = count > 0;
+  const count = view.size;
+  $("#empty").hidden = count > 0 || state.replay !== null;
   // Three tiers, counted separately: the accepted-only number is the one
   // that should keep falling as more types get modelled.
-  const all = [...state.resources.values()];
+  const all = [...view.values()];
   const real = all.filter((r) => r.backing === "real").length;
   const accepted = all.filter((r) => r.backing !== "real" && r.backing !== "modelled").length;
   $("#counts").textContent =
@@ -63,6 +66,7 @@ export function render() {
     const [abbr, color] = typeStyle(r.type);
     const classes = ["node", tierOf(r)];
     if (state.selected === n.key) classes.push("selected");
+    if (state.current === n.key) classes.push("current");
     if (!matches(r)) classes.push("dim");
     if (state.entered.has(n.key)) classes.push("enter");
     if (state.flashed.has(n.key)) classes.push("flash");
@@ -83,7 +87,7 @@ export function render() {
   }
   state.entered.clear();
   state.flashed.clear();
-  if (state.selected) showInspector(state.resources.get(state.selected));
+  if (state.selected) showInspector(view.get(state.selected));
 }
 
 // Role assignments are the one relationship that does not follow the

@@ -86,3 +86,17 @@ export async function getSecret(vault, name) {
   if (fixtureMode) return { value: "(fixture)" };
   return json(`/api/keyvault/secret?vault=${encodeURIComponent(vault)}&name=${encodeURIComponent(name)}`);
 }
+
+export async function getRuns() {
+  if (fixtureMode) return ((await fixture()).runs || []).map((r) => ({ ...r, events: undefined }));
+  return json("/api/runs");
+}
+
+export async function getRun(id) {
+  if (fixtureMode) return ((await fixture()).runs || []).find((r) => r.id === id) || null;
+  try {
+    return await json("/api/run?id=" + encodeURIComponent(id));
+  } catch (_) {
+    return null;
+  }
+}

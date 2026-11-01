@@ -34,6 +34,7 @@ type Bus struct {
 	seq     atomic.Int64
 	history []Event
 	max     int
+	journal *Journal
 }
 
 // NewBus creates a bus that remembers the last `keep` events.
@@ -59,7 +60,34 @@ func (b *Bus) Publish(e Event) {
 		default:
 		}
 	}
+	journal := b.journal
 	b.mu.Unlock()
+	journal.Append(e)
+}
+
+// SetJournal gives the bus somewhere durable to write events. Without one,
+// runs can still be replayed, but only those from the current process.
+func (b *Bus) SetJournal(j *Journal) {
+	b.mu.Lock()
+	b.journal = j
+	b.mu.Unlock()
+}
+
+// AllEvents returns everything available for building runs: the journal when
+// there is one, otherwise the in-memory ring.
+//
+// The two are never merged. Sequence numbers restart at 1 in a new process,
+// so events from different runs of Nimbus cannot be deduplicated by seq --
+// and they do not need to be, because every published event is journalled,
+// which makes the journal a superset of the ring.
+func (b *Bus) AllEvents() []Event {
+	b.mu.Lock()
+	journal := b.journal
+	b.mu.Unlock()
+	if journal != nil {
+		return journal.Events()
+	}
+	return b.History()
 }
 
 // Subscribe returns a channel of events plus the recent history, and a

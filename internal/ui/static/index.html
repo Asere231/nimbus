@@ -53,6 +53,20 @@
           <pre id="snippet"></pre>
         </div>
       </div>
+      <div class="timeline" id="timeline" hidden>
+        <div class="tl-row">
+          <select id="tl-run" aria-label="Replay a run"></select>
+          <button class="btn ghost small" id="tl-live" title="Back to the live graph">live</button>
+          <span class="tl-transport">
+            <button class="btn ghost small" id="tl-first" title="Back to the start">&#9198;</button>
+            <button class="btn ghost small" id="tl-play" title="Play">&#9654;</button>
+            <button class="btn ghost small" id="tl-last" title="Jump to the end">&#9197;</button>
+          </span>
+          <input type="range" id="tl-scrub" min="0" max="0" value="0" aria-label="Step through the run">
+          <span class="muted small" id="tl-step"></span>
+        </div>
+        <div class="tl-call muted small" id="tl-call"></div>
+      </div>
     </section>
 
     <aside class="side">

@@ -53,6 +53,28 @@ func Handler(store *core.Store, bus *core.Bus, info Info, blobs BlobBrowser, sec
 		writeJSON(w, res)
 	})
 
+	// Runs: the activity so far, grouped into bursts. The summaries are what
+	// fills the timeline's run picker; a single run carries its events, which
+	// is everything the browser needs to replay it.
+	mux.HandleFunc("/api/runs", func(w http.ResponseWriter, r *http.Request) {
+		runs := core.Runs(bus.AllEvents())
+		out := make([]core.Run, 0, len(runs))
+		for _, run := range runs {
+			run.Events = nil
+			out = append(out, run)
+		}
+		writeJSON(w, out)
+	})
+
+	mux.HandleFunc("/api/run", func(w http.ResponseWriter, r *http.Request) {
+		run, ok := core.FindRun(bus.AllEvents(), r.URL.Query().Get("id"))
+		if !ok {
+			http.Error(w, "no such run", 404)
+			return
+		}
+		writeJSON(w, run)
+	})
+
 	mux.HandleFunc("/api/reset", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", 405)

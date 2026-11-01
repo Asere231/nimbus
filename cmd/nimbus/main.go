@@ -107,6 +107,17 @@ func start(args []string) {
 	if err != nil {
 		log.Fatalf("opening state: %v", err)
 	}
+	// With --persist, events are kept too, so an apply can still be replayed
+	// in the visualizer after a restart. Without it they live in the bus's
+	// ring for as long as this process does, like the resources themselves.
+	if dataDir != "" {
+		journal, err := core.OpenJournal(dataDir)
+		if err != nil {
+			log.Fatalf("opening the event journal: %v", err)
+		}
+		defer journal.Close()
+		bus.SetJournal(journal)
+	}
 
 	azURL := fmt.Sprintf("https://%s:%d", *host, *azPort)
 	azCfg := azure.Config{PublicURL: azURL}

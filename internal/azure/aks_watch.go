@@ -31,6 +31,7 @@ import (
 const (
 	typeK8sNode       = "Nimbus.Kubernetes/nodes"
 	typeK8sDeployment = "Nimbus.Kubernetes/deployments"
+	typeK8sReplicaSet = "Nimbus.Kubernetes/replicasets"
 	typeK8sPod        = "Nimbus.Kubernetes/pods"
 	typeK8sService    = "Nimbus.Kubernetes/services"
 )
@@ -57,10 +58,14 @@ func (s *Server) startClusterWatcher(ctx context.Context) {
 // k8sObject is the slice of a Kubernetes object the visualizer needs.
 type k8sObject struct {
 	Metadata struct {
-		Name      string            `json:"name"`
-		Namespace string            `json:"namespace"`
-		UID       string            `json:"uid"`
-		Labels    map[string]string `json:"labels"`
+		Name            string            `json:"name"`
+		Namespace       string            `json:"namespace"`
+		UID             string            `json:"uid"`
+		Labels          map[string]string `json:"labels"`
+		OwnerReferences []struct {
+			Kind string `json:"kind"`
+			Name string `json:"name"`
+		} `json:"ownerReferences"`
 	} `json:"metadata"`
 	Spec struct {
 		NodeName  string `json:"nodeName"`
@@ -70,6 +75,14 @@ type k8sObject struct {
 		Ports     []struct {
 			Port int `json:"port"`
 		} `json:"ports"`
+		// Deliberately raw: the SAME field is two different shapes. A
+		// Service's spec.selector is a plain map of labels, while a
+		// Deployment's or ReplicaSet's is a LabelSelector object with the
+		// labels one level down in matchLabels. Decoding both into one Go
+		// type fails for whichever shape it is not, silently leaving the
+		// selector empty -- and with no selector, no pod is drawn behind
+		// its service.
+		Selector json.RawMessage `json:"selector"`
 	} `json:"spec"`
 	Status struct {
 		Phase             string `json:"phase"`
@@ -79,7 +92,89 @@ type k8sObject struct {
 			Type   string `json:"type"`
 			Status string `json:"status"`
 		} `json:"conditions"`
+		ContainerStatuses []struct {
+			RestartCount int `json:"restartCount"`
+		} `json:"containerStatuses"`
 	} `json:"status"`
+}
+
+// selectorOf returns the labels an object selects on, whichever of the two
+// shapes Kubernetes used for them.
+func selectorOf(typ string, raw json.RawMessage) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	if typ == typeK8sService {
+		var plain map[string]string
+		if err := json.Unmarshal(raw, &plain); err != nil {
+			return nil
+		}
+		return plain
+	}
+	var labelSelector struct {
+		MatchLabels map[string]string `json:"matchLabels"`
+	}
+	if err := json.Unmarshal(raw, &labelSelector); err != nil {
+		return nil
+	}
+	return labelSelector.MatchLabels
+}
+
+// restartsOf sums the restarts of every container in a pod, which is the
+// number kubectl prints in its RESTARTS column.
+func restartsOf(item k8sObject) int {
+	total := 0
+	for _, c := range item.Status.ContainerStatuses {
+		total += c.RestartCount
+	}
+	return total
+}
+
+// owner reports what created this object: a ReplicaSet for a pod, a
+// Deployment for a replica set. It is how the Kubernetes view nests them,
+// rather than guessing from the name prefix.
+func owner(item k8sObject) (kind, name string) {
+	if len(item.Metadata.OwnerReferences) == 0 {
+		return "", ""
+	}
+	first := item.Metadata.OwnerReferences[0]
+	return first.Kind, first.Name
+}
+
+// k8sBody is the stored representation of one mirrored object.
+func k8sBody(typ, id, name string, item k8sObject) map[string]any {
+	ns := item.Metadata.Namespace
+	status := objectStatus(typ, item)
+	ownerKind, ownerName := owner(item)
+	props := map[string]any{
+		"namespace": ns,
+		"status":    status,
+		"node":      item.Spec.NodeName,
+		"clusterIP": item.Spec.ClusterIP,
+		"labels":    item.Metadata.Labels,
+		"selector":  selectorOf(typ, item.Spec.Selector),
+		"ownerKind": ownerKind,
+		"ownerName": ownerName,
+	}
+	if typ == typeK8sPod {
+		props["restarts"] = restartsOf(item)
+	}
+	if item.Spec.Replicas != nil {
+		props["replicas"] = *item.Spec.Replicas
+	}
+	if len(item.Spec.Ports) > 0 {
+		ports := make([]int, 0, len(item.Spec.Ports))
+		for _, p := range item.Spec.Ports {
+			ports = append(ports, p.Port)
+		}
+		props["ports"] = ports
+	}
+	return map[string]any{
+		"id": id, "name": name, "type": typ,
+		"namespace":  ns,
+		"status":     status,
+		"properties": props,
+	}
 }
 
 // k8sList is the shape of a Kubernetes collection response.
@@ -103,6 +198,7 @@ func (s *Server) syncCluster(ctx context.Context, cl *cluster) {
 	wanted := []collection{
 		{"/api/v1/nodes", typeK8sNode},
 		{"/apis/apps/v1/deployments", typeK8sDeployment},
+		{"/apis/apps/v1/replicasets", typeK8sReplicaSet},
 		{"/api/v1/pods", typeK8sPod},
 		{"/api/v1/services", typeK8sService},
 	}
@@ -128,18 +224,7 @@ func (s *Server) syncCluster(ctx context.Context, cl *cluster) {
 			}
 			seen[strings.ToLower(id)] = true
 
-			body, _ := json.Marshal(map[string]any{
-				"id": id, "name": name, "type": c.typ,
-				"namespace": ns,
-				"status":    objectStatus(c.typ, item),
-				"properties": map[string]any{
-					"namespace": ns,
-					"status":    objectStatus(c.typ, item),
-					"node":      item.Spec.NodeName,
-					"clusterIP": item.Spec.ClusterIP,
-					"labels":    item.Metadata.Labels,
-				},
-			})
+			body, _ := json.Marshal(k8sBody(c.typ, id, name, item))
 			// Put is idempotent and only publishes an event when something
 			// changed, so re-storing an unchanged pod every few seconds does
 			// not spam the activity feed.
@@ -196,7 +281,7 @@ func objectStatus(typ string, item k8sObject) string {
 			}
 		}
 		return "Unknown"
-	case typeK8sDeployment:
+	case typeK8sDeployment, typeK8sReplicaSet:
 		want := 1
 		if item.Spec.Replicas != nil {
 			want = *item.Spec.Replicas

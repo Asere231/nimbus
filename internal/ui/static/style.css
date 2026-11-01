@@ -239,3 +239,41 @@ button { font: inherit; color: inherit; }
 /* A peering: two networks joined, not one containing the other. */
 .link-peering { fill: none; stroke: #39c5cf; stroke-opacity: .6; stroke-width: 1.6; stroke-dasharray: 7 4; pointer-events: stroke; }
 .link-peering:hover { stroke-opacity: 1; }
+
+/* Kubernetes view: nested containers, cluster -> namespace -> deployment ->
+   replica set -> pod, with services beside them. */
+.k8s-cluster-box { fill: color-mix(in srgb, var(--panel) 55%, transparent); stroke: #326ce5; stroke-opacity: .55; stroke-width: 1.4; }
+.k8s-cluster.selected .k8s-cluster-box { stroke-opacity: 1; stroke-width: 2.2; }
+.k8s-cluster-title { fill: var(--text); font-weight: 650; font-size: 14px; }
+.k8s-ns-box { fill: color-mix(in srgb, var(--bg) 60%, transparent); stroke: var(--line); stroke-dasharray: 6 4; }
+.k8s-ns-title { fill: var(--muted); font-size: 11.5px; font-family: var(--mono); }
+.k8s-dep-box { fill: color-mix(in srgb, var(--panel) 80%, transparent); stroke: var(--line-2); }
+.k8s-dep { cursor: pointer; }
+.k8s-dep.selected .k8s-dep-box, .k8s-dep:hover .k8s-dep-box { stroke: var(--accent); }
+.k8s-dep-title { fill: var(--text); font-weight: 600; font-size: 12.5px; }
+.k8s-rs-box { fill: transparent; stroke: var(--line); stroke-dasharray: 4 3; }
+.k8s-rs { cursor: pointer; }
+.k8s-rs-title { fill: var(--muted); font-size: 11px; font-family: var(--mono); }
+.k8s-pod { cursor: pointer; }
+.k8s-pod-box { fill: var(--bg-2); stroke: var(--line-2); }
+.k8s-pod:hover .k8s-pod-box, .k8s-pod.selected .k8s-pod-box { stroke: var(--accent); }
+.k8s-pod-name { fill: var(--text); font-size: 12px; }
+.k8s-phase { fill: var(--muted); }
+.k8s-pod.phase-running .k8s-phase { fill: var(--good); }
+.k8s-pod.phase-pending .k8s-phase { fill: var(--warn); }
+.k8s-pod.phase-failed .k8s-phase { fill: var(--bad); }
+.k8s-svc-box { fill: color-mix(in srgb, var(--warn) 10%, transparent); stroke: #ffa657; stroke-opacity: .6; }
+.k8s-svc { cursor: pointer; }
+.k8s-svc.selected .k8s-svc-box, .k8s-svc:hover .k8s-svc-box { stroke-opacity: 1; }
+.k8s-svc-title { fill: var(--text); font-weight: 600; font-size: 12.5px; }
+.k8s-sel { fill: #ffa657; font-size: 10.5px; font-family: var(--mono); }
+.k8s-node-box { fill: var(--bg-2); stroke: var(--line-2); }
+.k8s-node { cursor: pointer; }
+.k8s-node.selected .k8s-node-box, .k8s-node:hover .k8s-node-box { stroke: var(--accent); }
+.k8s-node-name { fill: var(--text); font-size: 12px; font-weight: 600; }
+.k8s-status, .k8s-meta { fill: var(--muted); font-size: 11px; font-family: var(--mono); }
+.k8s-dep.dim, .k8s-svc.dim, .k8s-pod.dim, .k8s-node.dim { opacity: .25; }
+
+/* A service reaching the pods its selector matches. */
+.link-selector { fill: none; stroke: #ffa657; stroke-opacity: .55; stroke-width: 1.4; pointer-events: stroke; }
+.link-selector:hover { stroke-opacity: 1; }

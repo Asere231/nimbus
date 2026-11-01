@@ -9,6 +9,7 @@ import { typeStyle, tierOf, displayName, roleName } from "./types.js";
 import { buildForest, layout, extent, label, W, H } from "./graph.js";
 import { showInspector } from "./inspector.js";
 import { networkModel, networkLayout, draw as drawNetwork } from "./network.js";
+import { kubernetesModel, kubernetesLayout, draw as drawKubernetes } from "./kubernetes.js";
 
 let renderQueued = false;
 export function scheduleRender() {
@@ -43,11 +44,14 @@ export function render() {
   // The subscriptions toggle only means anything to the tree.
   $("#subs-toggle").hidden = state.view !== "topology";
 
-  if (state.view === "network") {
-    const model = networkModel(view);
-    const size = networkLayout(model);
+  if (state.view === "network" || state.view === "kubernetes") {
+    const build = state.view === "network" ? networkModel : kubernetesModel;
+    const place = state.view === "network" ? networkLayout : kubernetesLayout;
+    const paint = state.view === "network" ? drawNetwork : drawKubernetes;
+    const model = build(view);
+    const size = place(model);
     fitCanvas(svg, size.width, size.height);
-    drawNetwork(svg, model, { selected: state.selected, filter, onSelect: select });
+    paint(svg, model, { selected: state.selected, filter, onSelect: select });
     if (state.selected) showInspector(view.get(state.selected));
     return;
   }

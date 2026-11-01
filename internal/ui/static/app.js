@@ -14,6 +14,7 @@
 //   inspector.js  the selected resource, its blobs and its secrets
 //   export.js     SVG and PNG download
 //   network.js    the network view: VNets, subnets and peerings
+//   kubernetes.js the Kubernetes view: namespaces, workloads and services
 //   replay.js     rebuilding the graph partway through a run  (pure)
 //   timeline.js   the replay bar under the canvas
 //

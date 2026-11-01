@@ -42,6 +42,25 @@ const EXPORT_CSS = `
   .net-chip.rt text { fill: #0550ae; }
   .net-orphan rect.card { stroke-dasharray: 5 3; }
   .link-peering { fill: none; stroke: #1b7c83; stroke-opacity: .7; stroke-width: 1.6; stroke-dasharray: 7 4; }
+  .k8s-cluster-box { fill: #ffffff; stroke: #326ce5; stroke-opacity: .55; stroke-width: 1.4; }
+  .k8s-ns-box { fill: #f6f8fa; stroke: #d8dee4; stroke-dasharray: 6 4; }
+  .k8s-dep-box { fill: #ffffff; stroke: #c4ccd5; }
+  .k8s-rs-box { fill: #ffffff; stroke: #d8dee4; stroke-dasharray: 4 3; }
+  .k8s-pod-box, .k8s-node-box { fill: #f6f8fa; stroke: #c4ccd5; }
+  .k8s-svc-box { fill: #fff8e5; stroke: #bf8700; stroke-opacity: .7; }
+  .k8s-cluster-title, .k8s-dep-title, .k8s-svc-title { fill: #1f2328; font-weight: 650; font-size: 13px;
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .k8s-pod-name, .k8s-node-name { fill: #1f2328; font-size: 12px;
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .k8s-ns-title, .k8s-rs-title, .k8s-status, .k8s-meta { fill: #59636e; font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .k8s-sel { fill: #9a6700; font-size: 10.5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .k8s-phase { fill: #59636e; }
+  .k8s-pod.phase-running .k8s-phase { fill: #1a7f37; }
+  .k8s-pod.phase-pending .k8s-phase { fill: #bf8700; }
+  .k8s-pod.phase-failed .k8s-phase { fill: #cf222e; }
+  .link-selector { fill: none; stroke: #bf8700; stroke-opacity: .7; stroke-width: 1.4; }
 `;
 
 // snapshot clones the live <svg> into something that stands alone: a white

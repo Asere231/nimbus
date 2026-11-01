@@ -86,7 +86,7 @@ Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualize
 
 ## Changing the visualizer
 
-- Modules live in `internal/ui/static`, tests in `test/ui` (`node --test test/ui/`). Keep the pure parts — models, layouts, matching — out of the DOM so they can be tested there.
+- Modules live in `internal/ui/static`, tests in `test/ui` (`node --test 'test/ui/*.test.js'` -- a glob, not a directory: node 24 tries to load a directory argument as a module). Keep the pure parts — models, layouts, matching — out of the DOM so they can be tested there.
 - `?fixture` renders `static/fixture.json` with no server. Anything new that draws should be exercised by the fixture, so it can be looked at as well as asserted about.
 - Rebuild (`go build -o bin/nimbus ./cmd/nimbus`) and restart before checking a change in the browser: the files are embedded.
 

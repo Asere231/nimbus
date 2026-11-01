@@ -24,7 +24,7 @@ and becomes something you can replay, predict with, and publish from.
   notation, with a ghost card for each resource that does not exist yet.
 - **Export.** Any view as a standalone SVG or a 2× PNG, light-themed.
 - **ES modules.** `app.js` is now eleven modules with no build step and no
-  CDN, and the pure ones have unit tests run by `node --test test/ui/` — the
+  CDN, and the pure ones have unit tests run by `node --test 'test/ui/*.test.js'` — the
   visualizer's first. A Go test walks the import graph so a typo in a module
   path fails the build rather than the browser.
 - **`?fixture`** renders a sample stack with no server state, which is how the

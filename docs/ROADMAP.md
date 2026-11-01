@@ -38,7 +38,7 @@ az 2.90.0 and Terraform 1.16.4.
   `terraform apply` step by step from a persisted event journal, overlays a
   `terraform plan` before it is applied, and exports any view as SVG or PNG.
   It is ES modules with no build step, and its pure parts have unit tests run
-  by `node --test test/ui/`.
+  by `node --test 'test/ui/*.test.js'`.
 - CI is green on ubuntu, macos and windows, plus the SDK harness, the
   generator's tests, the visualizer's node tests, the Terraform
   apply/plan/destroy jobs and an az + Bicep deployment job.

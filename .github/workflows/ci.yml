@@ -100,10 +100,15 @@ jobs:
       # No package.json anywhere in the repo, so node decides these .js files
       # are ES modules by reading them -- syntax detection, on by default
       # since 22.7. Hence a pinned major rather than whatever is oldest.
+      #
+      # The argument is a GLOB, not a directory. `node --test test/ui/` works
+      # on node 26 and fails on 24 with "Cannot find module .../test/ui": the
+      # runner resolved the directory as a module to load rather than a place
+      # to look for tests. The glob behaves the same on both.
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: node --test test/ui/
+      - run: node --test 'test/ui/*.test.js'
 
   specgen:
     name: spec generator

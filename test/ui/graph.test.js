@@ -1,7 +1,7 @@
 // Unit tests for the visualizer's pure modules, run by node's own test
 // runner:
 //
-//	node --test test/ui/
+//	node --test 'test/ui/*.test.js'
 //
 // They live here rather than beside the source because internal/ui/static is
 // embedded into the binary wholesale by //go:embed -- a test file in there

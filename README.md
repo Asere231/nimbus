@@ -126,6 +126,6 @@ docs/                  roadmap, offline setup
 
 ```bash
 go test ./...                              # unit + HTTP tests, no network
-node --test test/ui/                       # the visualizer's pure modules
+node --test 'test/ui/*.test.js'            # the visualizer's pure modules
 cd test/sdkcompat && go run . -endpoint https://localhost:4701   # real Azure SDK against a running Nimbus
 ```

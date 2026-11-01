@@ -82,7 +82,7 @@ Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualize
 1. Write a failing test in `internal/azure/*_test.go` that replays the client's calls (copy the shape from the SDK or a Terraform debug log: `TF_LOG=DEBUG terraform apply`).
 2. Add a hook file (e.g. `storage.go`) and register it in `New()`.
 3. Fill server-generated fields in `BeforePut`; start or stop a real engine in `AfterPut`/`AfterDelete` and set `Backing: "real"` if one runs.
-4. Add a badge/colour for the type in `internal/ui/static/app.js` (`TYPES`).
+4. Add a badge/colour for the type in `internal/ui/static/types.js` (`TYPES`). `TestEverySpecTypeHasABadge` fails until you do.
 5. Prove it with Terraform: add it to an example under `examples/terraform/` and apply + destroy.
 
 ## Changing the visualizer

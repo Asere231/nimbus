@@ -32,18 +32,23 @@ and becomes something you can replay, predict with, and publish from.
 - Phone width: the header wraps instead of pushing the resource counts and
   Reset off the right-hand edge.
 
-## Unreleased
+Found by running the whole thing against a real `azure-app` apply, and
+fixed before the milestone closed:
 
-- Replaying a run starts at its first step and plays, instead of opening on
-  the last step — which looked identical to the live graph, so picking a run
-  appeared to do nothing.
-- A run now carries what already existed when it began, so a replay ends
-  where the live graph is rather than showing only what that run touched.
-  Startup snapshots the store into the journal, because loading `state.json`
-  publishes nothing and the journal would otherwise never learn about it.
-- Each view says why it is empty instead of showing a blank canvas.
-- `node --test` is given a glob rather than a directory: node 24 tries to
-  load a directory argument as a module.
+- A replay opened on its **last** step, which is pixel-identical to the live
+  graph, so picking a run appeared to do nothing. It starts at the first step
+  and plays.
+- A replay began from an **empty world**, so it ended holding only what that
+  run had touched — the subscription was missing at 24/24 although it was
+  there live. Each run now carries what existed when it began. That needed a
+  snapshot written to the journal at startup, because the journal only ever
+  hears about changes and a restart is not one.
+- An empty view drew a blank canvas. `examples/terraform/azure-app` has no
+  virtual networks at all, so the network view was correct and looked broken;
+  each view now says what it would draw.
+- `node --test` is given a glob, not a directory: node 24 tries to load a
+  directory argument as a module, so CI failed where the same command passed
+  locally on node 26.
 
 ## 0.5.0 — 2026-10-31
 

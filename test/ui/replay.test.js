@@ -84,6 +84,49 @@ test("a reset clears everything replayed so far", () => {
   assert.equal(stateAt(events, 4).size, 1);
 });
 
+// A run that is not the first one happened in a world that already had
+// things in it. Without the baseline the replay ended with only what the
+// run touched -- on a real apply, the subscription was missing from the end
+// of the replay although it was there live.
+test("a replay starts from what already existed when the run began", () => {
+  const baseline = [
+    { cloud: "azure", id: "/subscriptions/s", type: "Microsoft.Resources/subscriptions", name: "s", parentId: "" },
+    { cloud: "azure", id: RG, type: "Microsoft.Resources/resourceGroups", name: "rg", parentId: "/subscriptions/s" },
+  ];
+  const events = [created(VNET, "Microsoft.Network/virtualNetworks", "v", RG)];
+
+  const before = stateAt(events, 0, new Map(), baseline);
+  assert.equal(before.size, 2, "step 0 is the world as it stood, not an empty one");
+
+  const after = stateAt(events, 1, new Map(), baseline);
+  assert.equal(after.size, 3);
+  const roots = buildForest(after);
+  assert.equal(roots.length, 1, "the run's resources hang off what was already there");
+  assert.equal(roots[0].r.name, "s");
+
+  // And with no baseline it behaves as before: only what the run touched.
+  assert.equal(stateAt(events, 1).size, 1);
+  assert.equal(stateAt(events, 1, new Map(), null).size, 1);
+});
+
+test("the live copy wins over a baseline entry, so bodies are real", () => {
+  const live = new Map([[RG.toLowerCase(), {
+    id: RG, type: "Microsoft.Resources/resourceGroups", name: "rg", parentId: "",
+    backing: "modelled", body: { tags: { env: "dev" } },
+  }]]);
+  const baseline = [{ cloud: "azure", id: RG, type: "Microsoft.Resources/resourceGroups", name: "rg" }];
+  const map = stateAt([], 0, live, baseline);
+  assert.equal(map.get(RG.toLowerCase()).backing, "modelled");
+  assert.ok(map.get(RG.toLowerCase()).body.tags);
+});
+
+test("a baseline resource the run deletes disappears at that step", () => {
+  const baseline = [{ cloud: "azure", id: VNET, type: "Microsoft.Network/virtualNetworks", name: "v", parentId: RG }];
+  const events = [deleted(VNET, "Microsoft.Network/virtualNetworks", "v", RG)];
+  assert.equal(stateAt(events, 0, new Map(), baseline).size, 1);
+  assert.equal(stateAt(events, 1, new Map(), baseline).size, 0);
+});
+
 test("a resource that still exists is replayed with its real body", () => {
   const live = new Map([[VNET.toLowerCase(), {
     id: VNET, type: "Microsoft.Network/virtualNetworks", name: "v", parentId: RG,

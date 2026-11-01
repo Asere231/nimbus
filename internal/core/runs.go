@@ -2,6 +2,7 @@ package core
 
 import (
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,16 @@ import (
 // replays only half the stack.
 const RunGap = 30 * time.Second
 
+// RunResource is a resource that already existed when a run began. It
+// carries what a card needs to be drawn and nothing else.
+type RunResource struct {
+	Cloud    string `json:"cloud,omitempty"`
+	ID       string `json:"id"`
+	Type     string `json:"type,omitempty"`
+	Name     string `json:"name,omitempty"`
+	ParentID string `json:"parentId,omitempty"`
+}
+
 // Run is one burst of activity, summarised.
 type Run struct {
 	ID       string    `json:"id"`
@@ -44,6 +55,17 @@ type Run struct {
 	Requests int       `json:"requests"`
 	Steps    int       `json:"steps"` // changes: what the scrubber steps through
 	Events   []Event   `json:"events,omitempty"`
+
+	// What already existed when this run started. A replay that began from
+	// an empty graph showed only the resources the run itself touched,
+	// floating with no resource group or subscription around them -- true
+	// of the first run ever and of nothing after it.
+	//
+	// It is only as complete as the journal: anything created before the
+	// oldest record still on disk cannot be recovered, so a very old run
+	// replays against less than really existed. Startup writes a snapshot
+	// of the store, so a restart does not lose it.
+	Baseline []RunResource `json:"baseline,omitempty"`
 }
 
 // changed reports whether an event is a step in a replay, as opposed to
@@ -56,7 +78,18 @@ func changed(e Event) bool {
 // in the order they happened, which for an apply is dependency order: the
 // provider could not have created a child before its parent.
 func Runs(events []Event) []Run {
-	sorted := append([]Event(nil), events...)
+	// Snapshots take no part in this. They say what already existed, not
+	// that anything happened, so they must not start a run, extend one, or
+	// bridge the gap between two -- and a run that began at a snapshot
+	// would count that snapshot as "before" nothing, losing the baseline it
+	// was written for.
+	sorted := make([]Event, 0, len(events))
+	for _, e := range events {
+		if e.Kind == "snapshot" {
+			continue
+		}
+		sorted = append(sorted, e)
+	}
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Time.Before(sorted[j].Time) })
 
 	var runs []Run
@@ -118,12 +151,59 @@ func summarise(group []Event) (Run, bool) {
 	return run, true
 }
 
-// FindRun returns the run with the given ID, events included.
+// FindRun returns the run with the given ID, with its events and the state
+// of the world when it started.
 func FindRun(events []Event, id string) (Run, bool) {
 	for _, r := range Runs(events) {
-		if r.ID == id {
-			return r, true
+		if r.ID != id {
+			continue
 		}
+		r.Baseline = baselineAt(events, r.Start)
+		return r, true
 	}
 	return Run{}, false
+}
+
+// baselineAt folds every event before `start` into the set of resources that
+// existed at that moment.
+func baselineAt(events []Event, start time.Time) []RunResource {
+	sorted := append([]Event(nil), events...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Time.Before(sorted[j].Time) })
+
+	existing := map[string]RunResource{}
+	order := []string{}
+	for _, e := range sorted {
+		if !e.Time.Before(start) {
+			break
+		}
+		if e.Kind == "reset" {
+			existing = map[string]RunResource{}
+			order = order[:0]
+			continue
+		}
+		// "snapshot" is how a restart tells the journal what was already
+		// there; it counts towards the baseline exactly like a create.
+		if (e.Kind != "resource" && e.Kind != "snapshot") || e.ResourceID == "" {
+			continue
+		}
+		key := strings.ToLower(e.ResourceID)
+		if e.Action == "delete" {
+			delete(existing, key)
+			continue
+		}
+		if _, seen := existing[key]; !seen {
+			order = append(order, key)
+		}
+		existing[key] = RunResource{
+			Cloud: e.Cloud, ID: e.ResourceID, Type: e.ResourceType,
+			Name: e.Name, ParentID: e.ParentID,
+		}
+	}
+	out := make([]RunResource, 0, len(existing))
+	for _, key := range order {
+		if r, ok := existing[key]; ok {
+			out = append(out, r)
+		}
+	}
+	return out
 }

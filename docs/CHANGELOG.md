@@ -32,6 +32,19 @@ and becomes something you can replay, predict with, and publish from.
 - Phone width: the header wraps instead of pushing the resource counts and
   Reset off the right-hand edge.
 
+## Unreleased
+
+- Replaying a run starts at its first step and plays, instead of opening on
+  the last step — which looked identical to the live graph, so picking a run
+  appeared to do nothing.
+- A run now carries what already existed when it began, so a replay ends
+  where the live graph is rather than showing only what that run touched.
+  Startup snapshots the store into the journal, because loading `state.json`
+  publishes nothing and the journal would otherwise never learn about it.
+- Each view says why it is empty instead of showing a blank canvas.
+- `node --test` is given a glob rather than a directory: node 24 tries to
+  load a directory argument as a module.
+
 ## 0.5.0 — 2026-10-31
 
 Milestone 5: breadth. Most Azure types now have the right shape without

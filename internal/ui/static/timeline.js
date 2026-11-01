@@ -61,7 +61,7 @@ async function load(id) {
 function show(n) {
   if (!current) return;
   at = Math.min(Math.max(n, 0), stepList.length);
-  state.replay = stateAt(current.events, at, state.resources);
+  state.replay = stateAt(current.events, at, state.resources, current.baseline);
   state.current = at > 0 ? String(stepList[at - 1].resourceId || "").toLowerCase() : null;
   $("#tl-scrub").value = String(at);
   $("#tl-step").textContent = `${at} / ${stepList.length}`;

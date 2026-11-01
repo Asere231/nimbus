@@ -20,9 +20,16 @@ export function steps(events) {
 }
 
 // stateAt returns the resource map as it stood after applying the first
-// `count` steps. `live` is the current store, used to fill in bodies.
-export function stateAt(events, count, live = new Map()) {
+// `count` steps. `live` is the current store, used to fill in bodies, and
+// `baseline` is what already existed when the run began -- without it a
+// replay starts from an empty world, so everything the run created floats
+// with no resource group or subscription around it.
+export function stateAt(events, count, live = new Map(), baseline = []) {
   const out = new Map();
+  for (const r of baseline || []) {
+    const key = String(r.id || "").toLowerCase();
+    if (key) out.set(key, live.get(key) || card(r));
+  }
   const list = steps(events);
   for (const e of list.slice(0, Math.max(0, count))) {
     if (e.kind === "reset") {
@@ -35,25 +42,33 @@ export function stateAt(events, count, live = new Map()) {
       out.delete(key);
       continue;
     }
-    const known = live.get(key);
-    out.set(key, known || {
-      cloud: e.cloud || "azure",
-      id: e.resourceId,
-      type: e.resourceType || "",
-      name: e.name || "",
-      parentId: e.parentId || "",
-      location: "",
-      // Nothing in the event says which tier this was: "state" is the
-      // honest answer for a resource we can no longer look up, and it is
-      // also the tier that draws as a dashed outline, which reads correctly
-      // as "this is gone".
-      backing: "state",
-      body: {},
-      createdAt: e.time,
-      updatedAt: e.time,
-    });
+    out.set(key, live.get(key) || card({
+      cloud: e.cloud, id: e.resourceId, type: e.resourceType,
+      name: e.name, parentId: e.parentId,
+    }, e.time));
   }
   return out;
+}
+
+// card is the stand-in for a resource that is not in the store any more:
+// built from what the event or the baseline knows about it.
+//
+// Nothing in either says which backing tier it had. "state" is the honest
+// answer for something we can no longer look up, and it is also the tier
+// that draws as a dashed outline, which reads correctly as "this is gone".
+function card(r, when) {
+  return {
+    cloud: r.cloud || "azure",
+    id: r.id,
+    type: r.type || "",
+    name: r.name || "",
+    parentId: r.parentId || "",
+    location: "",
+    backing: "state",
+    body: {},
+    createdAt: when || null,
+    updatedAt: when || null,
+  };
 }
 
 // CALL_WINDOW is how far either side of a step callFor will look.

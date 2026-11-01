@@ -218,3 +218,126 @@ func appendRaw(t *testing.T, path, line string) {
 		t.Fatal(err)
 	}
 }
+
+// A run that is not the first one happened in a world that already had
+// things in it. Replaying from an empty graph showed only what the run
+// itself touched, floating with no resource group or subscription around
+// them -- seen on a real apply, where the subscription was missing from the
+// end of the replay but present live.
+func TestARunCarriesWhatExistedBeforeIt(t *testing.T) {
+	events := []Event{
+		create(0, "sub"),
+		create(1, "rg-old"),
+		// ... a long quiet stretch, so the next burst is its own run ...
+		create(100, "vnet"),
+		create(101, "nsg"),
+	}
+	runs := Runs(events)
+	if len(runs) != 2 {
+		t.Fatalf("got %d runs, want 2", len(runs))
+	}
+	second, ok := FindRun(events, runs[0].ID)
+	if !ok {
+		t.Fatal("the newer run was not found")
+	}
+	var names []string
+	for _, r := range second.Baseline {
+		names = append(names, r.Name)
+	}
+	if len(names) != 2 || names[0] != "sub" || names[1] != "rg-old" {
+		t.Errorf("baseline = %v, want sub and rg-old in the order they appeared", names)
+	}
+
+	// The first run began with nothing, and says so.
+	first, _ := FindRun(events, runs[1].ID)
+	if len(first.Baseline) != 0 {
+		t.Errorf("the first run's baseline = %v, want empty", first.Baseline)
+	}
+}
+
+func TestTheBaselineReflectsDeletesAndResets(t *testing.T) {
+	gone := Event{Kind: "resource", Action: "delete", Time: at(2), ResourceID: "/id/a", Name: "a"}
+	events := []Event{create(0, "a"), create(1, "b"), gone, create(100, "later")}
+	runs := Runs(events)
+	newest, _ := FindRun(events, runs[0].ID)
+	if len(newest.Baseline) != 1 || newest.Baseline[0].Name != "b" {
+		t.Errorf("baseline = %+v, want only b: a was deleted before the run", newest.Baseline)
+	}
+
+	withReset := []Event{create(0, "a"), {Kind: "reset", Action: "reset", Time: at(2)}, create(100, "later")}
+	runs = Runs(withReset)
+	newest, _ = FindRun(withReset, runs[0].ID)
+	if len(newest.Baseline) != 0 {
+		t.Errorf("baseline = %+v, want empty: everything was reset before the run", newest.Baseline)
+	}
+}
+
+// A baseline entry has to carry enough to draw a card, like an event does.
+func TestBaselineEntriesCanBeDrawn(t *testing.T) {
+	events := []Event{
+		{Kind: "resource", Action: "create", Time: at(0), Cloud: "azure",
+			ResourceID: "/subscriptions/s/resourceGroups/rg", ResourceType: "Microsoft.Resources/resourceGroups",
+			Name: "rg", ParentID: "/subscriptions/s"},
+		create(100, "later"),
+	}
+	runs := Runs(events)
+	newest, _ := FindRun(events, runs[0].ID)
+	if len(newest.Baseline) != 1 {
+		t.Fatalf("baseline = %+v", newest.Baseline)
+	}
+	b := newest.Baseline[0]
+	if b.ID == "" || b.Type == "" || b.Name == "" || b.ParentID == "" || b.Cloud == "" {
+		t.Errorf("a baseline entry is missing what a card needs: %+v", b)
+	}
+}
+
+// A restart changes nothing, so it publishes nothing, so the journal would
+// never learn that the resources loaded from state.json exist -- and the
+// next run would replay against an empty world. Startup snapshots them in.
+func TestASnapshotSeedsTheBaselineAfterARestart(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.AppendSnapshot([]*Resource{
+		{Cloud: "azure", ID: "/subscriptions/s", Type: "Microsoft.Resources/subscriptions", Name: "s"},
+		{Cloud: "azure", ID: "/subscriptions/s/resourceGroups/rg", Type: "Microsoft.Resources/resourceGroups",
+			Name: "rg", ParentID: "/subscriptions/s"},
+	})
+	bus := NewBus(10)
+	bus.SetJournal(j)
+	bus.Publish(Event{Kind: "resource", Action: "create", ResourceID: "/subscriptions/s/resourceGroups/rg/x", Name: "x"})
+	j.Close()
+
+	events := readJournal(filepath.Join(dir, "events.jsonl"))
+	runs := Runs(events)
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs, want 1: a snapshot is not a change and must not become a run", len(runs))
+	}
+	if runs[0].Steps != 1 {
+		t.Errorf("steps = %d, want 1: only the create is a step", runs[0].Steps)
+	}
+	run, ok := FindRun(events, runs[0].ID)
+	if !ok {
+		t.Fatal("run not found")
+	}
+	var names []string
+	for _, b := range run.Baseline {
+		names = append(names, b.Name)
+	}
+	if len(names) != 2 {
+		t.Errorf("baseline = %v, want the two snapshotted resources", names)
+	}
+}
+
+// A snapshot on its own -- a restart with nobody using it -- is not a run.
+func TestASnapshotAloneIsNotARun(t *testing.T) {
+	dir := t.TempDir()
+	j, _ := OpenJournal(dir)
+	j.AppendSnapshot([]*Resource{{Cloud: "azure", ID: "/subscriptions/s", Name: "s"}})
+	j.Close()
+	if runs := Runs(readJournal(filepath.Join(dir, "events.jsonl"))); len(runs) != 0 {
+		t.Errorf("got %d runs from a restart that changed nothing, want 0", len(runs))
+	}
+}

@@ -122,6 +122,10 @@ func start(args []string) {
 		}
 		defer journal.Close()
 		bus.SetJournal(journal)
+		// Nothing is published for resources that merely loaded from disk,
+		// so the journal is told about them directly. Without this a replay
+		// after a restart begins from an empty world.
+		journal.AppendSnapshot(store.List(nil))
 	}
 
 	azURL := fmt.Sprintf("https://%s:%d", *host, *azPort)

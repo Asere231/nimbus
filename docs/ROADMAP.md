@@ -103,6 +103,11 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
   longer than 30 s inside one apply would split it. A `nimbus run --
   terraform apply` wrapper that marked the boundaries explicitly would remove
   the guess; the heuristic needs no new CLI surface, so it went first.
+- **A run from before this was built replays without its baseline.** The
+  journal is told what already exists only from the first restart that
+  writes a snapshot, so runs recorded before that one still begin from an
+  empty world and end with fewer resources than are live. Nothing can
+  recover what was never recorded; new runs are complete.
 - **The activity feed still starts empty after a restart**, because the SSE
   stream replays the bus's in-memory ring and the journal is deliberately not
   streamed. The timeline is how history is reached now; seeding the feed from

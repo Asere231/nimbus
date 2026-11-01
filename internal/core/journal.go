@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Keeping events on disk, so an apply can still be replayed tomorrow.
@@ -70,6 +71,30 @@ func (j *Journal) Append(e Event) {
 		if err := j.trim(); err == nil {
 			j.file, _ = os.OpenFile(j.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		}
+	}
+}
+
+// AppendSnapshot records that these resources existed at this moment.
+//
+// It is needed because the journal only ever hears about CHANGES, and a
+// restart makes no changes: the store loads state.json and every resource in
+// it is simply there, unannounced. A replay of the next run would then start
+// from an empty world. (The same is true of the default subscription, which
+// ensureSubscription skips creating when it is already present.)
+//
+// These records are written straight to the file and never published, so
+// they do not reach the activity feed or any browser -- nothing happened, and
+// a feed that said otherwise after every restart would be lying.
+func (j *Journal) AppendSnapshot(resources []*Resource) {
+	if j == nil || j.file == nil || len(resources) == 0 {
+		return
+	}
+	now := time.Now().UTC()
+	for _, r := range resources {
+		j.Append(Event{
+			Time: now, Kind: "snapshot", Action: "exists", Cloud: r.Cloud,
+			ResourceID: r.ID, ResourceType: r.Type, Name: r.Name, ParentID: r.ParentID,
+		})
 	}
 }
 

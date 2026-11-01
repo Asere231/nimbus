@@ -46,10 +46,15 @@ async function load(id) {
   if (!run) return live();
   current = run;
   stepList = steps(run.events);
-  const scrub = $("#tl-scrub");
-  scrub.max = String(stepList.length);
-  scrub.value = String(stepList.length);
-  show(stepList.length);
+  $("#tl-scrub").max = String(stepList.length);
+  // Start at the BEGINNING and play.
+  //
+  // It used to open on the last step, so as not to blank the graph. That
+  // was exactly wrong: the end of a run looks identical to the live graph,
+  // so picking a run appeared to do nothing at all. Picking a run is a
+  // request to watch it happen.
+  show(0);
+  play();
 }
 
 // show draws the graph as it stood after `n` steps.
@@ -91,7 +96,15 @@ function pause() {
 }
 
 function play() {
-  if (!current) return;
+  // Play with nothing picked plays the most recent run, rather than being
+  // a button that does nothing.
+  if (!current) {
+    if (runs.length) {
+      $("#tl-run").value = runs[0].id;
+      load(runs[0].id);
+    }
+    return;
+  }
   if (timer) return pause();
   // Pressing play at the end starts again from the beginning, which is what
   // anyone who has just watched it once wants.

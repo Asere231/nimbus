@@ -169,7 +169,8 @@ func TestErrorEnvelopesDifferPerService(t *testing.T) {
 		t.Errorf("ec2 error = %+v\n%s", e, body)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	// A bucket nobody created, which is the simplest S3 error there is.
+	req := httptest.NewRequest(http.MethodGet, "/no-such-bucket/key.txt", nil)
 	req.Header.Set("Authorization",
 		"AWS4-HMAC-SHA256 Credential=nimbus/20261106/us-east-1/s3/aws4_request, Signature=x")
 	rec := httptest.NewRecorder()

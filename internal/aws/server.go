@@ -46,9 +46,10 @@ type Config struct {
 
 // Server is the AWS emulator.
 type Server struct {
-	cfg   Config
-	store *core.Store
-	bus   *core.Bus
+	cfg     Config
+	store   *core.Store
+	bus     *core.Bus
+	objects *objectStore
 }
 
 // New builds the server and makes sure the account exists.
@@ -59,7 +60,8 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	if cfg.Region == "" {
 		cfg.Region = DefaultRegion
 	}
-	s := &Server{cfg: cfg, store: store, bus: bus}
+	s := &Server{cfg: cfg, store: store, bus: bus, objects: newObjectStore(cfg.DataDir)}
+	s.objects.load()
 	s.ensureAccount()
 	return s
 }
@@ -102,7 +104,9 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 		return s.serveSTS(w, r)
 	case "ec2":
 		return s.serveEC2(w, r)
-	case "iam", "s3":
+	case "s3":
+		return s.serveS3(w, r)
+	case "iam":
 		// Built in later checkpoints. Answering 400 rather than 501 keeps
 		// the client from retrying five times over something that will
 		// never succeed, and puts one legible line in the feed.

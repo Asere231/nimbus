@@ -20,7 +20,7 @@ env:
   GO_MIN_VERSION: "1.22"
   # Every Terraform example, applied/planned/destroyed by the terraform job.
   # Add new ones here.
-  EXAMPLES: "azure-basic azure-storage"
+  EXAMPLES: "azure-basic azure-storage aws-basic"
 
 jobs:
   test:
@@ -449,7 +449,10 @@ jobs:
         run: |
           go build -o bin/nimbus ./cmd/nimbus
           ./bin/nimbus cert
-          ./bin/nimbus start &
+          # Both clouds in ONE process, which is the point: they share a
+          # store, a journal and a visualizer, and an example of each
+          # running side by side is the real test that they still do.
+          ./bin/nimbus start --clouds azure,aws &
           for i in $(seq 1 30); do
             curl -sf http://localhost:4700/api/info >/dev/null && break
             sleep 1
@@ -463,10 +466,12 @@ jobs:
           # Go on Linux honours SSL_CERT_FILE; the azurerm provider inherits it.
           export SSL_CERT_FILE="$HOME/.nimbus/certs/nimbus-ca.pem"
 
-          # Every example, not just the first. azure-storage exercises the data
-          # plane -- Shared Key, XML, real bytes -- which shares the ARM write
-          # path with everything else, so it is the example most likely to
-          # catch collateral damage from an unrelated change.
+          # Every example, not just the first. azure-storage exercises the
+          # data plane -- Shared Key, XML, real bytes -- which shares the ARM
+          # write path with everything else, so it is the example most likely
+          # to catch collateral damage from an unrelated change. aws-basic
+          # covers the other cloud entirely: SigV4 routing, EC2 Query/XML, S3
+          # REST and IAM, against the same running server.
           for example in ${{ env.EXAMPLES }}; do
             echo "::group::$example"
             cd "$GITHUB_WORKSPACE/examples/terraform/$example"

@@ -1,11 +1,12 @@
 # Nimbus
 
-A from-scratch, offline, multi-cloud emulator with a live visualizer. Azure first; AWS and GCP plug into the same engine later.
+A from-scratch, offline, multi-cloud emulator with a live visualizer. Azure and AWS run side by side on the same engine; GCP plugs into it later.
 
 Real tools talk to it unchanged: the Terraform `azurerm` provider and the Azure SDKs see an Azure Resource Manager endpoint, and the visualizer at `http://localhost:4700` draws every resource as it is created.
 
 ```
-terraform apply  ──HTTPS──▶  Nimbus Azure (ARM) :4701 ──▶ store ──▶ event bus ──SSE──▶  visualizer :4700
+terraform apply  ──HTTPS──▶  Nimbus Azure (ARM) :4701 ──┐
+terraform apply  ──HTTP───▶  Nimbus AWS        :4702 ──┴▶ store ──▶ event bus ──SSE──▶  visualizer :4700
 ```
 
 **Status (v0.1.0, Milestone 1):** ARM control plane with resource groups, virtual networks, subnets, and an "accepted" tier for every other resource type; token and metadata endpoints; live visualizer. Verified with `hashicorp/go-azure-sdk` (the SDK inside the azurerm provider). See [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -81,6 +82,28 @@ path, so it appears in the visualizer as it goes. See `examples/bicep`.
 `az group create`, `az network vnet create`, `az resource list`, `az keyvault
 secret set/show` and `az storage blob`.
 
+## AWS
+
+`nimbus start --clouds azure,aws` adds an AWS endpoint on port 4702. Plain
+HTTP, because no AWS client insists on TLS and S3 is addressed path-style —
+so there is nothing to trust on your machine.
+
+| Service | What works |
+|---|---|
+| STS | `GetCallerIdentity`, `AssumeRole` |
+| EC2 | VPCs, subnets, internet and NAT gateways, route tables and routes, security groups and rules, tags, availability zones, account attributes, with the describe filters the provider sends |
+| S3 | Buckets path-style with their whole sub-configuration matrix (versioning, tagging, policy, encryption, public access block, ownership, …) and objects with real bytes on disk |
+| IAM | Roles, users, managed and inline policies, attachments, instance profiles — recorded, never enforced |
+
+```bash
+aws --endpoint-url http://localhost:4702 sts get-caller-identity
+aws --endpoint-url http://localhost:4702 s3 cp README.md s3://demo/
+```
+
+`examples/terraform/aws-basic` applies 14 resources across all four services,
+plans clean and destroys. One request is routed to a service by its **SigV4
+credential scope**, not by its path: every Query service posts to `/`.
+
 ## The visualizer
 
 `http://localhost:4700`, served from inside the binary: no build step, no CDN,
@@ -103,8 +126,8 @@ works with the network off.
 - `?fixture` renders a sample stack with no server state, which is how the
   browser and layout checks are done.
 
-Not yet: AWS and GCP, and deployments at subscription scope or above — see
-`docs/ROADMAP.md`.
+Not yet: GCP, AWS compute (EC2 instances, Lambda, EKS), and Azure deployments
+at subscription scope or above — see `docs/ROADMAP.md`.
 
 ## Repo layout
 
@@ -112,6 +135,7 @@ Not yet: AWS and GCP, and deployments at subscription scope or above — see
 cmd/nimbus/            CLI: start (--clouds), cert, env, az register, plan-view
 internal/core/         cloud-agnostic engine: store, event bus, certs, persistence
 internal/azure/        ARM emulator: routing, identity/metadata, generic CRUD, per-type hooks
+internal/aws/          AWS emulator: SigV4 routing, EC2 Query/XML, S3 REST, IAM
 internal/azure/deployments/  ARM template expressions, copy loops, dependency ordering
 internal/ui/           visualizer API + SSE, the plan overlay, and the embedded web app (static/, ES modules, one type table per cloud)
 tools/specgen/         generates the spec-derived type table (separate Go module; the only thing that fetches anything)

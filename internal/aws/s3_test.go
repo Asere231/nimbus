@@ -396,3 +396,34 @@ func TestOperationsOnAMissingBucket(t *testing.T) {
 		}
 	}
 }
+
+// A clean refresh reads a dozen unset sub-resources and gets a dozen 404s.
+// They are correct answers, so the activity feed must not paint them as
+// failures -- a feed that cries wolf on every plan teaches people to stop
+// reading it.
+func TestExpected404sAreMarkedSoInTheFeed(t *testing.T) {
+	s := newTestServer(t)
+	makeBucket(t, s, "demo")
+
+	before := len(s.bus.History())
+	s3req(t, s, http.MethodGet, "/demo?tagging", "")
+	s3req(t, s, http.MethodGet, "/demo?policy", "")
+	// A genuine mistake, which must still be flagged.
+	s3req(t, s, http.MethodGet, "/no-such-bucket?tagging", "")
+
+	events := s.bus.History()[before:]
+	if len(events) != 3 {
+		t.Fatalf("published %d events, want 3", len(events))
+	}
+	for i, e := range events[:2] {
+		if !strings.HasPrefix(e.Note, "expected:") {
+			t.Errorf("event %d note = %q, want it marked expected", i, e.Note)
+		}
+		if e.Status != 404 {
+			t.Errorf("event %d status = %d, want the real 404 to still be reported", i, e.Status)
+		}
+	}
+	if strings.HasPrefix(events[2].Note, "expected:") {
+		t.Errorf("a missing bucket is a real error, not an expected one: %q", events[2].Note)
+	}
+}

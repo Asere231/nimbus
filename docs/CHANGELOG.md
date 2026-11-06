@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.7.0 — 2026-11-06
+
+Milestone 7: AWS core. A second cloud on the same engine, which is also the
+first real test of whether six milestones of "cloud-agnostic" meant anything.
+
+- **AWS on port 4702**, plain HTTP. `nimbus start --clouds azure,aws` runs
+  both clouds in one process, sharing the store, the event journal and the
+  visualizer.
+- **Routed by signature, not by path.** Every Query service posts to exactly
+  `/`; STS, EC2 and IAM differ only in the fourth field of the SigV4
+  credential scope. Signatures are never verified — a local emulator
+  rejecting one could only ever be reporting a clock skew.
+- **STS**: `GetCallerIdentity`, `AssumeRole`.
+- **EC2 networking**: VPCs, subnets, internet and NAT gateways, route tables
+  and routes, security groups and rules, tags, availability zones, account
+  attributes, with the describe filters the provider actually sends.
+- **S3**, path-style: buckets with the whole sub-configuration matrix, and
+  objects with real bytes under `{DataDir}/s3`.
+- **IAM**: roles, users, managed and inline policies, attachments, instance
+  profiles. Recorded, never enforced, exactly as Azure's RBAC is.
+- **`examples/terraform/aws-basic`** applies 14 resources across all four
+  services, plans clean and destroys, and CI runs it beside the Azure
+  examples against one server.
+- **The visualizer is multi-cloud.** Badges, sibling order, the root
+  container, the hidden types and any non-containment links all come from
+  the cloud's own table; tabs are built from what `--clouds` started; views
+  declare which clouds they mean anything for. A test fails the build if a
+  shared module names a cloud's types.
+- **`core.Store.Update`** fixes a lost update that a real apply could hit:
+  two read-modify-writes on one resource used to lose one of the changes.
+  It was filed as a flaky AKS test and was not one.
+
 ## 0.6.0 — 2026-10-31
 
 Milestone 6: visualizer v2. The visualizer stops being only a live picture

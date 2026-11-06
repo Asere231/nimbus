@@ -19,9 +19,16 @@ export function shortPath(p) {
 export function addToFeed(e, animate, onSelect) {
   const li = document.createElement("li");
   li.dataset.kind = e.kind;
-  // Default view: what changed, plus anything that failed or is not implemented.
-  // "Show all API calls" adds the raw requests (reads, tokens, writes).
-  const flagged = e.kind === "request" && (e.status >= 400 || /unimplemented|unrecognised/.test(e.note || ""));
+  // Default view: what changed, plus anything that failed or is not
+  // implemented. "Show all API calls" adds the raw requests.
+  //
+  // A note beginning "expected:" means the server MEANT to answer that
+  // way -- S3 reports an unset bucket sub-resource as a 404, and the
+  // provider reads a dozen of them on every refresh. Flagging those
+  // paints a clean plan red and teaches people to ignore the colour.
+  const expected = /^expected:/.test(e.note || "");
+  const flagged = e.kind === "request" && !expected &&
+    (e.status >= 400 || /unimplemented|unrecognised/.test(e.note || ""));
   const quiet = e.kind === "request" && !flagged;
   if (quiet) li.dataset.quiet = "1";
   if (quiet && !$("#show-reads").checked) li.hidden = true;
@@ -39,9 +46,9 @@ export function addToFeed(e, animate, onSelect) {
     const ok = e.status < 400;
     what.innerHTML = `<span class="${ok ? "code-ok" : "code-err"}">${e.status}</span> <span class="path"></span>`;
     what.querySelector(".path").textContent = shortPath(e.path);
-    if (e.note && /unimplemented|unrecognised|accepted/.test(e.note)) {
+    if (e.note && /unimplemented|unrecognised|accepted|expected/.test(e.note)) {
       const n = document.createElement("span");
-      n.className = /accepted/.test(e.note) ? "note quiet" : "note";
+      n.className = /accepted|expected/.test(e.note) ? "note quiet" : "note";
       n.textContent = e.note;
       what.appendChild(n);
     }

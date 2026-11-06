@@ -110,6 +110,14 @@ func (s *Server) serveS3(w http.ResponseWriter, r *http.Request) string {
 
 	if aerr != nil {
 		writeError(w, "s3", aerr)
+		// A sub-resource nobody has configured answers 404 BY DESIGN, and
+		// the provider reads every one of them on each refresh. Without
+		// saying so, a clean plan paints the activity feed red and trains
+		// people to ignore it -- so these are marked expected, and the
+		// feed shows them only with "show all API calls" on.
+		if expectedCodes[aerr.Code] {
+			return "expected: " + aerr.Code
+		}
 		return "s3 " + r.Method + " " + r.URL.Path + ": " + aerr.Code
 	}
 	return ""
@@ -478,6 +486,16 @@ func (s *Server) getBucketConfig(w http.ResponseWriter, r *http.Request, b *buck
 	}{})
 	return nil
 }
+
+// expectedCodes are the answers that mean "nothing is set here", which is
+// a normal reply rather than a failure.
+var expectedCodes = func() map[string]bool {
+	out := map[string]bool{}
+	for _, code := range notConfigured {
+		out[code] = true
+	}
+	return out
+}()
 
 // notSet is the 404 S3 gives for a sub-resource nobody has configured.
 func notSet(sub, bucket string) *apiError {

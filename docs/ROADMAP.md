@@ -1,9 +1,9 @@
 # Roadmap
 
-**Current: Milestone 7 — AWS core. Prompt: `docs/prompts/` (not written yet).**
+**Current: Milestone 8 — AWS compute. Prompt: `docs/prompts/m08-aws-compute.md`.**
 
-Milestones 1 to 6 are done, on macOS 27 (arm64) with azurerm 4.81.0,
-az 2.90.0 and Terraform 1.16.4.
+Milestones 1 to 7 are done, on macOS 27 (arm64) with azurerm 4.81.0,
+aws 5.100.0, az 2.90.0, aws-cli 1.40.33 and Terraform 1.16.4.
 
 - `examples/terraform/azure-basic` applies, plans clean (`-detailed-exitcode`
   = 0) and destroys; survives a `--persist` restart; every resource imports
@@ -42,9 +42,17 @@ az 2.90.0 and Terraform 1.16.4.
   machine against the `azure-app` apply: the run replays in dependency
   order and ends where the live graph is, the cluster's pods appear behind
   the service they are selected by, and the exported SVG opens standalone.
+- `examples/terraform/aws-basic` is the second cloud: a VPC with two
+  subnets, an internet gateway, a route table, a security group, an S3
+  bucket with versioning and an object, and an IAM role with a policy and
+  an instance profile. Fourteen resources, applying against the same
+  process that serves Azure, with a clean plan and a clean destroy.
+  `aws sts get-caller-identity`, `aws s3 cp/ls` and `aws ec2 describe-vpcs`
+  all verified with aws-cli 1.40.33.
 - CI is green on ubuntu, macos and windows, plus the SDK harness, the
   generator's tests, the visualizer's node tests, the Terraform
-  apply/plan/destroy jobs and an az + Bicep deployment job.
+  apply/plan/destroy jobs (Azure AND AWS against one server) and an az +
+  Bicep deployment job.
 
 Each milestone has a session prompt in `docs/prompts/` (see its README).
 
@@ -65,7 +73,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 | # | Milestone | Done when |
 |---|---|---|
-| 7 | Core: SigV4-tolerant auth, STS, IAM, S3, VPC/EC2 networking | The `aws` provider creates a VPC, subnets and an S3 bucket via `endpoints {}` overrides |
+| 7 | ~~Core: SigV4-tolerant auth, STS, IAM, S3, VPC/EC2 networking~~ **done** | The `aws` provider creates a VPC, subnets and an S3 bucket via `endpoints {}` overrides |
 | 8 | EKS on k3s, Lambda in Docker, DynamoDB on a local store | An EKS cluster is reachable with `kubectl` |
 
 ## Phase 3 — GCP (port 4703)
@@ -99,6 +107,22 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
   `nimbus cert` uses `Import-Certificate` into `CurrentUser\Root`.
 
 ## Later
+
+- **AWS is control plane plus S3 only.** No EC2 instances, Lambda, DynamoDB,
+  EKS or anything else that runs: Milestone 8. NAT gateways are recorded but
+  nothing routes, and IAM is recorded but nothing is enforced — the same
+  honest limitation Azure RBAC has.
+- **S3 has no multipart upload and no object versioning.** `?versioning`
+  round-trips as a setting, but every PUT overwrites: there is one version
+  of an object. A file big enough for the CLI to switch to multipart (8 MB
+  by default) will fail.
+- **No presigned-URL verification.** A presigned request is routed by its
+  `X-Amz-Credential` and then served like any other; the signature and the
+  expiry are not checked, like every other signature here.
+- **The AWS tab has only the topology view.** A VPC view -- subnets, route
+  tables, security groups drawn the way the Azure network view draws a VNet
+  -- would be the obvious next thing, and `render.js`'s VIEWS registry is
+  where it would go.
 
 - **Runs are inferred from gaps, not announced.** `core.RunGap` is 30 s,
   measured against azurerm's silent ~20 s resource-group wait. Two things

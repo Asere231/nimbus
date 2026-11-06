@@ -1,6 +1,6 @@
 # Working on Nimbus
 
-Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualizer. Azure first, then AWS and GCP on the same core. The owner is learning cloud engineering through it: explain non-obvious protocol details in comments, keep the code readable.
+Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualizer. Azure and AWS run on the same core; GCP comes later. The owner is learning cloud engineering through it: explain non-obvious protocol details in comments, keep the code readable.
 
 ## Ground rules
 
@@ -10,7 +10,7 @@ Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualize
 - **Never call real cloud endpoints.** DNS suffixes in the metadata stay on `*.nimbus.localhost`.
 - Run `gofmt -l .`, `go vet ./...`, `go test ./...` before finishing any change.
 
-## How a request flows
+## How a request flows (Azure)
 
 1. `internal/azure/server.go` `ServeHTTP` routes metadata, token, OpenID, async-operation paths, else ARM.
 2. `internal/azure/ids.go` `parseTarget` turns an ARM path into a `target` (kind, type, ID, parent).
@@ -102,6 +102,13 @@ Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualize
 - **IAM has ONE not-found code, `NoSuchEntity`,** for every kind — unlike EC2, which has a different one per kind.
 - **A create that succeeds but whose RESPONSE fails to parse leaves an orphan.** A malformed `CreateRole` reply (mine closed `<Role>` with `</iamRole>`) still created the role; the retry then hit `EntityAlreadyExists` with nothing in Terraform state to explain it. When a create appears to fail, check the store before assuming nothing happened.
 - **S3 is addressed path-style**, which is why AWS needs no TLS here: no `bucket.host` name means no certificate and no DNS. `s3_use_path_style = true` for the provider; the CLI needs `addressing_style = path`.
+
+## How a request flows (AWS)
+
+1. `internal/aws/server.go` `ServeHTTP` records the request on the bus and routes it.
+2. `internal/aws/sigv4.go` `serviceOf` reads the SigV4 credential scope — **the path says nothing**, every Query service posts to `/`.
+3. The service's own file handles it: `sts.go`, `ec2.go` (+ `ec2_vpc.go`, `ec2_routing.go`, `ec2_sg.go`), `s3.go` (+ `s3_object.go`, `s3store.go`), `iam.go` (+ `iam_xml.go`).
+4. Resources go into the same `core.Store` with `Cloud: "aws"`, an ARN or prefixed id as the ID, and the parent set so the graph nests them — a subnet's `ParentID` is its VPC, which is all the visualizer needs.
 
 ## Adding a resource type (the usual task)
 

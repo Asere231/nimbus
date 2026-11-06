@@ -1,8 +1,8 @@
 # Roadmap
 
-**Current: Milestone 8 — AWS compute. Prompt: `docs/prompts/m08-aws-compute.md`.**
+**Current: Milestone 9 — GCP core. Prompt: `docs/prompts/m09-gcp-core.md`.**
 
-Milestones 1 to 7 are done, on macOS 27 (arm64) with azurerm 4.81.0,
+Milestones 1 to 8 are done, on macOS 27 (arm64) with azurerm 4.81.0,
 aws 5.100.0, az 2.90.0, aws-cli 1.40.33 and Terraform 1.16.4.
 
 - `examples/terraform/azure-basic` applies, plans clean (`-detailed-exitcode`
@@ -49,9 +49,22 @@ aws 5.100.0, az 2.90.0, aws-cli 1.40.33 and Terraform 1.16.4.
   process that serves Azure, with a clean plan and a clean destroy.
   `aws sts get-caller-identity`, `aws s3 cp/ls` and `aws ec2 describe-vpcs`
   all verified with aws-cli 1.40.33.
+- `examples/terraform/aws-serverless` runs a Python Lambda for real: AWS's
+  own base image, the Runtime Interface Emulator it ships, and a handler
+  that writes to the emulated DynamoDB through `AWS_ENDPOINT_URL` with no
+  endpoint in its code. Apply, clean plan, invoke, scan, read the log group
+  and destroy all verified.
+- `examples/terraform/aws-eks` brings up a cluster `kubectl` can reach:
+  `aws eks update-kubeconfig` then `kubectl get nodes` shows two nodes, and
+  a deployment created in it appears in the visualizer's Kubernetes view —
+  the same view AKS uses, with no AWS-specific code. Apply, clean plan,
+  destroy verified.
+- The k3s engine lives in `internal/engines/k3s` and serves both clouds; the
+  function runner is `internal/engines/funcs`, equally cloud-neutral.
 - CI is green on ubuntu, macos and windows, plus the SDK harness, the
   generator's tests, the visualizer's node tests, the Terraform
-  apply/plan/destroy jobs (Azure AND AWS against one server) and an az +
+  apply/plan/destroy jobs (Azure AND AWS against one server), the two
+  Docker-backed AWS jobs (Lambda + DynamoDB, EKS + kubectl) and an az +
   Bicep deployment job.
 
 Each milestone has a session prompt in `docs/prompts/` (see its README).
@@ -74,7 +87,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 | # | Milestone | Done when |
 |---|---|---|
 | 7 | ~~Core: SigV4-tolerant auth, STS, IAM, S3, VPC/EC2 networking~~ **done** | The `aws` provider creates a VPC, subnets and an S3 bucket via `endpoints {}` overrides |
-| 8 | EKS on k3s, Lambda in Docker, DynamoDB on a local store | An EKS cluster is reachable with `kubectl` |
+| 8 | ~~EKS on k3s, Lambda in Docker, DynamoDB on a local store~~ **done** | An EKS cluster is reachable with `kubectl` |
 
 ## Phase 3 — GCP (port 4703)
 
@@ -108,10 +121,31 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 ## Later
 
-- **AWS is control plane plus S3 only.** No EC2 instances, Lambda, DynamoDB,
-  EKS or anything else that runs: Milestone 8. NAT gateways are recorded but
-  nothing routes, and IAM is recorded but nothing is enforced — the same
+- **No EC2 instances.** EKS node groups are k3s agent containers, not
+  instances, so nothing answers `RunInstances`. NAT gateways are recorded
+  but nothing routes, and IAM is recorded but nothing is enforced — the same
   honest limitation Azure RBAC has.
+- **Lambda has only `$LATEST`.** No published versions, aliases, layers,
+  event source mappings, function URLs or concurrency settings: publishing a
+  version would mean keeping a copy of the code and a second container per
+  version, and nothing a local apply does needs it. An `Event` invocation
+  runs immediately rather than being queued, so there is no retry behaviour
+  to observe.
+- **DynamoDB has no streams, no TTL expiry and no index projections.** A
+  secondary index works because its keys are ordinary attributes of the same
+  items, so a query on it needs no separate storage — but a `KEYS_ONLY`
+  index returns the whole item, which is too much rather than too little.
+  `UpdateTimeToLive` round-trips as a setting; nothing ever expires. Nested
+  attribute paths (`a.b`, `a[0]`), parentheses and `size()` in an expression
+  are refused rather than guessed at.
+- **CloudWatch Logs keeps 10,000 events per stream, in memory.** They do not
+  survive a restart even with `--persist`, a retention policy is recorded and
+  never applied, and `filterPattern` is matched as a substring rather than as
+  CloudWatch's own small language — which can only ever return too much.
+- **EKS has no Fargate, no add-ons, no OIDC provider and no access entries.**
+  Every request to the cluster is authenticated as `system:masters`, because
+  the token webhook says yes to everything; the aws-auth ConfigMap and IAM
+  role mapping are not modelled.
 - **S3 has no multipart upload and no object versioning.** `?versioning`
   round-trips as a setting, but every PUT overwrites: there is one version
   of an object. A file big enough for the CLI to switch to multipart (8 MB

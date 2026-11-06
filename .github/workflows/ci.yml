@@ -430,6 +430,162 @@ jobs:
             fi
           done
 
+  # Milestone 8's two examples. Both need Docker -- a Lambda is a container
+  # and an EKS cluster is k3s -- so they sit beside the AKS job rather than
+  # in the plain terraform matrix.
+  serverless:
+    name: terraform aws-serverless (Lambda + DynamoDB)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Docker and the Lambda base image
+        run: |
+          docker version --format '{{.Server.Version}}'
+          # The image carries the Runtime Interface Emulator, which is what
+          # runs the handler. Pulled here so the apply's own timeout is not
+          # spent on a download.
+          docker pull public.ecr.aws/lambda/python:3.12
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus start --clouds aws &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, invoke, scan, destroy
+        working-directory: examples/terraform/aws-serverless
+        env:
+          AWS_ACCESS_KEY_ID: nimbus
+          AWS_SECRET_ACCESS_KEY: nimbus
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          set -euo pipefail
+          E="--endpoint-url http://localhost:4702"
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          set +e; terraform plan -detailed-exitcode -input=false; code=$?; set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::plan -detailed-exitcode returned $code; expected 0"
+            exit 1
+          fi
+
+          # The handler must really run, and reach DynamoDB through
+          # AWS_ENDPOINT_URL with no endpoint in its own code.
+          aws $E lambda invoke --function-name nimbus-writer \
+            --payload '{"id":"ci","note":"from CI"}' out.json
+          cat out.json
+          grep -q '"written": "ci"' out.json || {
+            echo "::error::the handler did not return what it should"; exit 1; }
+
+          items=$(aws $E dynamodb scan --table-name nimbus-items --query 'Count' --output text)
+          # Exactly one: the readiness probe must not have invoked the
+          # handler, which it used to and which wrote a phantom item.
+          if [ "$items" != "1" ]; then
+            echo "::error::the table holds $items items, expected exactly 1"
+            aws $E dynamodb scan --table-name nimbus-items
+            exit 1
+          fi
+
+          # What the handler printed has to be in its log group.
+          aws $E logs filter-log-events --log-group-name /aws/lambda/nimbus-writer \
+            --query 'events[].message' --output text | tee logs.txt
+          grep -q "wrote ci to nimbus-items" logs.txt || {
+            echo "::error::the handler's output is not in its log group"; exit 1; }
+
+          terraform destroy -auto-approve -input=false
+
+      - name: No containers left behind
+        run: |
+          left=$(docker ps -aq --filter label=nimbus.function)
+          if [ -n "$left" ]; then
+            echo "::error::destroy left function containers running:"
+            docker ps -a --filter label=nimbus.function
+            exit 1
+          fi
+
+  eks:
+    name: terraform aws-eks (k3s)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Docker and k3s image
+        run: |
+          docker version --format '{{.Server.Version}}'
+          docker pull rancher/k3s:v1.34.12-k3s1
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus start --clouds aws &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, kubectl through the token webhook, destroy
+        working-directory: examples/terraform/aws-eks
+        env:
+          AWS_ACCESS_KEY_ID: nimbus
+          AWS_SECRET_ACCESS_KEY: nimbus
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          # The kubeconfig `aws eks update-kubeconfig` writes runs
+          # `aws eks get-token`, whose bearer token is built client-side --
+          # so this passing means the token authentication webhook worked.
+          aws --endpoint-url http://localhost:4702 eks update-kubeconfig \
+            --name nimbus --kubeconfig ./kubeconfig
+          kubectl --kubeconfig ./kubeconfig get nodes
+          kubectl --kubeconfig ./kubeconfig wait --for=condition=Ready node --all --timeout=300s
+          [ "$(kubectl --kubeconfig ./kubeconfig get nodes --no-headers | wc -l)" -ge 2 ] || {
+            echo "::error::the node group did not add a node"; exit 1; }
+
+          set +e; terraform plan -detailed-exitcode -input=false; code=$?; set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::plan -detailed-exitcode returned $code; expected 0"
+            exit 1
+          fi
+
+          terraform destroy -auto-approve -input=false
+
+      - name: No containers left behind
+        run: |
+          left=$(docker ps -aq --filter label=nimbus.cluster)
+          if [ -n "$left" ]; then
+            echo "::error::destroy left containers running:"
+            docker ps -a --filter label=nimbus.cluster
+            exit 1
+          fi
+
   terraform:
     name: terraform examples
     runs-on: ubuntu-latest

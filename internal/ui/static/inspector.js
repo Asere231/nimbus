@@ -5,12 +5,13 @@
 import { $ } from "./dom.js";
 import { TIER_LABELS, tierOf, displayName } from "./types.js";
 import { panels as azurePanels } from "./inspector-azure.js";
+import { panels as awsPanels } from "./inspector-aws.js";
 
 // Each cloud contributes the extra panels its data planes justify: Azure's
 // blob and secret listings, and whatever AWS grows. A resource is shown the
 // panels of its own cloud and no others, and every panel decides for itself
 // whether it applies.
-const PANELS = { azure: azurePanels };
+const PANELS = { azure: azurePanels, aws: awsPanels };
 
 export function showInspector(r) {
   $("#inspect-empty").hidden = !!r;

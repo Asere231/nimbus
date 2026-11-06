@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.8.0 — 2026-11-06
+
+Milestone 8: AWS compute. Three services that run rather than record, and the
+k3s engine lifted out of Azure so both clouds share it.
+
+- **The k3s engine is cloud-neutral** (`internal/engines/k3s`). One `Engine`
+  per cloud with its own container prefix and registry; Azure keeps its hooks
+  and ARM shapes and becomes a caller. The AKS tests and the `azure-aks`
+  example passed untouched, which was the point of doing it first.
+- **EKS**: clusters and node groups over REST-JSON, backed by real k3s
+  containers. `aws eks update-kubeconfig` produces a kubeconfig that works,
+  because Nimbus answers the **token authentication webhook** real EKS uses —
+  `aws eks get-token` builds its bearer token entirely client-side, so no
+  static token can ever match it.
+- **Lambda**: handlers that really execute, in `public.ecr.aws/lambda/*`
+  images through the Runtime Interface Emulator they ship. Zip or S3 code,
+  environment variables, timeouts, `RequestResponse` and `Event` invocations,
+  `LogType=Tail`, tags and resource policies. A function reaches Nimbus's own
+  services through `AWS_ENDPOINT_URL`, so a handler written for real AWS runs
+  here unchanged.
+- **DynamoDB**: tables and items, with the expression language the SDKs send —
+  `KeyConditionExpression` with BETWEEN and `begins_with`, filters,
+  `UpdateExpression` with SET/REMOVE/ADD/DELETE, `if_not_exists`,
+  `list_append`, conditions, projections, paging by key, batches. Attribute
+  values keep their wire shape end to end, so a 38-digit number survives, and
+  an expression Nimbus cannot parse is refused rather than quietly matching
+  everything.
+- **CloudWatch Logs**: groups, streams and events, with a function's output
+  written to `/aws/lambda/<name>` — the emulator's own duplicate START/END/
+  REPORT lines filtered out.
+- **The Kubernetes view is multi-cloud.** It had one Azure type name in it;
+  with that replaced by each cloud's own, an EKS cluster draws with no AWS
+  code at all. The AWS inspector gains a summary panel (runtime, invocations,
+  item count, cluster endpoint).
+- **`examples/terraform/aws-serverless`** and **`examples/terraform/aws-eks`**,
+  both applying, planning clean and destroying, both in CI where Docker is.
+
+Fixed along the way: the readiness probe used to be a real invocation, which
+ran the handler once at deploy time — a function with side effects performed
+them before anybody asked, and the serverless example wrote a phantom item on
+every apply. A GET to a path the emulator does not serve answers as soon as
+the port is open and runs nothing.
+
+
 ## 0.7.0 — 2026-11-06
 
 Milestone 7: AWS core. A second cloud on the same engine, which is also the

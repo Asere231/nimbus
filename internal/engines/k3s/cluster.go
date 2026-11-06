@@ -139,6 +139,17 @@ func (e *Engine) Start(ctx context.Context, cl *Cluster) error {
 		if !existing.Running {
 			return fmt.Errorf("container %s exists but is not running; remove it and apply again", cl.Container)
 		}
+		// Adopt the port it is ALREADY published on. The one FreePort just
+		// chose is where a new container would have gone, and is not where
+		// this one listens -- so the readiness probe would wait out the
+		// whole timeout against a closed port and report a cluster that is
+		// running perfectly well as failed. Measured: a container left
+		// behind by a previous Nimbus kept 6600, a second Nimbus allocated
+		// 6601 because 6600 was taken, and the apply sat in CREATING until
+		// it gave up.
+		if port := publishedPort(existing); port != 0 {
+			cl.Port = port
+		}
 	} else {
 		var nf *docker.NotFoundError
 		if !errors.As(err, &nf) {

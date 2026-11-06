@@ -94,15 +94,26 @@ so there is nothing to trust on your machine.
 | EC2 | VPCs, subnets, internet and NAT gateways, route tables and routes, security groups and rules, tags, availability zones, account attributes, with the describe filters the provider sends |
 | S3 | Buckets path-style with their whole sub-configuration matrix (versioning, tagging, policy, encryption, public access block, ownership, …) and objects with real bytes on disk |
 | IAM | Roles, users, managed and inline policies, attachments, instance profiles — recorded, never enforced |
+| EKS | Clusters and node groups as **real Kubernetes** (k3s in Docker). `aws eks update-kubeconfig` then `kubectl get nodes` works, through the same token authentication webhook real EKS uses |
+| Lambda | Functions that **really run**, in AWS's own base images through the Runtime Interface Emulator they ship. Zip or S3 code, environment, timeout, `RequestResponse` and `Event` invocations, tags and resource policies |
+| DynamoDB | Tables and items with the expression language the SDKs send: `Query`, `Scan`, `UpdateItem` with SET/REMOVE/ADD/DELETE, conditions, batches. Attribute values keep their wire shape, so a 38-digit number survives |
+| CloudWatch Logs | Log groups and streams, `PutLogEvents`, `GetLogEvents`, `FilterLogEvents`. A function's output lands in `/aws/lambda/<name>` |
 
 ```bash
 aws --endpoint-url http://localhost:4702 sts get-caller-identity
 aws --endpoint-url http://localhost:4702 s3 cp README.md s3://demo/
+aws --endpoint-url http://localhost:4702 lambda invoke --function-name writer /dev/stdout
 ```
 
-`examples/terraform/aws-basic` applies 14 resources across all four services,
-plans clean and destroys. One request is routed to a service by its **SigV4
-credential scope**, not by its path: every Query service posts to `/`.
+Three examples: `aws-basic` applies 14 resources across STS, EC2, S3 and IAM;
+`aws-serverless` deploys a Python handler that writes to DynamoDB, with
+nothing but `AWS_ENDPOINT_URL` telling it where Nimbus is; `aws-eks` brings up
+a cluster `kubectl` can reach. All three plan clean and destroy.
+
+A request is routed to a service by its **SigV4 credential scope**, not by its
+path — every Query service posts to `/` — except DynamoDB and CloudWatch Logs,
+which name the action in `X-Amz-Target`, and Lambda and EKS, whose paths do
+say what they want.
 
 ## The visualizer
 
@@ -113,7 +124,8 @@ works with the network off.
   containers with their subnets, address ranges, the NSG and route table on
   each subnet, peerings between them, and anything attached to nothing.
   *Kubernetes* draws a cluster as namespaces holding deployments, replica sets
-  and pods, with each service joined to the pods its selector matches.
+  and pods, with each service joined to the pods its selector matches — for
+  AKS and EKS alike, since both are the same engine underneath.
 - **Replay an apply.** Events are grouped into runs; the bar under the canvas
   steps through one, resources appearing in the order the provider created
   them, with the API call behind each step. With `--persist`, runs survive a
@@ -126,7 +138,7 @@ works with the network off.
 - `?fixture` renders a sample stack with no server state, which is how the
   browser and layout checks are done.
 
-Not yet: GCP, AWS compute (EC2 instances, Lambda, EKS), and Azure deployments
+Not yet: GCP, EC2 instances, and Azure deployments
 at subscription scope or above — see `docs/ROADMAP.md`.
 
 ## Repo layout

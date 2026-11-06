@@ -21,3 +21,5 @@ __pycache__/
 .DS_Store
 kubeconfig
 *-kubeconfig
+# The Lambda example's packaged handler, built by terraform on apply.
+examples/terraform/aws-serverless/handler.zip

@@ -199,19 +199,35 @@ func (e *Engine) Start(ctx context.Context, fn *Function) error {
 	return nil
 }
 
-// waitReady blocks until the emulator answers.
+// readyPath is a path the emulator does not serve, used to ask whether it
+// is listening. See waitReady for why it is deliberately not the
+// invocation path.
+const readyPath = "/nimbus-ready"
+
+// waitReady blocks until the emulator is listening.
 //
-// Readiness is measured by a real invocation of an empty payload, because
-// RIE opens its port before the runtime client has loaded the handler: a
-// connection succeeding proves nothing, and the first real invocation would
-// then fail with a connection reset that looks like the handler's fault.
+// It asks for a path RIE does not serve and treats ANY HTTP status as
+// ready. The first attempt that is not a connection error means the server
+// is up, which is all that has to be true: measured against
+// public.ecr.aws/lambda/python:3.12, RIE initialises the runtime on the
+// first invocation and holds that invocation until the handler is loaded,
+// so there is no window in which the port is open and an invocation would
+// fail.
+//
+// The probe used to be a real invocation with an empty payload, on the
+// assumption that a connection proved nothing. That assumption was wrong
+// AND harmful: measured, a POST here runs the handler, so deploying a
+// function with side effects performed them once at deploy time -- the
+// aws-serverless example wrote a phantom item into DynamoDB every apply.
+// A GET to an unserved path answers 404 as soon as the port is open and
+// does not even import the handler's module.
 func (e *Engine) waitReady(ctx context.Context, fn *Function) error {
 	deadline := time.Now().Add(e.cfg.StartTimeout)
 	client := &http.Client{Timeout: 10 * time.Second}
-	url := fmt.Sprintf("http://127.0.0.1:%d%s", fn.Port, invokePath)
+	url := fmt.Sprintf("http://127.0.0.1:%d%s", fn.Port, readyPath)
 	var last error
 	for time.Now().Before(deadline) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte(`{}`)))
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return err
 		}

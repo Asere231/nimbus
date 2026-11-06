@@ -120,6 +120,44 @@ func TestStartGivesUpWithAReasonThatNamesTheContainer(t *testing.T) {
 	}
 }
 
+// The readiness probe must not INVOKE anything.
+//
+// It used to, and that ran the handler once at deploy time: a function with
+// side effects performed them before anybody asked. Measured against RIE, a
+// GET to a path it does not serve answers 404 the moment the port is open
+// and does not even import the handler's module.
+func TestTheReadinessProbeDoesNotInvokeTheHandler(t *testing.T) {
+	invocations := 0
+	var probed string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/invocations") {
+			invocations++
+		} else {
+			probed = r.Method + " " + r.URL.Path
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	f := docker.NewFake()
+	f.Images["img"] = true
+	e := New(Config{PortBase: portOf(t, srv.URL), StartTimeout: 2 * time.Second,
+		Dir: t.TempDir()}, f)
+	fn := &Function{ResourceID: "arn:fn", Name: "writer", Image: "img", Dir: t.TempDir()}
+	// PortBase is the server's own port, which FreePort finds taken and
+	// skips -- so point the probe at it directly instead.
+	fn.Port = portOf(t, srv.URL)
+	if err := e.waitReady(context.Background(), fn); err != nil {
+		t.Fatalf("a listening server must read as ready: %v", err)
+	}
+	if invocations != 0 {
+		t.Errorf("the probe invoked the handler %d times", invocations)
+	}
+	if probed == "" || !strings.HasPrefix(probed, "GET ") {
+		t.Errorf("the probe was %q, want a GET", probed)
+	}
+}
+
 // Invoke's contract: the payload goes through untouched, the response body
 // comes back untouched, and whether the handler THREW is a header rather
 // than part of the body.

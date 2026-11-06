@@ -17,6 +17,50 @@ const (
 	fakeKey  = "-----BEGIN EC PRIVATE KEY-----\nkey\n-----END EC PRIVATE KEY-----\n"
 )
 
+// A container that outlived the store is adopted on the port it is already
+// published on.
+//
+// This happens whenever a cluster's container survives a Nimbus that did not
+// persist its state: the next apply recreates the resource, finds the
+// container, and must talk to it where it actually listens. FreePort would
+// have chosen a different port -- the old one is taken, by this very
+// container -- and probing that one waits out the whole timeout and then
+// calls a healthy cluster failed.
+func TestAnExistingContainerIsAdoptedOnItsOwnPort(t *testing.T) {
+	bus := core.NewBus(10)
+	store, err := core.NewStore(bus, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := docker.NewFake()
+	f.Images["rancher/k3s:test"] = true
+	e := New(Config{Image: "rancher/k3s:test", Timeout: 50 * time.Millisecond,
+		PortBase: 6800, NamePrefix: "nimbus-test"}, f, store, "aws")
+
+	cl, err := e.NewCluster("arn:aws:eks:us-east-1:0:cluster/nimbus", "nimbus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stand in for the container a previous run left behind, on 6800.
+	if _, err := f.Run(context.Background(), docker.RunOptions{
+		Name:  cl.Container,
+		Image: "rancher/k3s:test",
+		Ports: map[string]string{"127.0.0.1:6800": "6443"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cl.Port = 6801 // what FreePort would hand out, 6800 being taken
+
+	_ = e.Start(context.Background(), cl) // the probe still times out here
+	if cl.Port != 6800 {
+		t.Errorf("port = %d; the cluster must be addressed where it listens", cl.Port)
+	}
+	// And no second container was started for it.
+	if n := len(f.Containers()); n != 1 {
+		t.Errorf("containers = %d, want the one that was already there", n)
+	}
+}
+
 // A cloud's own k3s arguments have to reach the container, and so do the
 // files they name.
 //

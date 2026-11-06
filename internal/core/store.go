@@ -104,6 +104,61 @@ func (s *Store) Put(r *Resource) bool {
 	return !found
 }
 
+// Update applies fn to a resource's body and stores the result, with the
+// read, the change and the write all under one lock.
+//
+// Read-modify-write on a stored resource is everywhere in this codebase: a
+// hook mirrors a child into its parent, a background Provision records an
+// endpoint, an operation moves a provisioning state along. Each of those
+// used to Get, change the body and Put, which re-reads and therefore LOOKS
+// safe. It is not. Two of them overlapping both read the same copy, and
+// whichever writes second silently restores what the other had just
+// changed.
+//
+// That is not theoretical. It is why scaling an AKS node pool lost the new
+// count on a loaded machine: the pool's AfterPut wrote the count into the
+// cluster while the cluster's own Provision was writing its endpoint into
+// the same body, and the loser's change vanished. A real apply can lose a
+// scale this way, not just a test.
+//
+// fn must not call back into the store -- the lock is held while it runs.
+// It is given the decoded body to change in place, and may return an error
+// to abandon the write.
+func (s *Store) Update(id string, fn func(body map[string]any) error) error {
+	s.mu.Lock()
+	r, ok := s.resources[key(id)]
+	if !ok {
+		s.mu.Unlock()
+		return ErrNotFound
+	}
+	var body map[string]any
+	if err := json.Unmarshal(r.Body, &body); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	if body == nil {
+		body = map[string]any{}
+	}
+	if err := fn(body); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	c := *r
+	c.Body = raw
+	c.UpdatedAt = time.Now().UTC()
+	s.resources[key(id)] = &c
+	s.mu.Unlock()
+
+	s.bus.Publish(Event{Kind: "resource", Action: "update", Cloud: c.Cloud, ResourceID: c.ID, ResourceType: c.Type, Name: c.Name, ParentID: c.ParentID})
+	s.save()
+	return nil
+}
+
 // Delete removes a resource and everything nested under it (children first),
 // publishing a delete event for each. It returns ErrNotFound if absent.
 //

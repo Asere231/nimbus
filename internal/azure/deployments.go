@@ -174,26 +174,21 @@ func (s *Server) runDeployment(t target, body map[string]any) error {
 
 	// Write the results onto the deployment itself. The provisioningState is
 	// set by the generic provisioning path once this returns.
-	res, err := s.store.Get(t.ID)
-	if err != nil {
+	if err := s.store.Update(t.ID, func(stored map[string]any) error {
+		sp, _ := stored["properties"].(map[string]any)
+		if sp == nil {
+			sp = map[string]any{}
+		}
+		sp["outputs"] = outputs
+		sp["parameters"] = wrapParameters(plan.Parameters)
+		sp["providers"] = providerList(providers)
+		sp["dependencies"] = []any{}
+		sp["outputResources"] = outputResources(plan)
+		stored["properties"] = sp
+		return nil
+	}); err != nil {
 		return err
 	}
-	var stored map[string]any
-	if err := json.Unmarshal(res.Body, &stored); err != nil {
-		return err
-	}
-	sp, _ := stored["properties"].(map[string]any)
-	if sp == nil {
-		sp = map[string]any{}
-	}
-	sp["outputs"] = outputs
-	sp["parameters"] = wrapParameters(plan.Parameters)
-	sp["providers"] = providerList(providers)
-	sp["dependencies"] = []any{}
-	sp["outputResources"] = outputResources(plan)
-	stored["properties"] = sp
-	res.Body, _ = json.Marshal(stored)
-	s.store.Put(res)
 
 	s.deploymentOps.set(t.ID, ops)
 	return nil

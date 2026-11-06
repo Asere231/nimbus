@@ -125,21 +125,17 @@ func registerNetworkHooks(s *Server) {
 // updateVNetSubnets rewrites the VNet's embedded subnet list without firing
 // the VNet hooks (which would recreate or delete child resources).
 func (s *Server) updateVNetSubnets(vnetID string, f func([]any) []any) {
-	res, err := s.store.Get(vnetID)
-	if err != nil {
-		return
-	}
-	var body map[string]any
-	if json.Unmarshal(res.Body, &body) != nil {
-		return
-	}
-	props, _ := body["properties"].(map[string]any)
-	if props == nil {
-		return
-	}
-	props["subnets"] = f(asList(props["subnets"]))
-	res.Body, _ = json.Marshal(body)
-	s.store.Put(res)
+	// store.Update rather than Get-then-Put, for the same reason the AKS
+	// pool mirror uses it: two overlapping read-modify-writes on one body
+	// lose one of the two changes. See core.Store.Update.
+	_ = s.store.Update(vnetID, func(body map[string]any) error {
+		props, _ := body["properties"].(map[string]any)
+		if props == nil {
+			return errNoChange
+		}
+		props["subnets"] = f(asList(props["subnets"]))
+		return nil
+	})
 }
 
 // keepServerFields carries server-generated values across updates.

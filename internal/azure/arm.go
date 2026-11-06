@@ -2,6 +2,7 @@ package azure
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -403,23 +404,23 @@ func (s *Server) failProvision(t target, op *operation, aerr *armError) {
 // setProvisioningState rewrites just properties.provisioningState on a stored
 // resource, leaving everything else as it was.
 func (s *Server) setProvisioningState(id, state string) {
-	res, err := s.store.Get(id)
-	if err != nil {
-		return // deleted while provisioning
-	}
-	var body map[string]any
-	if json.Unmarshal(res.Body, &body) != nil {
-		return
-	}
-	props, _ := body["properties"].(map[string]any)
-	if props == nil {
-		props = map[string]any{}
-	}
-	props["provisioningState"] = state
-	body["properties"] = props
-	res.Body, _ = json.Marshal(body)
-	s.store.Put(res)
+	// A resource that was deleted while provisioning simply is not there any
+	// more, which is not an error worth reporting to anybody.
+	_ = s.store.Update(id, func(body map[string]any) error {
+		props, _ := body["properties"].(map[string]any)
+		if props == nil {
+			props = map[string]any{}
+		}
+		props["provisioningState"] = state
+		body["properties"] = props
+		return nil
+	})
 }
+
+// errNoChange abandons a store.Update without storing anything. It is for
+// the case where the body turned out not to be the shape the caller needs,
+// which is never worth failing a request over.
+var errNoChange = errors.New("nothing to change")
 
 // runDeleteHooks runs AfterDelete for every resource a cascade removed, not
 // just the one that was addressed.

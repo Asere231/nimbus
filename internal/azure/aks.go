@@ -232,22 +232,18 @@ func (s *Server) ensureNodeResourceGroup(t target, name, location string) {
 // recordClusterEndpoint writes the live connection details onto the stored
 // resource once the cluster is up, so the inspector shows them.
 func (s *Server) recordClusterEndpoint(t target, cl *cluster) {
-	res, err := s.store.Get(t.ID)
-	if err != nil {
-		return
-	}
-	var body map[string]any
-	if json.Unmarshal(res.Body, &body) != nil {
-		return
-	}
-	props, _ := body["properties"].(map[string]any)
-	if props == nil {
-		return
-	}
-	props["nimbusEndpoint"] = fmt.Sprintf("https://127.0.0.1:%d", cl.Port)
-	props["nimbusContainer"] = cl.Container
-	res.Body, _ = json.Marshal(body)
-	s.store.Put(res)
+	// store.Update, not Get-then-Put: an agent pool's AfterPut writes to this
+	// same body, and two read-modify-writes that overlap lose one of the two
+	// changes. See the comment on core.Store.Update.
+	_ = s.store.Update(t.ID, func(body map[string]any) error {
+		props, _ := body["properties"].(map[string]any)
+		if props == nil {
+			return errNoChange
+		}
+		props["nimbusEndpoint"] = fmt.Sprintf("https://127.0.0.1:%d", cl.Port)
+		props["nimbusContainer"] = cl.Container
+		return nil
+	})
 }
 
 // normaliseAgentPools fills the fields azurerm reads back from each pool.
@@ -358,52 +354,48 @@ func (s *Server) scaleAgents(ctx context.Context, cl *cluster, want int) error {
 // re-running the cluster's own hooks here would re-provision the cluster on
 // every pool change.
 func (s *Server) updateClusterPools(clusterID, poolName string, poolBody map[string]any) {
-	res, err := s.store.Get(clusterID)
-	if err != nil {
-		return
-	}
-	var body map[string]any
-	if json.Unmarshal(res.Body, &body) != nil {
-		return
-	}
-	props, _ := body["properties"].(map[string]any)
-	if props == nil {
-		return
-	}
+	// store.Update, not Get-then-Put: the cluster's own background Provision
+	// writes to this same body, and two read-modify-writes that overlap lose
+	// one of the two changes -- here, the new node count. See the comment on
+	// core.Store.Update.
+	_ = s.store.Update(clusterID, func(body map[string]any) error {
+		props, _ := body["properties"].(map[string]any)
+		if props == nil {
+			return errNoChange
+		}
 
-	// The cluster's profile is the pool's properties plus its name, which is
-	// how Azure reports it.
-	var entry map[string]any
-	if poolBody != nil {
-		entry = map[string]any{"name": poolName}
-		if p, ok := poolBody["properties"].(map[string]any); ok {
-			for k, v := range p {
-				entry[k] = v
+		// The cluster's profile is the pool's properties plus its name, which
+		// is how Azure reports it.
+		var entry map[string]any
+		if poolBody != nil {
+			entry = map[string]any{"name": poolName}
+			if p, ok := poolBody["properties"].(map[string]any); ok {
+				for k, v := range p {
+					entry[k] = v
+				}
 			}
 		}
-	}
 
-	out := []any{}
-	replaced := false
-	for _, raw := range asList(props["agentPoolProfiles"]) {
-		p, ok := raw.(map[string]any)
-		if ok && eq(str(p["name"]), poolName) {
-			if entry != nil {
-				out = append(out, entry)
+		out := []any{}
+		replaced := false
+		for _, raw := range asList(props["agentPoolProfiles"]) {
+			p, ok := raw.(map[string]any)
+			if ok && eq(str(p["name"]), poolName) {
+				if entry != nil {
+					out = append(out, entry)
+				}
+				replaced = true
+				continue
 			}
-			replaced = true
-			continue
+			out = append(out, raw)
 		}
-		out = append(out, raw)
-	}
-	if !replaced && entry != nil {
-		out = append(out, entry)
-	}
-	props["agentPoolProfiles"] = out
-	normaliseAgentPools(props)
-
-	res.Body, _ = json.Marshal(body)
-	s.store.Put(res)
+		if !replaced && entry != nil {
+			out = append(out, entry)
+		}
+		props["agentPoolProfiles"] = out
+		normaliseAgentPools(props)
+		return nil
+	})
 }
 
 // waitForNodes blocks until the cluster reports at least want nodes.

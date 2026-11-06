@@ -98,20 +98,6 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
   The certificate path matters there too: Windows has its own rules, and
   `nimbus cert` uses `Import-Certificate` into `CurrentUser\Root`.
 
-## Pick this up first
-
-- **`TestScalingAnAgentPoolUpdatesTheClusterProfile` is racy**, and CI goes
-  red on it intermittently: it failed on the Windows and oldest-Go jobs of
-  runs 6c4ff09 and 98ded1d while passing on ubuntu, macOS and 50 local
-  repeats. Nothing in Milestone 6 touched `aks.go`. The shape is a race the
-  test has always had: an agent-pool PUT is answered before its background
-  `Provision` mirrors the new count into the parent cluster (`aks.go:104`
-  says so in as many words), and the test's immediate GET beats it on a
-  slower runner. Either the mirror belongs in `BeforePut`/`AfterPut` where
-  it is synchronous, or the test has to poll the way a client does. Decide
-  which, because the answer is also the answer for every other parent/child
-  mirror.
-
 ## Later
 
 - **Runs are inferred from gaps, not announced.** `core.RunGap` is 30 s,

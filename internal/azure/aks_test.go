@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Asere231/nimbus/internal/core"
@@ -366,5 +367,49 @@ func TestScalingAnAgentPoolUpdatesTheClusterProfile(t *testing.T) {
 	_, body = do(t, srv, "GET", id, nil)
 	if n := len(body["properties"].(map[string]any)["agentPoolProfiles"].([]any)); n != 2 {
 		t.Errorf("cluster has %d pools after adding one, want 2", n)
+	}
+}
+
+// The regression behind the intermittently red CI job.
+//
+// Scaling a pool writes the new count into the cluster (AfterPut ->
+// updateClusterPools) while the cluster's own background Provision writes
+// its endpoint into the same body (recordClusterEndpoint). Both used to
+// Get, change and Put, which re-reads and so looks safe; overlap them and
+// the second write restores the first one's stale copy. The count went back
+// to what it had been, and a real apply could lose a scale.
+func TestPoolCountAndClusterEndpointDoNotClobberEachOther(t *testing.T) {
+	srv, az, _ := newAKSTestServer(t)
+	rg := sub + "/resourceGroups/rg-race"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	id := rg + "/providers/Microsoft.ContainerService/managedClusters/demo-race"
+	do(t, srv, "PUT", id, aksBody(2))
+
+	// The two writers, at the same time, as they happen during an apply.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		az.updateClusterPools(id, "default", map[string]any{
+			"properties": map[string]any{"count": float64(3), "vmSize": "Standard_DS2_v2"},
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		az.recordClusterEndpoint(target{ID: id}, &cluster{Port: 6550, Container: "nimbus-test"})
+	}()
+	wg.Wait()
+
+	_, body := do(t, srv, "GET", id, nil)
+	props := body["properties"].(map[string]any)
+	if props["nimbusEndpoint"] != "https://127.0.0.1:6550" {
+		t.Errorf("the endpoint was lost: %v", props["nimbusEndpoint"])
+	}
+	pools := asList(props["agentPoolProfiles"])
+	if len(pools) != 1 {
+		t.Fatalf("cluster has %d pools, want 1", len(pools))
+	}
+	if got := pools[0].(map[string]any)["count"]; got != float64(3) {
+		t.Errorf("the scale was lost: count=%v, want 3", got)
 	}
 }

@@ -69,6 +69,9 @@ type Server struct {
 	store   *core.Store
 	bus     *core.Bus
 	objects *objectStore
+	// items holds DynamoDB's rows, beside the tables themselves in the
+	// store -- a table is a resource, its items are data.
+	items *itemStore
 	// k3s runs the EKS clusters. The same engine Azure's AKS uses, which
 	// knows about neither -- see internal/engines/k3s.
 	k3s *k3s.Engine
@@ -85,7 +88,8 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	if cfg.ClusterPortBase == 0 {
 		cfg.ClusterPortBase = DefaultClusterPortBase
 	}
-	s := &Server{cfg: cfg, store: store, bus: bus, objects: newObjectStore(cfg.DataDir)}
+	s := &Server{cfg: cfg, store: store, bus: bus,
+		objects: newObjectStore(cfg.DataDir), items: newItemStore(cfg.DataDir)}
 	k3sCfg := k3s.Config{
 		Image:       cfg.K3sImage,
 		Version:     cfg.KubernetesVersion,
@@ -110,6 +114,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	}
 	s.k3s = k3s.New(k3sCfg, docker.NewCLI(), store, "aws")
 	s.objects.load()
+	s.items.load()
 	s.ensureAccount()
 	return s
 }
@@ -207,6 +212,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 		return s.serveIAM(w, r)
 	case "eks":
 		return s.serveEKS(w, r)
+	case "dynamodb":
+		return s.serveDynamoDB(w, r)
 	default:
 		// A service nobody has built. 400 rather than 501, because
 		// measured against aws-cli a 5xx is retried five times with

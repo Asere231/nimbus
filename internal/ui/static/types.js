@@ -91,6 +91,16 @@ export function groupType(cloud) {
   return (table && table.GROUP_TYPE) || null;
 }
 
+// isK8sCluster reports whether a resource is a managed Kubernetes cluster in
+// its own cloud -- an AKS cluster or an EKS one. Both are k3s containers
+// mirrored by the same engine, so the Kubernetes view asks this rather than
+// naming either type.
+export function isK8sCluster(type, cloud) {
+  const table = cloudOf(cloud);
+  return Boolean(table && table.K8S_CLUSTER_TYPE &&
+    table.K8S_CLUSTER_TYPE === (type || "").toLowerCase());
+}
+
 // identityLinks returns the extra, non-containment edges a cloud's graph
 // has -- Azure's role assignments. Clouds without any return nothing.
 export function identityLinks(nodes, cloud) {

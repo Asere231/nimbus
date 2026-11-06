@@ -8,10 +8,12 @@
 // usually the question. Nodes run along the bottom.
 //
 // The objects are ordinary resources in the store, mirrored from the real
-// cluster by internal/azure/aks_watch.go, so this reads the same map every
-// other view does. Model and layout are pure; only draw() touches the DOM.
+// cluster by internal/engines/k3s, so this reads the same map every
+// other view does -- and works for any cloud whose clusters that engine
+// runs, which is why AKS and EKS need no separate view. Model and layout are pure; only draw() touches the DOM.
 
 import { el, fit } from "./dom.js";
+import { isK8sCluster } from "./types.js";
 
 export const PAD = 28, CLUSTER_PAD = 16, NS_PAD = 14, DEP_PAD = 12, RS_PAD = 10;
 export const HEAD = 34, NS_HEAD = 30, DEP_HEAD = 28, RS_HEAD = 26;
@@ -41,10 +43,13 @@ export function kubernetesModel(resources) {
   const byCluster = new Map();
 
   for (const r of all) {
-    if (lower(r.type) !== "microsoft.containerservice/managedclusters") continue;
+    // Whether a resource is a cluster is its own cloud's answer: AKS and
+    // EKS are the same k3s container behind two different type names.
+    if (!isK8sCluster(r.type, r.cloud)) continue;
     const c = {
       id: r.id, key: lower(r.id), name: r.name, r,
-      version: props(r).kubernetesVersion || "",
+      // Azure puts the version under properties, AWS at the top level.
+      version: props(r).kubernetesVersion || (r.body && r.body.version) || "",
       namespaces: [], nodes: [],
     };
     clusters.push(c);

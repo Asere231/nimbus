@@ -177,6 +177,9 @@ export function roleName(roleDefinitionId) {
 
 // displayName is what a card shows. A role assignment's name is a GUID
 // nobody chose; the role it grants is the only part worth reading.
+// The type whose children the Kubernetes view draws; see types-aws.js.
+export const K8S_CLUSTER_TYPE = "microsoft.containerservice/managedclusters";
+
 export function displayName(r) {
   if ((r.type || "").toLowerCase() === "microsoft.authorization/roleassignments") {
     const props = (r.body && r.body.properties) || {};

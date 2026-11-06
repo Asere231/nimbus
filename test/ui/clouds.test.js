@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 
-import { typeStyle, typeOrder, displayName, isPassthrough, isRoot, rootLabel, cloudOf, tierOf }
+import { typeStyle, typeOrder, displayName, isPassthrough, isRoot, rootLabel, cloudOf, tierOf, isK8sCluster }
   from "../../internal/ui/static/types.js";
 import { buildForest } from "../../internal/ui/static/graph.js";
 import * as azureTable from "../../internal/ui/static/types-azure.js";
@@ -105,6 +105,10 @@ test("every cloud table exports the same shape", () => {
       assert.equal(key, key.toLowerCase(), `${name}: ${key} must be lower case or it can never match`);
     }
     assert.ok(table.TYPES[table.ROOT_TYPE], name + " should style its own root type");
+    // Both clouds run managed Kubernetes on the same engine, so both have
+    // to name the type the Kubernetes view groups objects under.
+    assert.equal(typeof table.K8S_CLUSTER_TYPE, "string", name + " K8S_CLUSTER_TYPE");
+    assert.ok(table.TYPES[table.K8S_CLUSTER_TYPE], name + " should style its own cluster type");
   }
 });
 
@@ -113,10 +117,10 @@ test("every cloud table exports the same shape", () => {
 test("only the per-cloud tables mention a cloud's own type names", () => {
   const dir = new URL("../../internal/ui/static/", import.meta.url);
   // A module whose NAME says which cloud it is may name that cloud's types
-  // -- types-azure.js, inspector-azure.js. So may the two views that
-  // render.js declares as Azure-only. Everything else has to ask types.js.
+  // -- types-azure.js, inspector-azure.js. So may a view render.js declares
+  // as one cloud's only. Everything else has to ask types.js.
   const named = /-(azure|aws|gcp)\.js$/;
-  const declaredAzureViews = new Set(["network.js", "kubernetes.js"]);
+  const declaredAzureViews = new Set(["network.js"]);
   const offenders = [];
   for (const file of readdirSync(dir)) {
     if (!file.endsWith(".js") || named.test(file) || declaredAzureViews.has(file)) continue;
@@ -127,4 +131,15 @@ test("only the per-cloud tables mention a cloud's own type names", () => {
   }
   assert.deepEqual(offenders, [],
     "these modules hard-code cloud type names and should ask types.js instead");
+});
+
+// A Kubernetes cluster is each cloud's own type, and recognising the other
+// cloud's would draw an EKS cluster's pods inside an AKS one.
+test("a managed cluster is recognised only in its own cloud", () => {
+  assert.ok(isK8sCluster("Microsoft.ContainerService/managedClusters", "azure"));
+  assert.ok(isK8sCluster("AWS::EKS::Cluster", "aws"));
+  assert.ok(!isK8sCluster("AWS::EKS::Cluster", "azure"));
+  assert.ok(!isK8sCluster("Microsoft.ContainerService/managedClusters", "aws"));
+  assert.ok(!isK8sCluster("AWS::EKS::Nodegroup", "aws"));
+  assert.ok(!isK8sCluster(undefined, undefined));
 });

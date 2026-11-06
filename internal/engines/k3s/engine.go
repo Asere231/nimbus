@@ -47,6 +47,16 @@ type Config struct {
 	// NamePrefix goes in front of every container name, so `docker ps`
 	// says which cloud a container belongs to: nimbus-aks, nimbus-eks.
 	NamePrefix string
+	// ServerArgs are extra arguments for the k3s server, for whatever a
+	// cloud needs that the others do not -- EKS passes the token webhook
+	// that makes `aws eks get-token` work.
+	ServerArgs []string
+	// ServerVolumes are host paths to mount into the server container,
+	// for files ServerArgs refer to. A bind mount rather than writing the
+	// file afterwards, because k3s reads its arguments at startup and the
+	// container does not exist before then: there is no moment in which
+	// to write it in.
+	ServerVolumes map[string]string
 }
 
 func (c Config) withDefaults() Config {

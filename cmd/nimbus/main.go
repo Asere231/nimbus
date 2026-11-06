@@ -203,7 +203,7 @@ func start(args []string) {
 		// `aws --endpoint-url http://localhost:4702` then works with
 		// nothing trusted on the machine.
 		awsURL := fmt.Sprintf("http://%s:%d", *host, *awsPort)
-		awsCfg := aws.Config{PublicURL: awsURL}
+		awsCfg := aws.Config{PublicURL: awsURL, KeepClusters: *persist}
 		if dataDir != "" {
 			awsCfg.DataDir = dataDir
 		}

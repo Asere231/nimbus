@@ -203,3 +203,45 @@ test("the fixture shows the nginx pods behind the nginx service", () => {
   assert.equal(serviceLinks(ns).length, 2, "both pods sit behind the service");
   kubernetesLayout(model); // must not throw
 });
+
+// The same view, one cloud over. An EKS cluster is a k3s container mirrored
+// by the same engine, so the objects arrive in the same shape under an ARN
+// instead of an ARM id -- and the view has no AWS code in it at all. What it
+// needed was to stop asking whether a type was Azure's.
+test("an EKS cluster is drawn by the same view, with no AWS-specific code", () => {
+  const ARN = "arn:aws:eks:us-east-1:000000000000:cluster/nimbus";
+  const awsRes = (kind, name, properties, ns = "default") => ({
+    cloud: "aws", id: `${ARN}/kubernetes/${kind}/${ns}/${name}`,
+    type: "Nimbus.Kubernetes/" + kind, name, parentId: ARN, backing: "real",
+    body: { properties: { namespace: ns, ...properties } },
+  });
+  const m = kubernetesModel(map(
+    {
+      cloud: "aws", id: ARN, type: "AWS::EKS::Cluster", name: "nimbus", backing: "real",
+      // AWS reports the version at the top level, where Azure puts it under
+      // properties -- both have to read as the cluster's version.
+      body: { version: "1.34", status: "ACTIVE" },
+    },
+    awsRes("nodes", "k3s-server", { status: "Ready" }),
+    awsRes("pods", "web-1", { status: "Running", labels: { app: "web" } }),
+  ));
+  assert.equal(m.clusters.length, 1);
+  assert.equal(m.clusters[0].name, "nimbus");
+  assert.equal(m.clusters[0].version, "1.34");
+  assert.equal(m.clusters[0].nodes.length, 1);
+  assert.equal(m.clusters[0].namespaces.length, 1, "the pod's namespace is drawn");
+});
+
+// Two clouds' clusters in one store must not swallow each other, and
+// neither cloud's type may be recognised as the other's.
+test("a cluster belongs to the cloud it came from", () => {
+  const m = kubernetesModel(map(
+    cluster("aks1"),
+    { cloud: "aws", id: "arn:aws:eks:us-east-1:0:cluster/eks1", type: "AWS::EKS::Cluster",
+      name: "eks1", backing: "real", body: {} },
+    // The same type string under the wrong cloud is not a cluster.
+    { cloud: "aws", id: "/x/managedClusters/impostor", name: "impostor",
+      type: "Microsoft.ContainerService/managedClusters", backing: "state", body: {} },
+  ));
+  assert.deepEqual(m.clusters.map((c) => c.name), ["aks1", "eks1"]);
+});

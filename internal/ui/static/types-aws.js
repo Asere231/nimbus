@@ -22,12 +22,14 @@ export const TYPES = {
   "aws::iam::user": ["USER", "#bc8cff", "IAM user"],
   "aws::iam::policy": ["POL", "#8b949e", "IAM policy"],
   "aws::iam::instanceprofile": ["PROF", "#8b949e", "Instance profile"],
+  "aws::eks::cluster": ["EKS", "#58a6ff", "EKS cluster"],
+  "aws::eks::nodegroup": ["NG", "#79c0ff", "Node group"],
 };
 
 // Siblings are ordered so a stack reads the way it was built: the network
 // first, then what sits in it.
 export const ORDER = ["account", "vpc", "subnet", "internetgateway", "natgateway",
-  "routetable", "securitygroup", "bucket", "role", "user", "policy"];
+  "routetable", "securitygroup", "cluster", "nodegroup", "bucket", "role", "user", "policy"];
 
 // AWS has no addressing-only types to hide, unlike ARM's blobServices.
 export const PASSTHROUGH = null;
@@ -39,6 +41,12 @@ export const ROOT_LABEL = "account";
 // AWS resources are not grouped the way an Azure resource group groups
 // them, so the plan overlay has no container to park a pending create in.
 export const GROUP_TYPE = null;
+
+// The type whose children the Kubernetes view draws. EKS clusters are real
+// k3s clusters, mirrored by the same engine AKS uses, so that view works
+// here with no code of its own -- it only has to know what a cluster is
+// called in this cloud.
+export const K8S_CLUSTER_TYPE = "aws::eks::cluster";
 
 export function displayName(r) {
   return r.name;

@@ -74,8 +74,9 @@ export function render() {
 // The views the canvas can show.
 //
 // `clouds` is which clouds a view means anything for: a VPC is not a VNet
-// and a Kubernetes cluster is an Azure resource here, so those two are
-// Azure's. Topology draws any cloud's parent/child tree, so it has no list.
+// and a Kubernetes cluster is an Azure resource here, so the network view
+// is Azure's; the Kubernetes one belongs to every cloud whose clusters the
+// k3s engine runs. Topology draws any cloud's parent/child tree, so it has no list.
 // app.js builds the switcher from whichever of these the current cloud has.
 export const VIEWS = [
   { id: "topology", label: "Topology" },
@@ -88,12 +89,13 @@ export const VIEWS = [
       "and its subnets, their security groups and route tables, and any peering appear here.",
   },
   {
-    id: "kubernetes", label: "Kubernetes", clouds: ["azure"],
+    id: "kubernetes", label: "Kubernetes", clouds: ["azure", "aws"],
     model: kubernetesModel, layout: kubernetesLayout, draw: drawKubernetes,
     empty: (m) => !m.clusters.length,
     emptyTitle: "No clusters here",
     emptyBody: "This stack has no Kubernetes clusters. Create an <code>azurerm_kubernetes_cluster</code> " +
-      "\u2014 Nimbus runs it as k3s in Docker \u2014 and its namespaces, workloads, services and nodes appear here.",
+      "or an <code>aws_eks_cluster</code> \u2014 Nimbus runs either as k3s in Docker \u2014 and its " +
+      "namespaces, workloads, services and nodes appear here.",
   },
 ];
 

@@ -16,12 +16,16 @@ package aws
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/Asere231/nimbus/internal/core"
+	"github.com/Asere231/nimbus/internal/engines/docker"
+	"github.com/Asere231/nimbus/internal/engines/k3s"
 )
 
 // DefaultAccountID is the account every emulated resource belongs to. The
@@ -42,7 +46,22 @@ type Config struct {
 	// DataDir, when set, is where data planes keep their bytes so they
 	// survive a restart: S3 objects under {DataDir}/s3. Empty = memory.
 	DataDir string
+
+	// K3sImage and KubernetesVersion are what EKS clusters run and report.
+	K3sImage          string
+	KubernetesVersion string
+	// ClusterPortBase is the first host port tried for a cluster's API.
+	// Deliberately above Azure's, so the two clouds' clusters never race
+	// for the same port.
+	ClusterPortBase int
+	// ClusterTimeout bounds how long a cluster may take to become ready.
+	ClusterTimeout time.Duration
+	// KeepClusters leaves containers running when Nimbus stops.
+	KeepClusters bool
 }
+
+// DefaultClusterPortBase starts above the range AKS uses.
+const DefaultClusterPortBase = 6600
 
 // Server is the AWS emulator.
 type Server struct {
@@ -50,6 +69,9 @@ type Server struct {
 	store   *core.Store
 	bus     *core.Bus
 	objects *objectStore
+	// k3s runs the EKS clusters. The same engine Azure's AKS uses, which
+	// knows about neither -- see internal/engines/k3s.
+	k3s *k3s.Engine
 }
 
 // New builds the server and makes sure the account exists.
@@ -60,19 +82,88 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	if cfg.Region == "" {
 		cfg.Region = DefaultRegion
 	}
+	if cfg.ClusterPortBase == 0 {
+		cfg.ClusterPortBase = DefaultClusterPortBase
+	}
 	s := &Server{cfg: cfg, store: store, bus: bus, objects: newObjectStore(cfg.DataDir)}
+	k3sCfg := k3s.Config{
+		Image:       cfg.K3sImage,
+		Version:     cfg.KubernetesVersion,
+		PortBase:    cfg.ClusterPortBase,
+		Timeout:     cfg.ClusterTimeout,
+		KeepRunning: cfg.KeepClusters,
+		NamePrefix:  "nimbus-eks",
+	}
+	// The token webhook is what makes `aws eks update-kubeconfig` produce
+	// a kubeconfig that works; see eks_auth.go for why nothing simpler
+	// does. The file has to be mounted rather than written afterwards:
+	// k3s reads its arguments at startup, so there is no moment between
+	// the container existing and needing the file.
+	if path, err := s.writeTokenWebhookConfig(cfg); err == nil {
+		k3sCfg.ServerArgs = []string{
+			"--kube-apiserver-arg=--authentication-token-webhook-config-file=" + webhookPathInContainer,
+			"--kube-apiserver-arg=--authentication-token-webhook-version=v1",
+		}
+		k3sCfg.ServerVolumes = map[string]string{path: webhookPathInContainer}
+	} else {
+		log.Printf("nimbus: EKS token webhook disabled: %v", err)
+	}
+	s.k3s = k3s.New(k3sCfg, docker.NewCLI(), store, "aws")
 	s.objects.load()
 	s.ensureAccount()
 	return s
 }
 
-// Start runs any background workers and returns the function that stops
-// them. Nothing needs one yet; the signature matches the Azure plugin's so
-// cmd/nimbus treats both the same way.
-func (s *Server) Start() func() { return func() {} }
+// Start runs the background workers and returns the function that stops
+// them: reattaching clusters a previous Nimbus left running, then watching
+// what is inside them.
+func (s *Server) Start() func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		reattachCtx, done := context.WithTimeout(ctx, 2*time.Minute)
+		for _, found := range s.k3s.Reattach(reattachCtx, s.store.Exists) {
+			s.setClusterStatus(found.Cluster.ResourceID, found)
+		}
+		done()
+		s.k3s.Watch(ctx)
+	}()
+	return cancel
+}
 
-// Shutdown stops anything this cloud is running. Nothing yet.
-func (s *Server) Shutdown(context.Context) {}
+// setClusterStatus records what reattaching found. A container that is
+// gone or unreachable means a FAILED cluster: the resource is what the
+// provider reads, so it has to say so rather than claim ACTIVE.
+func (s *Server) setClusterStatus(clusterARN string, found k3s.Found) {
+	_ = s.store.Update(clusterARN, func(body map[string]any) error {
+		if found.Ready {
+			body["status"] = "ACTIVE"
+			body["endpoint"] = fmt.Sprintf("https://127.0.0.1:%d", found.Cluster.Port)
+			body["certificateAuthority"] = map[string]any{
+				"data": base64.StdEncoding.EncodeToString(found.Cluster.CA),
+			}
+		} else {
+			body["status"] = "FAILED"
+		}
+		return nil
+	})
+}
+
+// Shutdown stops the clusters this cloud started, unless they are meant to
+// outlive Nimbus.
+func (s *Server) Shutdown(ctx context.Context) {
+	if s.cfg.KeepClusters {
+		return
+	}
+	for _, cl := range s.k3s.All() {
+		s.k3s.Stop(ctx, cl)
+	}
+}
+
+// UseDocker swaps the Docker client, for tests.
+func (s *Server) UseDocker(d docker.Client) { s.k3s.SetDocker(d) }
+
+// K3s exposes the engine, which the EKS tests drive directly.
+func (s *Server) K3s() *k3s.Engine { return s.k3s }
 
 // AccountID is the account this server issues ARNs for.
 func (s *Server) AccountID() string { return s.cfg.AccountID }
@@ -98,6 +189,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // route dispatches on the service in the credential scope, and returns the
 // note that goes in the activity feed.
 func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
+	// The token-review webhook is Nimbus's own, not an AWS API: it is
+	// called by a cluster's API server, which signs nothing, so it has to
+	// be matched before anything looks at a credential scope.
+	if r.URL.Path == TokenReviewPath {
+		return s.serveTokenReview(w, r)
+	}
 	service := serviceOf(r)
 	switch service {
 	case "sts":
@@ -108,6 +205,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 		return s.serveS3(w, r)
 	case "iam":
 		return s.serveIAM(w, r)
+	case "eks":
+		return s.serveEKS(w, r)
 	default:
 		// A service nobody has built. 400 rather than 501, because
 		// measured against aws-cli a 5xx is retried five times with

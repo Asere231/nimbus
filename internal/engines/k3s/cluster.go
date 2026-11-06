@@ -157,8 +157,12 @@ func (e *Engine) Start(ctx context.Context, cl *Cluster) error {
 			},
 			// --disable traefik keeps startup quick; nothing here needs an
 			// ingress controller, and it is one less thing to wait for.
-			Args:  []string{"server", "--tls-san", "127.0.0.1", "--disable", "traefik"},
-			TmpFS: []string{"/run", "/var/run"},
+			// ServerArgs is how a cloud adds its own: EKS passes the token
+			// webhook that makes `aws eks get-token` work.
+			Args: append([]string{"server", "--tls-san", "127.0.0.1", "--disable", "traefik"},
+				e.cfg.ServerArgs...),
+			Volumes: e.cfg.ServerVolumes,
+			TmpFS:   []string{"/run", "/var/run"},
 		}); err != nil {
 			return fmt.Errorf("starting the k3s container: %w", err)
 		}

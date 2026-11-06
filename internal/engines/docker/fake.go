@@ -76,7 +76,7 @@ func (f *Fake) Available(ctx context.Context) error {
 func (f *Fake) Run(ctx context.Context, opts RunOptions) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("run %s image=%s args=%v", opts.Name, opts.Image, opts.Args)
+	f.record("run %s image=%s args=%v volumes=%v", opts.Name, opts.Image, opts.Args, opts.Volumes)
 	if err := f.check(); err != nil {
 		return "", err
 	}

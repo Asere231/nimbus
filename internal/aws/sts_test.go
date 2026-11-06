@@ -155,7 +155,7 @@ func TestErrorEnvelopesDifferPerService(t *testing.T) {
 		t.Errorf("sts error = %+v\n%s", q, body)
 	}
 
-	_, body = query(t, s, "ec2", "Action=DescribeVpcs&Version=2016-11-15")
+	_, body = query(t, s, "ec2", "Action=RunInstances&Version=2016-11-15")
 	var e struct {
 		XMLName   xml.Name
 		Code      string `xml:"Errors>Error>Code"`
@@ -248,12 +248,12 @@ func TestRequestsArePublishedAsAwsEvents(t *testing.T) {
 func TestUnimplementedActionsAreNotedInTheFeed(t *testing.T) {
 	s := newTestServer(t)
 	before := len(s.bus.History())
-	query(t, s, "ec2", "Action=DescribeVpcs&Version=2016-11-15")
+	query(t, s, "ec2", "Action=RunInstances&Version=2016-11-15")
 	events := s.bus.History()[before:]
 	if len(events) != 1 || !strings.Contains(events[0].Note, "unimplemented") {
 		t.Fatalf("event note = %q, want one mentioning unimplemented", events[0].Note)
 	}
-	if !strings.Contains(events[0].Note, "DescribeVpcs") {
+	if !strings.Contains(events[0].Note, "RunInstances") {
 		t.Errorf("the note should name the action: %q", events[0].Note)
 	}
 }

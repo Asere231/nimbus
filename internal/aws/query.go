@@ -3,6 +3,7 @@ package aws
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -131,4 +132,46 @@ func writeXML(w http.ResponseWriter, status int, doc any) {
 // responseMetadata is the tail every Query response carries.
 type responseMetadata struct {
 	RequestID string `xml:"RequestId"`
+}
+
+// strOr is str with a default for the empty case.
+func (p params) strOr(key, fallback string) string {
+	if v := p.Get(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// decodeTags and encodeTags move a tagSet between the stored JSON (where
+// it is []any of maps) and the typed form the handlers use.
+func decodeTags(v any) []tag {
+	raw, _ := v.([]any)
+	out := make([]tag, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		key, _ := m["key"].(string)
+		value, _ := m["value"].(string)
+		out = append(out, tag{Key: key, Value: value})
+	}
+	return out
+}
+
+func encodeTags(tags []tag) []any {
+	out := make([]any, 0, len(tags))
+	for _, t := range tags {
+		out = append(out, map[string]any{"key": t.Key, "value": t.Value})
+	}
+	return out
+}
+
+// bodyField pulls one top-level field out of a stored body.
+func bodyField(body []byte, name string) any {
+	var m map[string]any
+	if json.Unmarshal(body, &m) != nil {
+		return nil
+	}
+	return m[name]
 }

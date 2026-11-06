@@ -100,7 +100,9 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 	switch service {
 	case "sts":
 		return s.serveSTS(w, r)
-	case "iam", "ec2", "s3":
+	case "ec2":
+		return s.serveEC2(w, r)
+	case "iam", "s3":
 		// Built in later checkpoints. Answering 400 rather than 501 keeps
 		// the client from retrying five times over something that will
 		// never succeed, and puts one legible line in the feed.

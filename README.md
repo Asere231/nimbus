@@ -100,6 +100,9 @@ so there is nothing to trust on your machine.
 | CloudWatch Logs | Log groups and streams, `PutLogEvents`, `GetLogEvents`, `FilterLogEvents`. A function's output lands in `/aws/lambda/<name>` |
 
 ```bash
+# The CLI needs its own region and credentials; any values will do.
+export AWS_ACCESS_KEY_ID=nimbus AWS_SECRET_ACCESS_KEY=nimbus AWS_DEFAULT_REGION=us-east-1
+
 aws --endpoint-url http://localhost:4702 sts get-caller-identity
 aws --endpoint-url http://localhost:4702 s3 cp README.md s3://demo/
 aws --endpoint-url http://localhost:4702 lambda invoke --function-name writer /dev/stdout

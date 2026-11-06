@@ -6,6 +6,13 @@
 #
 #   1. nimbus start --clouds aws          (in another terminal)
 #   2. terraform init && terraform apply  (a few minutes: it pulls k3s once)
+#   The `aws` CLI needs a region and credentials of its own -- Terraform's
+#   provider block does not reach it. Any values will do, since Nimbus
+#   verifies no signature:
+#
+#     export AWS_ACCESS_KEY_ID=nimbus AWS_SECRET_ACCESS_KEY=nimbus
+#     export AWS_DEFAULT_REGION=us-east-1
+#
 #   3. aws --endpoint-url http://localhost:4702 eks update-kubeconfig \
 #        --name nimbus --kubeconfig ./kubeconfig
 #      kubectl --kubeconfig ./kubeconfig get nodes

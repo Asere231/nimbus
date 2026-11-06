@@ -107,13 +107,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 	case "s3":
 		return s.serveS3(w, r)
 	case "iam":
-		// Built in later checkpoints. Answering 400 rather than 501 keeps
-		// the client from retrying five times over something that will
-		// never succeed, and puts one legible line in the feed.
-		action := actionOf(r)
-		writeError(w, service, invalidAction(service, action))
-		return fmt.Sprintf("unimplemented: %s %s", service, action)
+		return s.serveIAM(w, r)
 	default:
+		// A service nobody has built. 400 rather than 501, because
+		// measured against aws-cli a 5xx is retried five times with
+		// backoff: one legible line in the activity feed instead of five,
+		// and the feed stays the to-do list.
 		writeError(w, "", errorf(400, "InvalidAction",
 			"Nimbus does not emulate the %q service", service))
 		return "unrecognised service " + service

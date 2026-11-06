@@ -97,6 +97,10 @@ Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualize
 - **S3 refuses to delete a bucket that is not empty** (`BucketNotEmpty`, 409) and the provider depends on it: `force_destroy` works by emptying the bucket first. A silent cascade would quietly destroy a bucket it meant to keep. Deleting an OBJECT that is not there, by contrast, succeeds — that is what makes a destroy idempotent.
 - **An S3 key is not a path.** `../../etc/passwd` is a legal key that S3 stores flat and meaninglessly; written through `filepath.Join` it leaves the data directory. `cleanKey` refuses it.
 - **Object metadata repeats the Azure blob trap**: `x-amz-meta-*` names must come back lower-cased and be written into the header map directly, because Go canonicalises header names on both sides and a client looks the key up literally.
+- **IAM's XML differs from EC2's twice over**, though both are Query: lists are wrapped in `<member>` rather than `<item>`, and results sit one level deeper inside `<XxxResult>`. IAM also tags with `Tags.member.N.Key` where EC2 uses `Tag.N.Key`.
+- **IAM returns policy documents URL-ENCODED** and the SDKs unescape whatever comes back. Raw JSON works right up until a document contains a `+` or a `%`, after which the client quietly reads different text than was stored — a diff that never settles with nothing to point at.
+- **IAM has ONE not-found code, `NoSuchEntity`,** for every kind — unlike EC2, which has a different one per kind.
+- **A create that succeeds but whose RESPONSE fails to parse leaves an orphan.** A malformed `CreateRole` reply (mine closed `<Role>` with `</iamRole>`) still created the role; the retry then hit `EntityAlreadyExists` with nothing in Terraform state to explain it. When a create appears to fail, check the store before assuming nothing happened.
 - **S3 is addressed path-style**, which is why AWS needs no TLS here: no `bucket.host` name means no certificate and no DNS. `s3_use_path_style = true` for the provider; the CLI needs `addressing_style = path`.
 
 ## Adding a resource type (the usual task)

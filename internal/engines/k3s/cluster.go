@@ -1,4 +1,4 @@
-package azure
+package k3s
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -19,13 +18,13 @@ import (
 	"github.com/Asere231/nimbus/internal/engines/docker"
 )
 
-// A cluster is one emulated AKS cluster: a k3s server container, any agent
+// A Cluster is one emulated cluster: a k3s server container, any agent
 // containers, and the credentials that reach them.
 //
 // k3s is a full Kubernetes distribution in a single binary, so one privileged
 // container really is a working cluster -- `kubectl get nodes` talks to the
 // real API server, not to anything Nimbus wrote.
-type cluster struct {
+type Cluster struct {
 	ResourceID string
 	Name       string
 	Container  string
@@ -50,134 +49,83 @@ type cluster struct {
 	Agents []string // agent container names, in pool order
 }
 
-// clusters is the in-memory registry of them.
-type clusters struct {
+// registry is the in-memory set of clusters this engine started.
+type registry struct {
 	mu sync.Mutex
-	m  map[string]*cluster // keyed by lower-cased ARM resource ID
+	m  map[string]*Cluster // keyed by lower-cased resource id
 }
 
-func newClusters() *clusters { return &clusters{m: map[string]*cluster{}} }
+func newRegistry() *registry { return &registry{m: map[string]*Cluster{}} }
 
-func (c *clusters) get(id string) *cluster {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.m[strings.ToLower(id)]
+func (r *registry) get(id string) *Cluster {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.m[strings.ToLower(id)]
 }
 
-func (c *clusters) put(cl *cluster) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.m[strings.ToLower(cl.ResourceID)] = cl
+func (r *registry) put(cl *Cluster) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.m[strings.ToLower(cl.ResourceID)] = cl
 }
 
-func (c *clusters) remove(id string) *cluster {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	cl := c.m[strings.ToLower(id)]
-	delete(c.m, strings.ToLower(id))
+func (r *registry) remove(id string) *Cluster {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cl := r.m[strings.ToLower(id)]
+	delete(r.m, strings.ToLower(id))
 	return cl
 }
 
-func (c *clusters) all() []*cluster {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]*cluster, 0, len(c.m))
-	for _, cl := range c.m {
+func (r *registry) all() []*Cluster {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*Cluster, 0, len(r.m))
+	for _, cl := range r.m {
 		out = append(out, cl)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ResourceID < out[j].ResourceID })
 	return out
 }
 
-// stableHex returns the first n bytes of a SHA-256 of s, hex-encoded. Used for
-// names and IDs that must be unique, readable, and identical across restarts.
-func stableHex(s string, n int) string {
+// StableHex returns the first n bytes of a SHA-256 of s, hex-encoded. For
+// names and ids that must be unique, readable, and identical across
+// restarts.
+func StableHex(s string, n int) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:n])
 }
 
 // --- naming and ports -------------------------------------------------------
 
-const (
-	// labelCluster marks every container Nimbus starts for a cluster, so they
-	// can be found again after a restart.
-	labelCluster  = "nimbus.cluster"
-	labelRegistry = "nimbus.registry"
-	labelResource = "nimbus.resource-id"
-	labelRole     = "nimbus.role"
-)
-
-// containerName derives a stable, legal container name from the ARM ID.
-//
-// Resource IDs are long and contain slashes, so the name is the cluster's own
-// name plus a short hash of the full ID -- short enough to read in `docker ps`
-// and unique enough that two clusters of the same name in different resource
-// groups do not collide.
-func containerName(resourceID, name string) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(resourceID)))
-	return fmt.Sprintf("nimbus-aks-%s-%s", sanitiseName(name), hex.EncodeToString(sum[:4]))
-}
-
-func sanitiseName(n string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(n) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			b.WriteRune(r)
-		}
-	}
-	s := strings.Trim(b.String(), "-")
-	if s == "" {
-		s = "cluster"
-	}
-	if len(s) > 24 {
-		s = s[:24]
-	}
-	return s
-}
-
-// freePort finds a usable host port at or above base, by asking the OS to bind
-// it. Checking a port is free by binding it is the only reliable way; a
-// registry of "ports we handed out" would not notice something else on the
-// machine already using one.
-func freePort(base int) (int, error) {
-	for port := base; port < base+500; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err != nil {
-			continue
-		}
-		_ = ln.Close()
-		return port, nil
-	}
-	return 0, fmt.Errorf("no free port found between %d and %d", base, base+500)
-}
-
 // --- provisioning -----------------------------------------------------------
 
 // k3s writes its certificates here. These paths are stable across k3s
 // releases; if one is missing, the error names it so the cause is obvious
 // rather than showing up later as a TLS failure.
+// Exported so a cloud's tests can stub what reading them returns.
 const (
-	k3sAdminCert = "/var/lib/rancher/k3s/server/tls/client-admin.crt"
-	k3sAdminKey  = "/var/lib/rancher/k3s/server/tls/client-admin.key"
-	k3sServerCA  = "/var/lib/rancher/k3s/server/tls/server-ca.crt"
+	AdminCertPath = "/var/lib/rancher/k3s/server/tls/client-admin.crt"
+	AdminKeyPath  = "/var/lib/rancher/k3s/server/tls/client-admin.key"
+	ServerCAPath  = "/var/lib/rancher/k3s/server/tls/server-ca.crt"
 )
 
 // startCluster brings up the k3s server container and waits until the API
 // answers through the published port.
-func (s *Server) startCluster(ctx context.Context, cl *cluster) error {
-	d := s.docker
+func (e *Engine) Start(ctx context.Context, cl *Cluster) error {
+	d := e.docker
 
 	if err := d.Available(ctx); err != nil {
-		return fmt.Errorf("%w\n\nNimbus runs AKS clusters as k3s containers, so Docker must be running. "+
-			"Start Docker Desktop (or your runtime) and apply again.", err)
+		return fmt.Errorf("%w\n\nNimbus runs managed Kubernetes clusters as k3s containers, so Docker "+
+			"must be running. Start Docker Desktop (or your runtime) and apply again.", err)
 	}
 
 	// Pull only if missing, so an offline machine with the image already
 	// present still works -- that is the whole point of docs/OFFLINE.md.
-	if present, err := d.ImagePresent(ctx, s.cfg.K3sImage); err == nil && !present {
-		if err := d.Pull(ctx, s.cfg.K3sImage); err != nil {
+	if present, err := d.ImagePresent(ctx, e.cfg.Image); err == nil && !present {
+		if err := d.Pull(ctx, e.cfg.Image); err != nil {
 			return fmt.Errorf("pulling %s: %w\n\nPre-pull it while online: docker pull %s",
-				s.cfg.K3sImage, err, s.cfg.K3sImage)
+				e.cfg.Image, err, e.cfg.Image)
 		}
 	}
 
@@ -198,14 +146,14 @@ func (s *Server) startCluster(ctx context.Context, cl *cluster) error {
 		}
 		if _, err := d.Run(ctx, docker.RunOptions{
 			Name:       cl.Container,
-			Image:      s.cfg.K3sImage,
+			Image:      e.cfg.Image,
 			Privileged: true, // k3s needs it; inside Docker's VM on macOS and Windows this is contained
 			Network:    cl.Network,
 			Ports:      map[string]string{fmt.Sprintf("127.0.0.1:%d", cl.Port): "6443"},
 			Labels: map[string]string{
-				labelCluster:  cl.Name,
-				labelResource: cl.ResourceID,
-				labelRole:     "server",
+				docker.LabelCluster:  cl.Name,
+				docker.LabelResource: cl.ResourceID,
+				docker.LabelRole:     "server",
 			},
 			// --disable traefik keeps startup quick; nothing here needs an
 			// ingress controller, and it is one less thing to wait for.
@@ -216,28 +164,28 @@ func (s *Server) startCluster(ctx context.Context, cl *cluster) error {
 		}
 	}
 
-	return s.waitForCluster(ctx, cl)
+	return e.waitReady(ctx, cl)
 }
 
-// waitForCluster blocks until the cluster's API answers, then builds the
+// waitReady blocks until the cluster's API answers, then builds the
 // kubeconfig.
-func (s *Server) waitForCluster(ctx context.Context, cl *cluster) error {
-	deadline := time.Now().Add(s.cfg.ClusterTimeout)
+func (e *Engine) waitReady(ctx context.Context, cl *Cluster) error {
+	deadline := time.Now().Add(e.cfg.Timeout)
 
 	// 1. Wait for the certificates to exist inside the container.
 	var adminCert, adminKey, serverCA []byte
 	for {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("k3s did not write its certificates within %s; check `docker logs %s`",
-				s.cfg.ClusterTimeout, cl.Container)
+				e.cfg.Timeout, cl.Container)
 		}
 		var err error
-		adminCert, err = s.docker.Exec(ctx, cl.Container, "cat", k3sAdminCert)
+		adminCert, err = e.docker.Exec(ctx, cl.Container, "cat", AdminCertPath)
 		if err == nil {
-			adminKey, err = s.docker.Exec(ctx, cl.Container, "cat", k3sAdminKey)
+			adminKey, err = e.docker.Exec(ctx, cl.Container, "cat", AdminKeyPath)
 		}
 		if err == nil {
-			serverCA, err = s.docker.Exec(ctx, cl.Container, "cat", k3sServerCA)
+			serverCA, err = e.docker.Exec(ctx, cl.Container, "cat", ServerCAPath)
 		}
 		if err == nil && len(adminCert) > 0 && len(adminKey) > 0 && len(serverCA) > 0 {
 			break
@@ -253,7 +201,7 @@ func (s *Server) waitForCluster(ctx context.Context, cl *cluster) error {
 	}
 
 	cl.CA, cl.Cert, cl.Key = serverCA, adminCert, adminKey
-	cl.Kubeconfig = renderKubeconfig(cl.Name, cl.Port, serverCA, adminCert, adminKey)
+	cl.Kubeconfig = RenderKubeconfig(cl.Name, cl.Port, serverCA, adminCert, adminKey)
 
 	// 2. Wait for the API to answer through the PUBLISHED port, which is the
 	// path kubectl will actually take. Checking readiness inside the container
@@ -266,7 +214,7 @@ func (s *Server) waitForCluster(ctx context.Context, cl *cluster) error {
 	for {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("the cluster API did not become ready within %s; check `docker logs %s`",
-				s.cfg.ClusterTimeout, cl.Container)
+				e.cfg.Timeout, cl.Container)
 		}
 		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 		res, err := client.Do(req)
@@ -315,7 +263,7 @@ func apiClient(caPEM, certPEM, keyPEM []byte) (*http.Client, error) {
 // string formatting, and parsing it is what the stdlib cannot do. The output
 // is deterministic -- no timestamps, no map iteration -- because azurerm
 // stores it and compares it on every refresh.
-func renderKubeconfig(name string, port int, caPEM, certPEM, keyPEM []byte) []byte {
+func RenderKubeconfig(name string, port int, caPEM, certPEM, keyPEM []byte) []byte {
 	b64 := func(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 	return []byte(fmt.Sprintf(`apiVersion: v1
 kind: Config
@@ -341,12 +289,12 @@ users:
 // --- teardown ---------------------------------------------------------------
 
 // stopCluster removes the cluster's containers and its network.
-func (s *Server) stopCluster(ctx context.Context, cl *cluster) {
+func (e *Engine) Stop(ctx context.Context, cl *Cluster) {
 	for _, agent := range cl.Agents {
-		_ = s.docker.Remove(ctx, agent)
+		_ = e.docker.Remove(ctx, agent)
 	}
-	_ = s.docker.Remove(ctx, cl.Container)
+	_ = e.docker.Remove(ctx, cl.Container)
 	// The network only exists for this cluster, so it goes too. Removing one
 	// still in use fails harmlessly and is ignored.
-	_ = s.docker.RemoveNetwork(ctx, cl.Network)
+	_ = e.docker.RemoveNetwork(ctx, cl.Network)
 }

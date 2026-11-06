@@ -104,6 +104,15 @@ Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualize
 - **A create that succeeds but whose RESPONSE fails to parse leaves an orphan.** A malformed `CreateRole` reply (mine closed `<Role>` with `</iamRole>`) still created the role; the retry then hit `EntityAlreadyExists` with nothing in Terraform state to explain it. When a create appears to fail, check the store before assuming nothing happened.
 - **S3 is addressed path-style**, which is why AWS needs no TLS here: no `bucket.host` name means no certificate and no DNS. `s3_use_path_style = true` for the provider; the CLI needs `addressing_style = path`.
 
+## The engines
+
+Anything that really runs lives in `internal/engines`, shared by every cloud and knowing about none of them:
+
+- `docker` — the container client (`Client`, with a `Fake` for tests), plus container naming, labels and free-port finding.
+- `k3s` — managed Kubernetes. One `Engine` per cloud (own name prefix, own registry of what it started) with `Start`, `ScaleAgents`, `WaitForNodes`, `Stop`, `Reattach`, `APIClient`, `MirrorRegistry` and `Watch`. The watcher mirrors pods into the store as `Nimbus.Kubernetes/*` with the engine's cloud on them, which is why the visualizer's Kubernetes view works for AKS and EKS alike with no new code.
+
+A cloud plugin supplies the resource id, the node count and a container name prefix; it keeps its own hooks, API shapes and bookkeeping. If you find yourself adding a cloud's vocabulary to an engine, it belongs in the plugin instead.
+
 ## How a request flows (AWS)
 
 1. `internal/aws/server.go` `ServeHTTP` records the request on the bus and routes it.

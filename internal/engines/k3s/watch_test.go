@@ -1,4 +1,4 @@
-package azure
+package k3s
 
 import (
 	"encoding/json"

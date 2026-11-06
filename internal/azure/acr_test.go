@@ -3,6 +3,7 @@ package azure
 import (
 	"context"
 	"fmt"
+	"github.com/Asere231/nimbus/internal/engines/k3s"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ func newACRTestServer(t *testing.T) (*httptest.Server, *Server, *docker.Fake) {
 	az := serverOf(t, srv)
 	f := docker.NewFake()
 	f.Images[az.cfg.RegistryImage] = true
-	az.docker = f
+	az.useDocker(f)
 	return srv, az, f
 }
 
@@ -165,7 +166,7 @@ func TestStartRegistryRunsTheContainer(t *testing.T) {
 	if host := c.Ports["5000/tcp"]; !strings.HasPrefix(host, "127.0.0.1:") || !strings.HasSuffix(host, "5001") {
 		t.Errorf("published port = %q, want 127.0.0.1:5001", host)
 	}
-	if c.Labels[labelResource] != reg.ResourceID || c.Labels[labelRole] != "registry" {
+	if c.Labels[docker.LabelResource] != reg.ResourceID || c.Labels[docker.LabelRole] != "registry" {
 		t.Errorf("labels = %v", c.Labels)
 	}
 }
@@ -207,15 +208,15 @@ func TestRegistryContainerNamesAreStableAndUnique(t *testing.T) {
 func TestRegistryIsMirroredIntoEveryNode(t *testing.T) {
 	_, az, f := newACRTestServer(t)
 	f.ExecAny = true
-	f.ExecOutput["cat "+containerdConfig] = []byte(`[plugins."io.containerd.grpc.v1.cri".registry]
+	f.ExecOutput["cat "+k3s.ContainerdConfig] = []byte(`[plugins."io.containerd.grpc.v1.cri".registry]
   config_path = "/var/lib/rancher/k3s/agent/etc/containerd/certs.d"`)
 
-	cl := &cluster{
+	cl := &k3s.Cluster{
 		ResourceID: sub + "/resourceGroups/rg/providers/Microsoft.ContainerService/managedClusters/aks1",
 		Name:       "aks1", Container: "nimbus-aks-aks1-1234", Network: "nimbus-aks-aks1-1234-net",
 		Agents: []string{"nimbus-aks-aks1-1234-agent-1"},
 	}
-	az.clusters.put(cl)
+	az.k3s.Put(cl)
 	for _, node := range append([]string{cl.Container}, cl.Agents...) {
 		if _, err := f.Run(context.Background(), docker.RunOptions{Name: node, Image: az.cfg.K3sImage}); err != nil {
 			t.Fatal(err)
@@ -242,7 +243,7 @@ func TestRegistryIsMirroredIntoEveryNode(t *testing.T) {
 	}
 	// The mirror is keyed by the host exactly as an image reference spells it,
 	// and points at the registry container rather than at localhost.
-	if !strings.Contains(calls, certsDir+"/localhost:5003") {
+	if !strings.Contains(calls, k3s.CertsDir+"/localhost:5003") {
 		t.Errorf("mirror not written under the login server's host:\n%s", calls)
 	}
 	if !strings.Contains(calls, "/etc/rancher/k3s/registries.yaml") {
@@ -256,9 +257,9 @@ func TestRegistryIsMirroredIntoEveryNode(t *testing.T) {
 func TestMirrorWarnsWhenContainerdNeedsARestart(t *testing.T) {
 	_, az, f := newACRTestServer(t)
 	f.ExecAny = true
-	f.ExecOutput["cat "+containerdConfig] = []byte("[plugins]\n # no config_path here\n")
-	cl := &cluster{ResourceID: "/c", Name: "aks1", Container: "c1", Network: "n1"}
-	az.clusters.put(cl)
+	f.ExecOutput["cat "+k3s.ContainerdConfig] = []byte("[plugins]\n # no config_path here\n")
+	cl := &k3s.Cluster{ResourceID: "/c", Name: "aks1", Container: "c1", Network: "n1"}
+	az.k3s.Put(cl)
 	if _, err := f.Run(context.Background(), docker.RunOptions{Name: "c1", Image: az.cfg.K3sImage}); err != nil {
 		t.Fatal(err)
 	}

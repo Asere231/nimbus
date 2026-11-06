@@ -18,6 +18,7 @@ import (
 	"github.com/Asere231/nimbus/internal/azure/storage"
 	"github.com/Asere231/nimbus/internal/core"
 	"github.com/Asere231/nimbus/internal/engines/docker"
+	"github.com/Asere231/nimbus/internal/engines/k3s"
 )
 
 // Config for the Azure emulator.
@@ -72,8 +73,10 @@ type Server struct {
 	deploymentOps *deploymentOperations
 	vaults        *deletedVaults
 	docker        docker.Client
-	clusters      *clusters
-	registries    *registries
+	// k3s runs the AKS clusters. The engine is shared with AWS's EKS and
+	// knows nothing about either -- see internal/engines/k3s.
+	k3s        *k3s.Engine
+	registries *registries
 }
 
 // New creates the Azure emulator.
@@ -112,9 +115,16 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		deploymentOps: newDeploymentOperations(),
 		vaults:        newDeletedVaults(),
 		docker:        docker.NewCLI(),
-		clusters:      newClusters(),
 		registries:    newRegistries(),
 	}
+	s.k3s = k3s.New(k3s.Config{
+		Image:       cfg.K3sImage,
+		Version:     cfg.KubernetesVersion,
+		PortBase:    cfg.ClusterPortBase,
+		Timeout:     cfg.ClusterTimeout,
+		KeepRunning: cfg.KeepClusters,
+		NamePrefix:  "nimbus-aks",
+	}, s.docker, store, "azure")
 	// The challenge a Key Vault client gets points at our own login endpoint,
 	// and asks for a token for Azure's Key Vault audience -- which our token
 	// endpoint will happily issue, since it issues tokens for any scope.
@@ -172,6 +182,17 @@ func (s *Server) SecretBrowser() *keyvault.Handler { return s.keyvault }
 // Start begins background work: adopting clusters left running by a previous
 // process, and polling each one so the visualizer sees what is inside it.
 // Returns a stop function.
+// useDocker swaps the Docker client, for tests.
+//
+// It has to reach BOTH the server and the k3s engine: the server starts
+// registry containers itself while the engine starts clusters, and a test
+// that set only one of them would silently talk to the real daemon
+// through the other.
+func (s *Server) useDocker(d docker.Client) {
+	s.docker = d
+	s.k3s.SetDocker(d)
+}
+
 func (s *Server) Start() func() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -179,9 +200,17 @@ func (s *Server) Start() func() {
 		// containers before the watcher starts asking about them.
 		reattachCtx, done := context.WithTimeout(ctx, 2*time.Minute)
 		s.reattachRegistries(reattachCtx)
-		s.reattachClusters(reattachCtx)
+		// A cluster whose container is gone or unreachable is Failed: the
+		// resource is what Terraform reads, so it has to say so.
+		for _, found := range s.k3s.Reattach(reattachCtx, s.store.Exists) {
+			state := "Failed"
+			if found.Ready {
+				state = "Succeeded"
+			}
+			s.setProvisioningState(found.Cluster.ResourceID, state)
+		}
 		done()
-		s.startClusterWatcher(ctx)
+		s.k3s.Watch(ctx)
 	}()
 	return cancel
 }
@@ -196,8 +225,8 @@ func (s *Server) Shutdown(ctx context.Context) {
 	if s.cfg.KeepClusters {
 		return
 	}
-	for _, cl := range s.clusters.all() {
-		s.stopCluster(ctx, cl)
+	for _, cl := range s.k3s.All() {
+		s.k3s.Stop(ctx, cl)
 	}
 	// Registries too. A registry container that outlives Nimbus is worse than
 	// an orphaned cluster: it holds the port its login server names, so the

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Asere231/nimbus/internal/core"
-	"github.com/Asere231/nimbus/internal/engines/docker"
+	"github.com/Asere231/nimbus/internal/engines/k3s"
 )
 
 const (
@@ -46,7 +46,7 @@ func registerAKSHooks(s *Server) {
 
 			version := str(props["kubernetesVersion"])
 			if version == "" {
-				version = s.cfg.KubernetesVersion
+				version = s.k3s.Version()
 			}
 			props["kubernetesVersion"] = version
 			props["currentKubernetesVersion"] = version
@@ -107,29 +107,18 @@ func registerAKSHooks(s *Server) {
 			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ClusterTimeout+time.Minute)
 			defer cancel()
 
-			cl := s.clusters.get(t.ID)
-			if cl == nil {
-				port, err := freePort(s.cfg.ClusterPortBase)
-				if err != nil {
-					return err
-				}
-				cl = &cluster{
-					ResourceID: t.ID, Name: t.Name,
-					Container: containerName(t.ID, t.Name),
-					Network:   containerName(t.ID, t.Name) + "-net",
-					Port:      port,
-				}
-				s.clusters.put(cl)
+			cl, err := s.k3s.NewCluster(t.ID, t.Name)
+			if err != nil {
+				return err
 			}
-
-			if err := s.startCluster(ctx, cl); err != nil {
-				s.clusters.remove(t.ID)
+			if err := s.k3s.Start(ctx, cl); err != nil {
+				s.k3s.Remove(t.ID)
 				return err
 			}
 
 			props, _ := body["properties"].(map[string]any)
 			want := totalNodeCount(props)
-			if err := s.scaleAgents(ctx, cl, want); err != nil {
+			if err := s.k3s.ScaleAgents(ctx, cl, want); err != nil {
 				return err
 			}
 			// Wait for the nodes to actually REGISTER, not just for their
@@ -137,26 +126,26 @@ func registerAKSHooks(s *Server) {
 			// cluster is usable, and anyone who runs kubectl straight after
 			// `terraform apply` -- which the example tells them to do --
 			// would otherwise see fewer nodes than they asked for, or none.
-			if err := s.waitForNodes(ctx, cl, want); err != nil {
+			if err := s.k3s.WaitForNodes(ctx, cl, want); err != nil {
 				return err
 			}
 			// Registries that already exist have to be mirrored into the new
 			// cluster's nodes, or a pod referring to one cannot pull.
-			s.configureRegistryMirrors(ctx, cl)
+			s.mirrorRegistries(ctx, cl)
 			s.recordClusterEndpoint(t, cl)
 			return nil
 		},
 
 		Deprovision: func(s *Server, t target) {
-			cl := s.clusters.remove(t.ID)
+			cl := s.k3s.Remove(t.ID)
 			if cl == nil {
 				// Nothing registered -- it may predate this process. Remove by
 				// the name we would have used, so a restart still cleans up.
-				cl = &cluster{Container: containerName(t.ID, t.Name), Network: containerName(t.ID, t.Name) + "-net"}
+				cl = s.k3s.ClusterFor(t.ID, t.Name)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			s.stopCluster(ctx, cl)
+			s.k3s.Stop(ctx, cl)
 		},
 	})
 
@@ -174,8 +163,8 @@ func registerAKSHooks(s *Server) {
 			setDefault(props, "vmSize", "Standard_DS2_v2")
 			setDefault(props, "osType", "Linux")
 			setDefault(props, "mode", "System")
-			setDefault(props, "orchestratorVersion", s.cfg.KubernetesVersion)
-			setDefault(props, "currentOrchestratorVersion", s.cfg.KubernetesVersion)
+			setDefault(props, "orchestratorVersion", s.k3s.Version())
+			setDefault(props, "currentOrchestratorVersion", s.k3s.Version())
 			return nil
 		},
 		AfterPut: func(s *Server, t target, body map[string]any) {
@@ -188,17 +177,17 @@ func registerAKSHooks(s *Server) {
 			s.updateClusterPools(t.ParentID, t.Name, nil)
 		},
 		Provision: func(s *Server, t target, body map[string]any) error {
-			cl := s.clusters.get(t.ParentID)
+			cl := s.k3s.Get(t.ParentID)
 			if cl == nil {
 				return fmt.Errorf("the cluster for agent pool %q is not running", t.Name)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ClusterTimeout)
 			defer cancel()
-			if err := s.scaleAgents(ctx, cl, s.desiredNodeCount(t.ParentID)); err != nil {
+			if err := s.k3s.ScaleAgents(ctx, cl, s.desiredNodeCount(t.ParentID)); err != nil {
 				return err
 			}
 			// New agents start with no registry configuration of their own.
-			s.configureRegistryMirrors(ctx, cl)
+			s.mirrorRegistries(ctx, cl)
 			return nil
 		},
 	})
@@ -231,7 +220,7 @@ func (s *Server) ensureNodeResourceGroup(t target, name, location string) {
 
 // recordClusterEndpoint writes the live connection details onto the stored
 // resource once the cluster is up, so the inspector shows them.
-func (s *Server) recordClusterEndpoint(t target, cl *cluster) {
+func (s *Server) recordClusterEndpoint(t target, cl *k3s.Cluster) {
 	// store.Update, not Get-then-Put: an agent pool's AfterPut writes to this
 	// same body, and two read-modify-writes that overlap lose one of the two
 	// changes. See the comment on core.Store.Update.
@@ -301,52 +290,6 @@ func (s *Server) desiredNodeCount(clusterID string) int {
 	return totalNodeCount(props)
 }
 
-// scaleAgents brings the number of agent containers to want-1: the k3s server
-// container is itself a node, so a cluster of N nodes needs N-1 agents.
-func (s *Server) scaleAgents(ctx context.Context, cl *cluster, want int) error {
-	if want < 1 {
-		want = 1
-	}
-	target := want - 1
-
-	for len(cl.Agents) > target {
-		last := cl.Agents[len(cl.Agents)-1]
-		if err := s.docker.Remove(ctx, last); err != nil {
-			return fmt.Errorf("removing agent %s: %w", last, err)
-		}
-		cl.Agents = cl.Agents[:len(cl.Agents)-1]
-	}
-
-	for len(cl.Agents) < target {
-		name := fmt.Sprintf("%s-agent-%d", cl.Container, len(cl.Agents)+1)
-		token, err := s.docker.Exec(ctx, cl.Container, "cat", "/var/lib/rancher/k3s/server/node-token")
-		if err != nil {
-			return fmt.Errorf("reading the cluster join token: %w", err)
-		}
-		if _, err := s.docker.Run(ctx, docker.RunOptions{
-			Name:       name,
-			Image:      s.cfg.K3sImage,
-			Privileged: true,
-			Network:    cl.Network,
-			Labels: map[string]string{
-				labelCluster: cl.Name, labelResource: cl.ResourceID, labelRole: "agent",
-			},
-			Env: map[string]string{
-				// Agents reach the server by container name on the shared
-				// network, so no port publishing is needed.
-				"K3S_URL":   fmt.Sprintf("https://%s:6443", cl.Container),
-				"K3S_TOKEN": strings.TrimSpace(string(token)),
-			},
-			Args:  []string{"agent"},
-			TmpFS: []string{"/run", "/var/run"},
-		}); err != nil {
-			return fmt.Errorf("starting agent %s: %w", name, err)
-		}
-		cl.Agents = append(cl.Agents, name)
-	}
-	return nil
-}
-
 // updateClusterPools rewrites one entry of a cluster's agentPoolProfiles.
 // Passing a nil body removes the pool.
 //
@@ -398,34 +341,6 @@ func (s *Server) updateClusterPools(clusterID, poolName string, poolBody map[str
 	})
 }
 
-// waitForNodes blocks until the cluster reports at least want nodes.
-func (s *Server) waitForNodes(ctx context.Context, cl *cluster, want int) error {
-	client := s.clusterClient(cl)
-	if client == nil {
-		return fmt.Errorf("no client for cluster %s", cl.Name)
-	}
-	deadline := time.Now().Add(s.cfg.ClusterTimeout)
-	var last int
-	for {
-		list, err := fetchList(ctx, client, cl.Port, "/api/v1/nodes")
-		if err == nil {
-			last = len(list.Items)
-			if last >= want {
-				return nil
-			}
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("only %d of %d nodes joined within %s; check `docker logs %s`",
-				last, want, s.cfg.ClusterTimeout, cl.Container)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
-}
-
 // --- credential actions -----------------------------------------------------
 
 // clusterAction answers the credential POSTs.
@@ -444,7 +359,7 @@ func (s *Server) clusterAction(t target, _ map[string]any) (any, bool) {
 		return nil, false
 	}
 
-	cl := s.clusters.get(t.ID)
+	cl := s.k3s.Get(t.ID)
 	if cl == nil || len(cl.Kubeconfig) == 0 {
 		// Credentials before the cluster is ready: Azure answers with an
 		// error rather than an empty kubeconfig, which would otherwise be
@@ -467,73 +382,13 @@ func (s *Server) clusterAction(t target, _ map[string]any) (any, bool) {
 
 // --- reattaching after a restart -------------------------------------------
 
-// reattachClusters finds containers from a previous run and adopts them.
-//
-// With --persist the containers are deliberately left running so a restart is
-// quick. Without reattaching, Nimbus would not know about them: a later delete
-// would leave them running forever, and a cluster stored as "Creating" would
-// stay that way, which is the state that actually matters -- Terraform reads
-// the resource, not the old operation.
-func (s *Server) reattachClusters(ctx context.Context) {
-	if err := s.docker.Available(ctx); err != nil {
-		return // no Docker, nothing to reattach to
-	}
-	found, err := s.docker.List(ctx, labelRole+"=server")
-	if err != nil {
-		return
-	}
-	for _, c := range found {
-		id := c.Labels[labelResource]
-		if id == "" || !s.store.Exists(id) {
-			continue
-		}
-		port := publishedPort(c)
-		if port == 0 || !c.Running {
-			s.setProvisioningState(id, "Failed")
-			continue
-		}
-		cl := &cluster{
-			ResourceID: id, Name: c.Labels[labelCluster],
-			Container: c.Name, Network: c.Name + "-net", Port: port,
-		}
-		if agents, err := s.docker.List(ctx, labelRole+"=agent"); err == nil {
-			for _, a := range agents {
-				if strings.EqualFold(a.Labels[labelResource], id) {
-					cl.Agents = append(cl.Agents, a.Name)
-				}
-			}
-		}
-		s.clusters.put(cl)
-
-		// Rebuild the kubeconfig from the container's own certificates. They
-		// have not changed, so it is byte-identical to the one handed out
-		// before the restart -- which is what keeps the plan clean.
-		if err := s.waitForCluster(ctx, cl); err != nil {
-			s.setProvisioningState(id, "Failed")
-			continue
-		}
-		s.setProvisioningState(id, "Succeeded")
-	}
-}
-
-func publishedPort(c docker.Container) int {
-	hostPort := c.Ports["6443/tcp"]
-	if i := strings.LastIndex(hostPort, ":"); i >= 0 {
-		var p int
-		if _, err := fmt.Sscanf(hostPort[i+1:], "%d", &p); err == nil {
-			return p
-		}
-	}
-	return 0
-}
-
 // shortHash is a stable 8-character tag derived from a string, for names that
 // must be unique but readable.
-func shortHash(s string) string { return stableHex(s, 4) }
+func shortHash(s string) string { return k3s.StableHex(s, 4) }
 
 // stableGUID derives a deterministic GUID from a string, so identity IDs stay
 // the same across restarts -- azurerm stores them and compares on refresh.
 func stableGUID(s string) string {
-	h := stableHex(s, 16)
+	h := k3s.StableHex(s, 16)
 	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 }

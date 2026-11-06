@@ -94,7 +94,7 @@ func (r *registries) all() []*registry {
 // groups, and independent of how the ID was cased.
 func registryContainerName(resourceID, name string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(resourceID)))
-	return fmt.Sprintf("nimbus-acr-%s-%s", sanitiseName(name), hex.EncodeToString(sum[:4]))
+	return fmt.Sprintf("nimbus-acr-%s-%s", docker.SanitiseName(name), hex.EncodeToString(sum[:4]))
 }
 
 func registerACRHooks(s *Server) {
@@ -198,7 +198,7 @@ func (s *Server) ensureRegistry(t target, existing map[string]any) (*registry, *
 		}
 	}
 	if port == 0 {
-		p, err := freePort(s.cfg.RegistryPortBase)
+		p, err := docker.FreePort(s.cfg.RegistryPortBase)
 		if err != nil {
 			return nil, &armError{500, "NoPortAvailable", err.Error()}
 		}
@@ -271,9 +271,9 @@ func (s *Server) startRegistry(ctx context.Context, reg *registry) error {
 		// registry on whatever network the machine is attached to.
 		Ports: map[string]string{fmt.Sprintf("127.0.0.1:%d", reg.Port): "5000"},
 		Labels: map[string]string{
-			labelRegistry: reg.Name,
-			labelResource: reg.ResourceID,
-			labelRole:     "registry",
+			docker.LabelRegistry: reg.Name,
+			docker.LabelResource: reg.ResourceID,
+			docker.LabelRole:     "registry",
 		},
 	}); err != nil {
 		return fmt.Errorf("starting the registry container: %w", err)
@@ -318,12 +318,12 @@ func (s *Server) reattachRegistries(ctx context.Context) {
 	if err := s.docker.Available(ctx); err != nil {
 		return
 	}
-	found, err := s.docker.List(ctx, labelRole+"=registry")
+	found, err := s.docker.List(ctx, docker.LabelRole+"=registry")
 	if err != nil {
 		return
 	}
 	for _, c := range found {
-		id := c.Labels[labelResource]
+		id := c.Labels[docker.LabelResource]
 		if id == "" || !s.store.Exists(id) {
 			continue
 		}
@@ -333,7 +333,7 @@ func (s *Server) reattachRegistries(ctx context.Context) {
 			continue
 		}
 		s.registries.put(&registry{
-			ResourceID: id, Name: c.Labels[labelRegistry],
+			ResourceID: id, Name: c.Labels[docker.LabelRegistry],
 			Container: c.Name, Port: port,
 		})
 		s.setProvisioningState(id, "Succeeded")

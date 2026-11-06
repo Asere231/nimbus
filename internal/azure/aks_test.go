@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/Asere231/nimbus/internal/engines/k3s"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -29,11 +30,11 @@ func newAKSTestServer(t *testing.T) (*httptest.Server, *Server, *docker.Fake) {
 	az := serverOf(t, srv)
 	f := docker.NewFake()
 	f.Images[az.cfg.K3sImage] = true
-	f.ExecOutput["cat "+k3sAdminCert] = []byte(fakeCert)
-	f.ExecOutput["cat "+k3sAdminKey] = []byte(fakeKey)
-	f.ExecOutput["cat "+k3sServerCA] = []byte(fakeCA)
+	f.ExecOutput["cat "+k3s.AdminCertPath] = []byte(fakeCert)
+	f.ExecOutput["cat "+k3s.AdminKeyPath] = []byte(fakeKey)
+	f.ExecOutput["cat "+k3s.ServerCAPath] = []byte(fakeCA)
 	f.ExecOutput["cat /var/lib/rancher/k3s/server/node-token"] = []byte("K10::node-token\n")
-	az.docker = f
+	az.useDocker(f)
 	// The readiness probe talks to a real port, which the Fake cannot provide,
 	// so tests drive the pieces around it rather than Provision end to end.
 	return srv, az, f
@@ -125,9 +126,9 @@ func TestKubeconfigIsStableAcrossCalls(t *testing.T) {
 		ParentID: rg, Backing: "real", Body: body,
 	})
 
-	az.clusters.put(&cluster{
+	az.k3s.Put(&k3s.Cluster{
 		ResourceID: id, Name: "demo3", Container: "c", Port: 6443,
-		Kubeconfig: renderKubeconfig("demo3", 6443, []byte(fakeCA), []byte(fakeCert), []byte(fakeKey)),
+		Kubeconfig: k3s.RenderKubeconfig("demo3", 6443, []byte(fakeCA), []byte(fakeCert), []byte(fakeKey)),
 	})
 
 	var first string
@@ -181,12 +182,12 @@ func TestCredentialsBeforeReadyReportNotReady(t *testing.T) {
 // node_count is real: N nodes means the k3s server plus N-1 agent containers.
 func TestScalingAgentsAddsAndRemovesContainers(t *testing.T) {
 	_, az, f := newAKSTestServer(t)
-	cl := &cluster{ResourceID: "/c", Name: "demo", Container: "nimbus-aks-demo", Network: "net"}
+	cl := &k3s.Cluster{ResourceID: "/c", Name: "demo", Container: "nimbus-aks-demo", Network: "net"}
 	if _, err := f.Run(context.Background(), docker.RunOptions{Name: cl.Container, Image: az.cfg.K3sImage}); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := az.scaleAgents(context.Background(), cl, 3); err != nil {
+	if err := az.k3s.ScaleAgents(context.Background(), cl, 3); err != nil {
 		t.Fatal(err)
 	}
 	if len(cl.Agents) != 2 {
@@ -194,7 +195,7 @@ func TestScalingAgentsAddsAndRemovesContainers(t *testing.T) {
 	}
 
 	// Scale up.
-	if err := az.scaleAgents(context.Background(), cl, 4); err != nil {
+	if err := az.k3s.ScaleAgents(context.Background(), cl, 4); err != nil {
 		t.Fatal(err)
 	}
 	if len(cl.Agents) != 3 {
@@ -202,7 +203,7 @@ func TestScalingAgentsAddsAndRemovesContainers(t *testing.T) {
 	}
 
 	// Scale down: the extra containers must actually be removed.
-	if err := az.scaleAgents(context.Background(), cl, 2); err != nil {
+	if err := az.k3s.ScaleAgents(context.Background(), cl, 2); err != nil {
 		t.Fatal(err)
 	}
 	if len(cl.Agents) != 1 {
@@ -210,7 +211,7 @@ func TestScalingAgentsAddsAndRemovesContainers(t *testing.T) {
 	}
 	running := 0
 	for _, c := range f.Containers() {
-		if c.Labels[labelRole] == "agent" {
+		if c.Labels[docker.LabelRole] == "agent" {
 			running++
 		}
 	}
@@ -219,7 +220,7 @@ func TestScalingAgentsAddsAndRemovesContainers(t *testing.T) {
 	}
 
 	// A single-node cluster needs no agents at all.
-	if err := az.scaleAgents(context.Background(), cl, 1); err != nil {
+	if err := az.k3s.ScaleAgents(context.Background(), cl, 1); err != nil {
 		t.Fatal(err)
 	}
 	if len(cl.Agents) != 0 {
@@ -270,20 +271,20 @@ func TestContainerNamesAreStableAndUnique(t *testing.T) {
 	a := "/subscriptions/s/resourceGroups/rg1/providers/Microsoft.ContainerService/managedClusters/demo"
 	b := "/subscriptions/s/resourceGroups/rg2/providers/Microsoft.ContainerService/managedClusters/demo"
 
-	if containerName(a, "demo") != containerName(a, "demo") {
+	if docker.Name("nimbus-aks", a, "demo") != docker.Name("nimbus-aks", a, "demo") {
 		t.Error("container names must be stable for the same resource")
 	}
-	if containerName(a, "demo") == containerName(b, "demo") {
+	if docker.Name("nimbus-aks", a, "demo") == docker.Name("nimbus-aks", b, "demo") {
 		t.Error("same cluster name in different resource groups must not collide")
 	}
 	// Casing of the ID must not matter: ARM resolves IDs case-insensitively.
-	if containerName(a, "demo") != containerName(strings.ToUpper(a), "demo") {
+	if docker.Name("nimbus-aks", a, "demo") != docker.Name("nimbus-aks", strings.ToUpper(a), "demo") {
 		t.Error("container name changed with the casing of the resource ID")
 	}
 	for _, n := range []string{"My_Cluster!", "", "a-very-long-cluster-name-that-keeps-going-and-going"} {
-		got := containerName("/id", n)
+		got := docker.Name("nimbus-aks", "/id", n)
 		if strings.ContainsAny(got, "_! ") || len(got) > 63 {
-			t.Errorf("containerName(%q) = %q is not a legal docker name", n, got)
+			t.Errorf("docker.Name(%q) = %q is not a legal docker name", n, got)
 		}
 	}
 }
@@ -396,7 +397,7 @@ func TestPoolCountAndClusterEndpointDoNotClobberEachOther(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		az.recordClusterEndpoint(target{ID: id}, &cluster{Port: 6550, Container: "nimbus-test"})
+		az.recordClusterEndpoint(target{ID: id}, &k3s.Cluster{Port: 6550, Container: "nimbus-test"})
 	}()
 	wg.Wait()
 

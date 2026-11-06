@@ -1,4 +1,4 @@
-package azure
+package k3s
 
 import (
 	"context"
@@ -14,8 +14,9 @@ import (
 // Watching what is actually running inside a cluster.
 //
 // Once a cluster is up, Nimbus polls its Kubernetes API and mirrors nodes,
-// deployments, pods and services into the resource store as children of the
-// AKS resource. The existing event bus then streams them to the browser, so
+// deployments, replica sets, pods and services into the resource store as
+// children of whatever resource owns the cluster -- an AKS cluster, an EKS
+// cluster, the engine does not care. The existing event bus then streams them to the browser, so
 // the visualizer needs no Kubernetes knowledge at all -- it draws resources,
 // and these are just more resources.
 //
@@ -25,9 +26,10 @@ import (
 // at. The cost is one request per collection per interval against a local
 // container.
 
-// Types used for the mirrored objects. They are not real ARM types -- nothing
-// in Azure calls a pod a resource -- so they sit under a Nimbus namespace to
-// make that obvious in the inspector.
+// Types used for the mirrored objects. No cloud calls a pod one of its own
+// resources, so these sit under a Nimbus namespace to make that obvious in
+// the inspector -- and being cloud-neutral is also what lets the Kubernetes
+// view draw an EKS cluster with no new code.
 const (
 	typeK8sNode       = "Nimbus.Kubernetes/nodes"
 	typeK8sDeployment = "Nimbus.Kubernetes/deployments"
@@ -40,7 +42,7 @@ const (
 const watchInterval = 3 * time.Second
 
 // startClusterWatcher polls every running cluster until ctx is cancelled.
-func (s *Server) startClusterWatcher(ctx context.Context) {
+func (e *Engine) Watch(ctx context.Context) {
 	ticker := time.NewTicker(watchInterval)
 	defer ticker.Stop()
 	for {
@@ -48,8 +50,8 @@ func (s *Server) startClusterWatcher(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for _, cl := range s.clusters.all() {
-				s.syncCluster(ctx, cl)
+			for _, cl := range e.clusters.all() {
+				e.sync(ctx, cl)
 			}
 		}
 	}
@@ -182,9 +184,9 @@ type k8sList struct {
 	Items []k8sObject `json:"items"`
 }
 
-// syncCluster mirrors one cluster's contents into the resource store.
-func (s *Server) syncCluster(ctx context.Context, cl *cluster) {
-	client := s.clusterClient(cl)
+// sync mirrors one cluster's contents into the resource store.
+func (e *Engine) sync(ctx context.Context, cl *Cluster) {
+	client := e.APIClient(cl)
 	if client == nil {
 		return
 	}
@@ -228,8 +230,8 @@ func (s *Server) syncCluster(ctx context.Context, cl *cluster) {
 			// Put is idempotent and only publishes an event when something
 			// changed, so re-storing an unchanged pod every few seconds does
 			// not spam the activity feed.
-			s.putIfChanged(&core.Resource{
-				Cloud: "azure", ID: id, Type: c.typ, Name: name,
+			e.putIfChanged(&core.Resource{
+				Cloud: e.cloud, ID: id, Type: c.typ, Name: name,
 				ParentID: cl.ResourceID, Backing: "real", Body: body,
 			})
 		}
@@ -237,24 +239,24 @@ func (s *Server) syncCluster(ctx context.Context, cl *cluster) {
 
 	// Anything previously mirrored for this cluster that is gone now.
 	prefix := strings.ToLower(cl.ResourceID + "/kubernetes/")
-	for _, res := range s.store.List(func(r *core.Resource) bool {
+	for _, res := range e.store.List(func(r *core.Resource) bool {
 		return strings.HasPrefix(strings.ToLower(r.ID), prefix)
 	}) {
 		if !seen[strings.ToLower(res.ID)] {
-			_, _ = s.store.Delete(res.ID)
+			_, _ = e.store.Delete(res.ID)
 		}
 	}
 }
 
 // putIfChanged avoids republishing identical objects, which would otherwise
 // fill the activity feed with an update per pod every poll.
-func (s *Server) putIfChanged(r *core.Resource) {
-	if existing, err := s.store.Get(r.ID); err == nil {
+func (e *Engine) putIfChanged(r *core.Resource) {
+	if existing, err := e.store.Get(r.ID); err == nil {
 		if string(existing.Body) == string(r.Body) {
 			return
 		}
 	}
-	s.store.Put(r)
+	e.store.Put(r)
 }
 
 // isSystemNamespace hides the machinery k3s runs for itself.
@@ -294,7 +296,7 @@ func objectStatus(typ string, item k8sObject) string {
 }
 
 // clusterClient builds (and does not cache) an HTTPS client for a cluster.
-func (s *Server) clusterClient(cl *cluster) *http.Client {
+func (e *Engine) APIClient(cl *Cluster) *http.Client {
 	// The PEM blobs are kept on the cluster when it becomes ready, so nothing
 	// has to read them back out of the kubeconfig -- parsing YAML is the one
 	// thing the stdlib cannot do, and generating it was the easy direction.

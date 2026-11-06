@@ -25,6 +25,7 @@ import (
 
 	"github.com/Asere231/nimbus/internal/core"
 	"github.com/Asere231/nimbus/internal/engines/docker"
+	"github.com/Asere231/nimbus/internal/engines/funcs"
 	"github.com/Asere231/nimbus/internal/engines/k3s"
 )
 
@@ -58,10 +59,17 @@ type Config struct {
 	ClusterTimeout time.Duration
 	// KeepClusters leaves containers running when Nimbus stops.
 	KeepClusters bool
+	// FunctionPortBase is the first host port tried for a Lambda
+	// container's runtime emulator.
+	FunctionPortBase int
 }
 
 // DefaultClusterPortBase starts above the range AKS uses.
 const DefaultClusterPortBase = 6600
+
+// DefaultFunctionPortBase is where Lambda containers start, well clear of
+// the cluster range so a busy machine does not interleave them.
+const DefaultFunctionPortBase = 9100
 
 // Server is the AWS emulator.
 type Server struct {
@@ -72,6 +80,9 @@ type Server struct {
 	// items holds DynamoDB's rows, beside the tables themselves in the
 	// store -- a table is a resource, its items are data.
 	items *itemStore
+	// lambda runs the functions, and logs holds what they printed.
+	lambda *funcs.Engine
+	logs   *logStore
 	// k3s runs the EKS clusters. The same engine Azure's AKS uses, which
 	// knows about neither -- see internal/engines/k3s.
 	k3s *k3s.Engine
@@ -89,7 +100,15 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		cfg.ClusterPortBase = DefaultClusterPortBase
 	}
 	s := &Server{cfg: cfg, store: store, bus: bus,
-		objects: newObjectStore(cfg.DataDir), items: newItemStore(cfg.DataDir)}
+		objects: newObjectStore(cfg.DataDir), items: newItemStore(cfg.DataDir),
+		logs: newLogStore()}
+	s.lambda = funcs.New(funcs.Config{
+		NamePrefix:   "nimbus-lambda",
+		PortBase:     orZero(cfg.FunctionPortBase, DefaultFunctionPortBase),
+		KeepRunning:  cfg.KeepClusters,
+		StartTimeout: cfg.ClusterTimeout,
+		Dir:          lambdaDir(cfg.DataDir),
+	}, docker.NewCLI())
 	k3sCfg := k3s.Config{
 		Image:       cfg.K3sImage,
 		Version:     cfg.KubernetesVersion,
@@ -162,10 +181,14 @@ func (s *Server) Shutdown(ctx context.Context) {
 	for _, cl := range s.k3s.All() {
 		s.k3s.Stop(ctx, cl)
 	}
+	s.shutdownLambdas(ctx)
 }
 
 // UseDocker swaps the Docker client, for tests.
-func (s *Server) UseDocker(d docker.Client) { s.k3s.SetDocker(d) }
+func (s *Server) UseDocker(d docker.Client) {
+	s.k3s.SetDocker(d)
+	s.lambda.SetDocker(d)
+}
 
 // K3s exposes the engine, which the EKS tests drive directly.
 func (s *Server) K3s() *k3s.Engine { return s.k3s }
@@ -214,6 +237,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 		return s.serveEKS(w, r)
 	case "dynamodb":
 		return s.serveDynamoDB(w, r)
+	case "lambda":
+		return s.serveLambda(w, r)
+	case "logs":
+		return s.serveLogs(w, r)
 	default:
 		// A service nobody has built. 400 rather than 501, because
 		// measured against aws-cli a 5xx is retried five times with

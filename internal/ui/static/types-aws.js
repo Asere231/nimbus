@@ -25,12 +25,14 @@ export const TYPES = {
   "aws::eks::cluster": ["EKS", "#58a6ff", "EKS cluster"],
   "aws::eks::nodegroup": ["NG", "#79c0ff", "Node group"],
   "aws::dynamodb::table": ["DDB", "#e3b341", "DynamoDB table"],
+  "aws::lambda::function": ["FN", "#ff9900", "Lambda function"],
+  "aws::logs::loggroup": ["LOGS", "#8b949e", "Log group"],
 };
 
 // Siblings are ordered so a stack reads the way it was built: the network
 // first, then what sits in it.
 export const ORDER = ["account", "vpc", "subnet", "internetgateway", "natgateway",
-  "routetable", "securitygroup", "cluster", "nodegroup", "table", "bucket", "role", "user", "policy"];
+  "routetable", "securitygroup", "cluster", "nodegroup", "table", "function", "bucket", "role", "user", "policy", "loggroup"];
 
 // AWS has no addressing-only types to hide, unlike ARM's blobServices.
 export const PASSTHROUGH = null;

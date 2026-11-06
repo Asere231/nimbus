@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Fake is an in-memory Client for tests.
@@ -35,6 +36,8 @@ type Fake struct {
 	ExecOutput map[string][]byte
 	// Images that ImagePresent reports as already pulled.
 	Images map[string]bool
+	// LogOutput maps a container name to what Logs returns for it.
+	LogOutput map[string][]byte
 
 	containers map[string]*Container
 	networks   map[string]bool
@@ -48,6 +51,7 @@ func NewFake() *Fake {
 	return &Fake{
 		ExecOutput: map[string][]byte{},
 		Images:     map[string]bool{},
+		LogOutput:  map[string][]byte{},
 		containers: map[string]*Container{},
 		networks:   map[string]bool{},
 	}
@@ -144,6 +148,21 @@ func (f *Fake) Exec(ctx context.Context, name string, cmd ...string) ([]byte, er
 		return nil, nil
 	}
 	return nil, fmt.Errorf("fake docker: no canned output for %q in %s", joined, name)
+}
+
+// Logs returns canned output for a container, which is how a test stands in
+// for what a handler printed.
+func (f *Fake) Logs(ctx context.Context, name string, since time.Time) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("logs %s", name)
+	if err := f.check(); err != nil {
+		return nil, err
+	}
+	if _, ok := f.containers[name]; !ok {
+		return nil, &NotFoundError{Name: name}
+	}
+	return f.LogOutput[name], nil
 }
 
 // Inspect returns a container.

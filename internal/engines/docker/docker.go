@@ -33,6 +33,10 @@ type Client interface {
 	Remove(ctx context.Context, name string) error
 	// Exec runs a command inside a container and returns its stdout.
 	Exec(ctx context.Context, name string, cmd ...string) ([]byte, error)
+	// Logs returns a container's output since a moment, stdout and stderr
+	// together. Anything a Lambda handler prints goes to stdout inside its
+	// container, which is where CloudWatch Logs gets its lines from.
+	Logs(ctx context.Context, name string, since time.Time) ([]byte, error)
 	// Inspect returns what Nimbus needs to know about one container.
 	Inspect(ctx context.Context, name string) (Container, error)
 	// List returns containers carrying the given label, running or not.
@@ -138,6 +142,32 @@ func (c *CLI) run(ctx context.Context, args ...string) ([]byte, error) {
 		return nil, &NotFoundError{Name: lastArg(args)}
 	}
 	return nil, fmt.Errorf("docker %s: %s", strings.Join(args, " "), firstLine(msg))
+}
+
+// runCombined is run() with stderr folded into the output rather than read
+// as an error message. `docker logs` writes a container's stderr to its own
+// stderr, so the two streams have to be joined here or half the log is lost.
+func (c *CLI) runCombined(ctx context.Context, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, c.binary(), args...)
+	var both bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &both, &both
+	if err := cmd.Run(); err != nil {
+		switch {
+		case errors.Is(err, exec.ErrNotFound):
+			return nil, fmt.Errorf("%w: the docker command was not found on PATH", ErrUnavailable)
+		case ctx.Err() != nil:
+			return nil, fmt.Errorf("%w: docker %s timed out", ErrUnavailable, args[0])
+		case isDaemonDown(both.String()):
+			return nil, fmt.Errorf("%w: %s", ErrUnavailable, firstLine(both.String()))
+		case isNotFound(both.String()):
+			return nil, &NotFoundError{Name: lastArg(args)}
+		}
+		return nil, fmt.Errorf("docker %s: %s", strings.Join(args, " "), firstLine(both.String()))
+	}
+	return both.Bytes(), nil
 }
 
 // isDaemonDown spots the daemon being unreachable. The wording differs between
@@ -258,6 +288,19 @@ func (c *CLI) Remove(ctx context.Context, name string) error {
 // Exec runs a command inside a container.
 func (c *CLI) Exec(ctx context.Context, name string, cmd ...string) ([]byte, error) {
 	return c.run(ctx, append([]string{"exec", name}, cmd...)...)
+}
+
+// Logs returns a container's combined output.
+//
+// --since takes an RFC3339 timestamp, and a zero time means "everything".
+// Both streams come back, because a handler's traceback is on stderr and a
+// log that omitted it would be useless exactly when it matters.
+func (c *CLI) Logs(ctx context.Context, name string, since time.Time) ([]byte, error) {
+	args := []string{"logs"}
+	if !since.IsZero() {
+		args = append(args, "--since", since.UTC().Format(time.RFC3339Nano))
+	}
+	return c.runCombined(ctx, append(args, name)...)
 }
 
 // inspectJSON is the shape of `docker inspect` that Nimbus reads.

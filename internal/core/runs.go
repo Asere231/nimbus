@@ -173,8 +173,22 @@ func baselineAt(events []Event, start time.Time) []RunResource {
 	existing := map[string]RunResource{}
 	order := []string{}
 	for _, e := range sorted {
-		if !e.Time.Before(start) {
+		if e.Time.After(start) {
 			break
+		}
+		// A SNAPSHOT at exactly the run's start time still counts as
+		// "before": it is not something that happened at that instant, it
+		// is a statement about what already existed. An ordinary event at
+		// that instant is part of the run and must not be.
+		//
+		// This is not a hair-splitting distinction. Windows's clock is
+		// coarse -- often a millisecond or worse -- so a restart followed
+		// immediately by an apply writes the snapshot and the first event
+		// in the same tick, and a strict "before" drops the snapshot from
+		// the one baseline it was written for. CI caught it; macOS and
+		// Linux never would.
+		if e.Kind != "snapshot" && !e.Time.Before(start) {
+			continue
 		}
 		if e.Kind == "reset" {
 			existing = map[string]RunResource{}

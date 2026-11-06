@@ -341,3 +341,34 @@ func TestASnapshotAloneIsNotARun(t *testing.T) {
 		t.Errorf("got %d runs from a restart that changed nothing, want 0", len(runs))
 	}
 }
+
+// A snapshot written in the SAME clock tick as the run's first event must
+// still count towards that run's baseline. Windows's clock is coarse
+// enough for this to be the normal case after a restart, and a strict
+// "before" dropped the snapshot from the one baseline it exists for --
+// green on macOS and Linux, red on the Windows runner.
+func TestASnapshotSharingTheRunsTimestampStillCounts(t *testing.T) {
+	same := at(0)
+	events := []Event{
+		{Kind: "snapshot", Action: "exists", Time: same, Cloud: "azure",
+			ResourceID: "/subscriptions/s", ResourceType: "Microsoft.Resources/subscriptions", Name: "s"},
+		{Kind: "resource", Action: "create", Time: same, Cloud: "azure",
+			ResourceID: "/subscriptions/s/resourceGroups/rg", Name: "rg"},
+	}
+	runs := Runs(events)
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs, want 1", len(runs))
+	}
+	run, ok := FindRun(events, runs[0].ID)
+	if !ok {
+		t.Fatal("run not found")
+	}
+	if len(run.Baseline) != 1 || run.Baseline[0].Name != "s" {
+		t.Errorf("baseline = %+v, want the snapshot taken in the same tick", run.Baseline)
+	}
+	// ...while an ordinary event at that instant belongs to the RUN, not
+	// to what came before it.
+	if run.Steps != 1 {
+		t.Errorf("steps = %d, want the create to still be a step", run.Steps)
+	}
+}

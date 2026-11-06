@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Asere231/nimbus/internal/aws"
 	"github.com/Asere231/nimbus/internal/azure"
 	"github.com/Asere231/nimbus/internal/azure/keyvault"
 	"github.com/Asere231/nimbus/internal/azure/storage"
@@ -88,7 +89,7 @@ func defaultHome() string {
 // knownClouds is every cloud this build can run, in the order they appear in
 // the banner. A name not in here is rejected by --clouds rather than quietly
 // ignored, so a typo says so instead of starting a server that is not there.
-var knownClouds = []string{"azure"}
+var knownClouds = []string{"azure", "aws"}
 
 // parseClouds turns the --clouds list into a set, rejecting anything unknown.
 func parseClouds(list string) (map[string]bool, error) {
@@ -131,6 +132,7 @@ func start(args []string) {
 	home := fs.String("home", defaultHome(), "directory for certificates and saved state")
 	uiPort := fs.Int("ui-port", 4700, "visualizer port (http)")
 	azPort := fs.Int("azure-port", 4701, "Azure Resource Manager port (https)")
+	awsPort := fs.Int("aws-port", 4702, "AWS port (http)")
 	clouds := fs.String("clouds", "azure", "which clouds to run, comma separated: "+strings.Join(knownClouds, ", "))
 	persist := fs.Bool("persist", false, "save state to disk so it survives restarts")
 	host := fs.String("host", "localhost", "hostname clients use to reach Nimbus")
@@ -192,6 +194,28 @@ func start(args []string) {
 			extras: azure.DNSNames(),
 			back:   az.Start(),
 			stop:   az.Shutdown,
+		})
+	}
+
+	if running["aws"] {
+		// Plain HTTP: no AWS client insists on TLS, S3 is addressed
+		// path-style so no bucket hostname needs a certificate, and
+		// `aws --endpoint-url http://localhost:4702` then works with
+		// nothing trusted on the machine.
+		awsURL := fmt.Sprintf("http://%s:%d", *host, *awsPort)
+		awsCfg := aws.Config{PublicURL: awsURL}
+		if dataDir != "" {
+			awsCfg.DataDir = dataDir
+		}
+		a := aws.New(awsCfg, store, bus)
+		servers = append(servers, &cloudServer{
+			name:  "aws",
+			label: fmt.Sprintf(`AWS          %s      --endpoint-url %s`, awsURL, awsURL),
+			url:   awsURL,
+			srv: &http.Server{Addr: fmt.Sprintf(":%d", *awsPort), Handler: a,
+				ReadHeaderTimeout: 10 * time.Second},
+			back: a.Start(),
+			stop: a.Shutdown,
 		})
 	}
 

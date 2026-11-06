@@ -78,6 +78,15 @@ Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualize
 
 - **Some azurerm delays cannot be fixed from this side.** A resource group takes ~20 s to create and every DELETE a flat 10 s, no matter what we return. `azurerm_resource_group` ignores `Azure-AsyncOperation` and runs its own client-side wait that re-reads the group several times; the delete poller waits, then GETs until the resource 404s. Adding async headers to resource-group writes or `Content-Type` to the empty 202 changes neither. Measured against azurerm 4.81.0 — don't re-chase it.
 
+## AWS protocol facts (measured against aws-cli 1.40.33 / botocore 1.38.34)
+
+- **The URL says nothing; the signature is the routing table.** Every Query service POSTs to exactly `/` with `Action=X&Version=Y` form-encoded. STS, EC2 and IAM differ only in the fourth field of the SigV4 credential scope (`Credential=nimbus/20261106/us-east-1/sts/aws4_request`) and in the Action. So `internal/aws/sigv4.go` routes on the credential scope, falling back to `X-Amz-Credential` for presigned URLs and to S3 for an unsigned request. Signatures are never verified — a local emulator rejecting one could only ever be reporting a clock skew.
+- **There are three error envelopes and they are different documents.** IAM/STS use `<ErrorResponse><Error><Type><Code><Message></Error><RequestId>`; EC2 uses `<Response><Errors><Error>…</Errors><RequestID>` — note `RequestID`, not `RequestId`; S3 uses a bare `<Error>` with `<Resource>`. A client handed the wrong one prints `An error occurred (Unknown) when calling the … operation`, naming nothing.
+- **A 5xx is retried five times** with backoff, so an action that will never work must answer **400**, not 501: one legible line instead of five, and no hammering. Nimbus answers `InvalidAction` naming the service and action, which also makes the activity feed the to-do list for the next checkpoint.
+- **The XML namespace is part of the contract.** It is per service and per version (`https://sts.amazonaws.com/doc/2011-06-15/`); a client parsing with the wrong one sees an empty document rather than an error.
+- **AWS ids are decided once at create and stored, never recomputed.** This looks like the "derive, do not generate" rule but is not: that rule is about values a client COMPARES between reads, and a stored id agrees with itself. Deriving a VPC id from its inputs would merge two VPCs that happen to share a CIDR.
+- **S3 is addressed path-style**, which is why AWS needs no TLS here: no `bucket.host` name means no certificate and no DNS. `s3_use_path_style = true` for the provider; the CLI needs `addressing_style = path`.
+
 ## Adding a resource type (the usual task)
 
 1. Write a failing test in `internal/azure/*_test.go` that replays the client's calls (copy the shape from the SDK or a Terraform debug log: `TF_LOG=DEBUG terraform apply`).

@@ -22,52 +22,53 @@ import (
 // rounding and clock-skew arguments.
 const certValidity = 397 * 24 * time.Hour
 
-// StorageSuffix is the DNS suffix the Azure storage data plane lives under.
-// Clients build {account}.{service}.{suffix} from the metadata document, so
-// these names must resolve to loopback and the certificate must cover them.
-const StorageSuffix = "storage.nimbus.localhost"
-
-// KeyVaultSuffix is the DNS suffix Key Vault's data plane lives under.
-// Clients build {vault}.{suffix} from the metadata document or from the
-// vault's own vaultUri, so these names must resolve to loopback too.
-const KeyVaultSuffix = "vault.nimbus.localhost"
-
-// serverDNSNames is every name the server certificate must cover.
+// baseDNSNames is what every Nimbus certificate covers, whatever clouds are
+// running. A cloud whose clients address data planes by hostname adds its
+// own names on top -- see internal/azure/dns.go, which is where the storage
+// and Key Vault suffixes live, because they are Azure's business and not
+// this package's.
 //
-// A wildcard matches exactly ONE label: "*.localhost" covers "a.localhost" but
-// NOT "a.b.localhost". So each storage service level needs its own wildcard --
-// "*.storage.nimbus.localhost" would not match
-// "stnimbus.blob.storage.nimbus.localhost".
-var serverDNSNames = []string{
+// A wildcard matches exactly ONE label: "*.localhost" covers "a.localhost"
+// but NOT "a.b.localhost", which is why a cloud with nested data-plane names
+// has to list each level.
+var baseDNSNames = []string{
 	"localhost",
 	"*.localhost",
 	"nimbus",
 	"host.docker.internal",
-	StorageSuffix,
-	"*." + StorageSuffix,
-	"*.blob." + StorageSuffix,
-	"*.queue." + StorageSuffix,
-	"*.table." + StorageSuffix,
-	"*.file." + StorageSuffix,
-	"*.dfs." + StorageSuffix,
-	KeyVaultSuffix,
-	"*." + KeyVaultSuffix,
 }
 
-// coversAllNames reports whether an existing certificate carries every name in
-// serverDNSNames. Adding a name to that list must reissue certificates that
-// predate it, or an upgrading user gets an opaque TLS failure.
-func coversAllNames(crt *x509.Certificate) bool {
+// coversAllNames reports whether an existing certificate carries every name
+// it should. Adding a name must reissue certificates that predate it, or an
+// upgrading user gets an opaque TLS failure.
+func coversAllNames(crt *x509.Certificate, want []string) bool {
 	have := make(map[string]bool, len(crt.DNSNames))
 	for _, n := range crt.DNSNames {
 		have[n] = true
 	}
-	for _, want := range serverDNSNames {
-		if !have[want] {
+	for _, name := range want {
+		if !have[name] {
 			return false
 		}
 	}
 	return true
+}
+
+// dnsNames is the full set for a certificate: the base names plus whatever
+// the running clouds need, deduplicated and in a stable order.
+func dnsNames(extra []string) []string {
+	out := append([]string(nil), baseDNSNames...)
+	seen := map[string]bool{}
+	for _, n := range out {
+		seen[n] = true
+	}
+	for _, n := range extra {
+		if n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // Certs holds the paths of the local CA and the server certificate.
@@ -85,7 +86,10 @@ type Certs struct {
 
 // EnsureCerts creates a CA and a localhost server certificate in dir if they
 // do not exist yet, and returns their paths.
-func EnsureCerts(dir string) (*Certs, error) {
+// extraNames are the data-plane hostnames the running clouds need covered,
+// on top of the base set; see internal/azure/dns.go for Azure's.
+func EnsureCerts(dir string, extraNames ...string) (*Certs, error) {
+	names := dnsNames(extraNames)
 	c := &Certs{
 		Dir:    dir,
 		CACert: filepath.Join(dir, "nimbus-ca.pem"),
@@ -108,7 +112,7 @@ func EnsureCerts(dir string) (*Certs, error) {
 	// Nothing more to do if the server certificate is present and not close to
 	// expiring. The CA is deliberately not part of this check.
 	if fileExists(c.Cert) && fileExists(c.Key) {
-		if crt, err := readCert(c.Cert); err == nil && !needsReissue(crt.NotAfter) && spanOK(crt) && coversAllNames(crt) {
+		if crt, err := readCert(c.Cert); err == nil && !needsReissue(crt.NotAfter) && spanOK(crt) && coversAllNames(crt, names) {
 			return c, nil
 		}
 	}
@@ -147,7 +151,7 @@ func EnsureCerts(dir string) (*Certs, error) {
 		NotAfter:     notBefore.Add(certValidity),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     serverDNSNames,
+		DNSNames:     names,
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 	}
 	srvDER, err := x509.CreateCertificate(rand.Reader, srvTmpl, caParsed, &srvKey.PublicKey, caKey)

@@ -289,14 +289,14 @@ func sampleID(rg, typ string) string {
 // which is the one part of adding types that is easy to forget. The TYPES map
 // lives in JavaScript, so this reads the file rather than importing anything.
 func TestEverySpecTypeHasABadge(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "ui", "static", "types.js"))
+	raw, err := os.ReadFile(filepath.Join("..", "ui", "static", "types-azure.js"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	app := string(raw)
 	for typ := range specTypes {
 		if !strings.Contains(app, `"`+typ+`"`) {
-			t.Errorf("%s has no badge in internal/ui/static/types.js (TYPES)", typ)
+			t.Errorf("%s has no badge in internal/ui/static/types-azure.js (TYPES)", typ)
 		}
 	}
 }

@@ -85,24 +85,61 @@ func defaultHome() string {
 	return filepath.Join(home, ".nimbus")
 }
 
+// knownClouds is every cloud this build can run, in the order they appear in
+// the banner. A name not in here is rejected by --clouds rather than quietly
+// ignored, so a typo says so instead of starting a server that is not there.
+var knownClouds = []string{"azure"}
+
+// parseClouds turns the --clouds list into a set, rejecting anything unknown.
+func parseClouds(list string) (map[string]bool, error) {
+	want := map[string]bool{}
+	for _, name := range strings.Split(list, ",") {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" {
+			continue
+		}
+		known := false
+		for _, k := range knownClouds {
+			known = known || k == name
+		}
+		if !known {
+			return nil, fmt.Errorf("unknown cloud %q (this build knows: %s)", name, strings.Join(knownClouds, ", "))
+		}
+		want[name] = true
+	}
+	if len(want) == 0 {
+		return nil, fmt.Errorf("--clouds listed nothing to run")
+	}
+	return want, nil
+}
+
+// cloudServer is one cloud's HTTP server, with everything start() needs to
+// bind it, announce it and stop it again.
+type cloudServer struct {
+	name   string
+	label  string // what the banner calls it
+	url    string
+	tls    bool
+	srv    *http.Server
+	extras []string              // certificate names its data planes need
+	stop   func(context.Context) // engine teardown, after the HTTP shutdown
+	back   func()                // background workers, stopped first
+}
+
 func start(args []string) {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
 	home := fs.String("home", defaultHome(), "directory for certificates and saved state")
 	uiPort := fs.Int("ui-port", 4700, "visualizer port (http)")
 	azPort := fs.Int("azure-port", 4701, "Azure Resource Manager port (https)")
+	clouds := fs.String("clouds", "azure", "which clouds to run, comma separated: "+strings.Join(knownClouds, ", "))
 	persist := fs.Bool("persist", false, "save state to disk so it survives restarts")
 	host := fs.String("host", "localhost", "hostname clients use to reach Nimbus")
 	_ = fs.Parse(args)
 
-	certs, err := core.EnsureCerts(filepath.Join(*home, "certs"))
+	running, err := parseClouds(*clouds)
 	if err != nil {
-		log.Fatalf("creating certificates: %v", err)
+		log.Fatal(err)
 	}
-	tlsCfg, err := certs.TLSConfig()
-	if err != nil {
-		log.Fatalf("loading certificates: %v", err)
-	}
-
 	bus := core.NewBus(1000)
 	dataDir := ""
 	if *persist {
@@ -128,79 +165,146 @@ func start(args []string) {
 		journal.AppendSnapshot(store.List(nil))
 	}
 
-	azURL := fmt.Sprintf("https://%s:%d", *host, *azPort)
-	azCfg := azure.Config{PublicURL: azURL}
-	if dataDir != "" {
-		azCfg.DataDir = dataDir
-	}
-	azCfg.KeepClusters = *persist
-	az := azure.New(azCfg, store, bus)
-	stopBackground := az.Start()
-	uiURL := fmt.Sprintf("http://%s:%d", *host, *uiPort)
+	// Build the clouds that were asked for. Each one contributes its
+	// endpoint to the visualizer and the names its data planes need on the
+	// certificate, which is why the certificate is issued after this and
+	// not before.
+	var servers []*cloudServer
+	var blobs ui.BlobBrowser
+	var secrets ui.SecretBrowser
 
-	azSrv := &http.Server{Addr: fmt.Sprintf(":%d", *azPort), Handler: az, TLSConfig: tlsCfg, ReadHeaderTimeout: 10 * time.Second}
+	if running["azure"] {
+		azURL := fmt.Sprintf("https://%s:%d", *host, *azPort)
+		azCfg := azure.Config{PublicURL: azURL, KeepClusters: *persist}
+		if dataDir != "" {
+			azCfg.DataDir = dataDir
+		}
+		az := azure.New(azCfg, store, bus)
+		blobs = blobBrowser{az.BlobBrowser()}
+		secrets = secretBrowser{az.SecretBrowser()}
+		servers = append(servers, &cloudServer{
+			name:  "azure",
+			label: fmt.Sprintf(`Azure (ARM)  %s     metadata_host = "%s:%d"`, azURL, *host, *azPort),
+			url:   azURL,
+			tls:   true,
+			srv: &http.Server{Addr: fmt.Sprintf(":%d", *azPort), Handler: az,
+				ReadHeaderTimeout: 10 * time.Second},
+			extras: azure.DNSNames(),
+			back:   az.Start(),
+			stop:   az.Shutdown,
+		})
+	}
+
+	var certNames []string
+	endpoints := map[string]string{}
+	for _, c := range servers {
+		certNames = append(certNames, c.extras...)
+		endpoints[c.name] = c.url
+	}
+	certs, err := core.EnsureCerts(filepath.Join(*home, "certs"), certNames...)
+	if err != nil {
+		log.Fatalf("creating certificates: %v", err)
+	}
+	tlsCfg, err := certs.TLSConfig()
+	if err != nil {
+		log.Fatalf("loading certificates: %v", err)
+	}
+	for _, c := range servers {
+		if c.tls {
+			c.srv.TLSConfig = tlsCfg
+		}
+	}
+
+	uiURL := fmt.Sprintf("http://%s:%d", *host, *uiPort)
 	uiSrv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", *uiPort),
-		Handler:           ui.Handler(store, bus, ui.Info{Version: version, Clouds: map[string]string{"azure": azURL}, DataDir: dataDir}, blobBrowser{az.BlobBrowser()}, secretBrowser{az.SecretBrowser()}),
+		Addr: fmt.Sprintf(":%d", *uiPort),
+		Handler: ui.Handler(store, bus,
+			ui.Info{Version: version, Clouds: endpoints, DataDir: dataDir}, blobs, secrets),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// Bind both ports and KEEP the listeners. Probing a port and closing it
+	// Bind every port and KEEP the listeners. Probing a port and closing it
 	// again leaves a gap in which something else can take it -- including the
 	// previous Nimbus you just stopped -- and the failure then surfaces from
 	// inside a goroutine, after the banner has already claimed success.
-	listeners := make([]net.Listener, 0, 2)
-	for _, addr := range []string{azSrv.Addr, uiSrv.Addr} {
-		ln, err := net.Listen("tcp", addr)
+	all := append([]*http.Server{}, uiSrv)
+	for _, c := range servers {
+		all = append(all, c.srv)
+	}
+	listeners := make([]net.Listener, 0, len(all))
+	for _, srv := range all {
+		ln, err := net.Listen("tcp", srv.Addr)
 		if err != nil {
 			for _, open := range listeners {
 				open.Close()
 			}
-			log.Fatalf("port %s is busy: %v", addr, err)
+			log.Fatalf("port %s is busy: %v", srv.Addr, err)
 		}
 		listeners = append(listeners, ln)
 	}
 
 	go func() {
-		if err := azSrv.ServeTLS(listeners[0], "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("azure: %v", err)
-		}
-	}()
-	go func() {
-		if err := uiSrv.Serve(listeners[1]); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := uiSrv.Serve(listeners[0]); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("ui: %v", err)
 		}
 	}()
+	for i, c := range servers {
+		c, ln := c, listeners[i+1]
+		go func() {
+			var err error
+			if c.tls {
+				err = c.srv.ServeTLS(ln, "", "")
+			} else {
+				err = c.srv.Serve(ln)
+			}
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatalf("%s: %v", c.name, err)
+			}
+		}()
+	}
 
+	lines := []string{fmt.Sprintf("  Visualizer   %s", uiURL)}
+	for _, c := range servers {
+		lines = append(lines, "  "+c.label)
+	}
 	fmt.Printf(`
   Nimbus %s
   ─────────────────────────────────────────────
-  Visualizer   %s
-  Azure (ARM)  %s     metadata_host = "%s:%d"
+%s
   CA cert      %s
   State        %s
   ─────────────────────────────────────────────
   First run? Trust the CA once:  nimbus cert
   Press Ctrl+C to stop.
 
-`, version, uiURL, azURL, *host, *azPort, certs.CACert, stateLabel(dataDir))
+`, version, strings.Join(lines, "\n"), certs.CACert, stateLabel(dataDir))
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
-	stopBackground()
+	for _, c := range servers {
+		if c.back != nil {
+			c.back()
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_ = azSrv.Shutdown(ctx)
 	_ = uiSrv.Shutdown(ctx)
+	for _, c := range servers {
+		_ = c.srv.Shutdown(ctx)
+	}
 
-	// Clusters are torn down unless --persist asked for them to survive.
+	// Engines are torn down unless --persist asked for them to survive.
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancelShutdown()
-	if !*persist {
+	if !*persist && running["azure"] {
 		fmt.Println("  stopping clusters (use --persist to leave them running)...")
 	}
-	az.Shutdown(shutdownCtx)
+	for _, c := range servers {
+		if c.stop != nil {
+			c.stop(shutdownCtx)
+		}
+	}
 }
 
 // blobBrowser adapts the Azure storage handler to the visualizer's interface.
@@ -279,7 +383,7 @@ func printEnv(args []string) {
 			fmt.Fprintln(os.Stderr, "Is Nimbus running, and does that account exist?")
 			os.Exit(1)
 		}
-		suffix := fmt.Sprintf("%s:%d", core.StorageSuffix, *azPort)
+		suffix := fmt.Sprintf("%s:%d", azure.StorageSuffix, *azPort)
 		vars = append(vars, [2]string{"AZURE_STORAGE_CONNECTION_STRING",
 			storage.ConnectionString(*account, key, suffix)})
 	}
@@ -332,8 +436,8 @@ func azCLI(args []string) {
 	// az wants the Key Vault suffix with a leading dot (".vault.azure.net"),
 	// and the storage one without. Both carry our port: nothing can bind 443
 	// without root.
-	kvSuffix := fmt.Sprintf(".%s:%d", core.KeyVaultSuffix, *azPort)
-	stSuffix := fmt.Sprintf("%s:%d", core.StorageSuffix, *azPort)
+	kvSuffix := fmt.Sprintf(".%s:%d", azure.KeyVaultSuffix, *azPort)
+	stSuffix := fmt.Sprintf("%s:%d", azure.StorageSuffix, *azPort)
 
 	register := []string{
 		"cloud", "register", "-n", *name,

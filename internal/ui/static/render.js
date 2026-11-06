@@ -5,7 +5,7 @@
 
 import { $, el, fit, switchTab } from "./dom.js";
 import { state } from "./state.js";
-import { typeStyle, tierOf, displayName, roleName } from "./types.js";
+import { typeStyle, tierOf, displayName, rootLabel, identityLinks } from "./types.js";
 import { buildForest, layout, extent, label, W, H } from "./graph.js";
 import { showInspector } from "./inspector.js";
 import { networkModel, networkLayout, draw as drawNetwork } from "./network.js";
@@ -34,7 +34,7 @@ export function render() {
   // would create are merged in as ghosts -- never into the store itself.
   // While a run is being replayed the plan is irrelevant and is left off.
   const live = state.replay || state.resources;
-  const view = state.replay ? live : withGhosts(state.plan, live);
+  const view = state.replay ? live : withGhosts(state.plan, live, state.cloud);
   const count = live.size;
   $("#empty").hidden = count > 0 || state.replay !== null;
   // Three tiers, counted separately: the accepted-only number is the one
@@ -46,57 +46,75 @@ export function render() {
     `${count} resources · ${real} running locally · ${accepted} accepted only`;
 
   const filter = $("#filter").value.trim().toLowerCase();
-  // The subscriptions toggle only means anything to the tree.
+  // The roots toggle only means anything to the tree, and it is named after
+  // whatever the current cloud calls its top container.
   $("#subs-toggle").hidden = state.view !== "topology";
+  $("#show-roots-label").textContent = rootLabel(state.cloud);
 
-  if (state.view === "network" || state.view === "kubernetes") {
-    const build = state.view === "network" ? networkModel : kubernetesModel;
-    const place = state.view === "network" ? networkLayout : kubernetesLayout;
-    const paint = state.view === "network" ? drawNetwork : drawKubernetes;
-    const model = build(view);
+  const def = viewFor(state.view);
+  if (def && def.model) {
+    const model = def.model(view);
     // A view with nothing in it has to SAY so. An apply with no VNets in it
     // -- examples/terraform/azure-app is exactly that -- left the network
     // view a blank canvas, which reads as a broken page rather than as a
     // true answer about the stack.
-    showEmptyView(state.view, model, count);
-    const size = place(model);
+    showEmptyView(def, model, count);
+    const size = def.layout(model);
     fitCanvas(svg, size.width, size.height);
-    paint(svg, model, { selected: state.selected, filter, onSelect: select });
+    def.draw(svg, model, { selected: state.selected, filter, onSelect: select });
     if (state.selected) showInspector(view.get(state.selected));
     return;
   }
 
-  showEmptyView(state.view, null, count);
+  showEmptyView(null, null, count);
   renderTopology(svg, view, filter);
   if (state.selected) showInspector(view.get(state.selected));
 }
 
-// EMPTY says what each view draws, for when it has nothing to draw.
-const EMPTY = {
-  network: {
-    title: "No networks here",
-    body: "This stack has no virtual networks. Create an <code>azurerm_virtual_network</code> " +
+// The views the canvas can show.
+//
+// `clouds` is which clouds a view means anything for: a VPC is not a VNet
+// and a Kubernetes cluster is an Azure resource here, so those two are
+// Azure's. Topology draws any cloud's parent/child tree, so it has no list.
+// app.js builds the switcher from whichever of these the current cloud has.
+export const VIEWS = [
+  { id: "topology", label: "Topology" },
+  {
+    id: "network", label: "Network", clouds: ["azure"],
+    model: networkModel, layout: networkLayout, draw: drawNetwork,
+    empty: (m) => !m.vnets.length && !m.orphans.length,
+    emptyTitle: "No networks here",
+    emptyBody: "This stack has no virtual networks. Create an <code>azurerm_virtual_network</code> " +
       "and its subnets, their security groups and route tables, and any peering appear here.",
   },
-  kubernetes: {
-    title: "No clusters here",
-    body: "This stack has no Kubernetes clusters. Create an <code>azurerm_kubernetes_cluster</code> " +
+  {
+    id: "kubernetes", label: "Kubernetes", clouds: ["azure"],
+    model: kubernetesModel, layout: kubernetesLayout, draw: drawKubernetes,
+    empty: (m) => !m.clusters.length,
+    emptyTitle: "No clusters here",
+    emptyBody: "This stack has no Kubernetes clusters. Create an <code>azurerm_kubernetes_cluster</code> " +
       "\u2014 Nimbus runs it as k3s in Docker \u2014 and its namespaces, workloads, services and nodes appear here.",
   },
-};
+];
 
-function showEmptyView(name, model, count) {
+// viewsFor returns the views a cloud has, which is what the switcher offers.
+export function viewsFor(cloud) {
+  return VIEWS.filter((v) => !v.clouds || v.clouds.includes(cloud));
+}
+
+export function viewFor(id) {
+  return VIEWS.find((v) => v.id === id) || null;
+}
+
+function showEmptyView(def, model, count) {
   const panel = $("#empty-view");
-  const drawsSomething = model &&
-    ((model.vnets && (model.vnets.length || model.orphans.length)) ||
-     (model.clusters && model.clusters.length));
   // With nothing at all in the store the "no resources yet" panel already
   // covers it, and two explanations are worse than one.
-  const show = Boolean(EMPTY[name]) && !drawsSomething && count > 0;
+  const show = Boolean(def && def.empty && model && def.empty(model)) && count > 0;
   panel.hidden = !show;
   if (!show) return;
-  $("#empty-view-title").textContent = EMPTY[name].title;
-  $("#empty-view-body").innerHTML = EMPTY[name].body;
+  $("#empty-view-title").textContent = def.emptyTitle;
+  $("#empty-view-body").innerHTML = def.emptyBody;
 }
 
 // fitCanvas sizes the SVG and shrinks a drawing that is wider than the pane.
@@ -114,7 +132,7 @@ function fitCanvas(svg, cw, ch) {
 
 function renderTopology(svg, view, filter) {
   const pending = planIndex(state.plan);
-  const roots = buildForest(view, { showSubs: $("#show-subs").checked });
+  const roots = buildForest(view, { showRoots: $("#show-subs").checked });
   const nodes = layout(roots);
   const matches = (r) => !filter || r.name.toLowerCase().includes(filter) || r.type.toLowerCase().includes(filter);
 
@@ -128,11 +146,11 @@ function renderTopology(svg, view, filter) {
       el("path", { class: "edge", d: `M${x1} ${y1} C${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}` }, edges);
     }
   }
-  drawIdentityLinks(nodes, el("g", {}, svg));
+  drawIdentityLinks(nodes, el("g", {}, svg), state.cloud);
 
   for (const n of nodes) {
     const r = n.r;
-    const [abbr, color] = typeStyle(r.type);
+    const [abbr, color] = typeStyle(r.type, r.cloud);
     const classes = ["node", tierOf(r)];
     const pendingAction = actionFor(pending, r);
     if (pendingAction) classes.push("plan-" + pendingAction);
@@ -167,39 +185,15 @@ function renderTopology(svg, view, filter) {
   state.flashed.clear();
 }
 
-// Role assignments are the one relationship that does not follow the
-// parent/child tree: a principal somewhere in the graph is granted access to
-// a resource somewhere else. They are drawn as dashed links so it is
-// visible, without pretending they are containment.
-export function drawIdentityLinks(nodes, group) {
-  const byKey = new Map(nodes.map((n) => [n.key, n]));
-  // principalId -> the node that OWNS that principal. A user-assigned
-  // identity reports it in properties; everything else carries one in
-  // `identity`. A role assignment also has a principalId in properties, but
-  // it REFERS to a principal rather than owning one -- counting it would
-  // make every link start and end at the assignment itself.
-  const owners = new Map();
-  for (const n of nodes) {
-    const type = (n.r.type || "").toLowerCase();
-    if (type === "microsoft.authorization/roleassignments") continue;
-    const body = n.r.body || {};
-    const props = body.properties || {};
-    if (type === "microsoft.managedidentity/userassignedidentities" && props.principalId) {
-      owners.set(String(props.principalId).toLowerCase(), n);
-    }
-    if (body.identity && body.identity.principalId) {
-      owners.set(String(body.identity.principalId).toLowerCase(), n);
-    }
-  }
-  for (const n of nodes) {
-    if ((n.r.type || "").toLowerCase() !== "microsoft.authorization/roleassignments") continue;
-    const props = (n.r.body && n.r.body.properties) || {};
-    const from = owners.get(String(props.principalId || "").toLowerCase());
-    const to = byKey.get(String(props.scope || "").toLowerCase());
-    if (!from || !to || from === to) continue;
-    // Routed around the cards rather than through them: identity and scope
-    // are often in the same column, where a straight line between centres
-    // would be completely hidden behind the two nodes it connects.
+// Some clouds have a relationship that is not containment -- Azure's role
+// assignments grant a principal access to a resource elsewhere in the
+// graph. The cloud's own table works out the pairs (types-azure.js); this
+// draws them as dashed links, so it never has to know what they mean.
+export function drawIdentityLinks(nodes, group, cloud) {
+  for (const { from, to, label } of identityLinks(nodes, cloud)) {
+    // Routed around the cards rather than through them: the two ends are
+    // often in the same column, where a straight line between centres would
+    // be completely hidden behind the two nodes it connects.
     const y1 = from.y + H / 2, y2 = to.y + H / 2;
     let d;
     if (Math.abs(from.x - to.x) < 1) {
@@ -214,6 +208,6 @@ export function drawIdentityLinks(nodes, group) {
     }
     const path = el("path", { class: "link-identity", d }, group);
     const title = el("title", {}, path);
-    title.textContent = `${displayName(from.r)} → ${displayName(to.r)}: ${roleName(props.roleDefinitionId)}`;
+    title.textContent = `${displayName(from.r)} \u2192 ${displayName(to.r)}: ${label}`;
   }
 }

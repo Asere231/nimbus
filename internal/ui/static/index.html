@@ -16,11 +16,7 @@
       <span class="name">Nimbus</span>
       <span class="tag">local cloud</span>
     </div>
-    <nav class="clouds" id="clouds" aria-label="Cloud">
-      <button class="cloud active" data-cloud="azure">Azure</button>
-      <button class="cloud" data-cloud="aws" disabled title="Planned: Phase 3">AWS</button>
-      <button class="cloud" data-cloud="gcp" disabled title="Planned: Phase 4">GCP</button>
-    </nav>
+    <nav class="clouds" id="clouds" aria-label="Cloud"></nav>
     <div class="status">
       <span class="dot" id="conn-dot"></span>
       <span id="conn-text">connecting…</span>
@@ -33,13 +29,9 @@
   <main class="layout">
     <section class="canvas-wrap" aria-label="Resource topology">
       <div class="canvas-toolbar">
-        <nav class="views" id="views" aria-label="View">
-          <button class="view active" data-view="topology">Topology</button>
-          <button class="view" data-view="network">Network</button>
-          <button class="view" data-view="kubernetes">Kubernetes</button>
-        </nav>
+        <nav class="views" id="views" aria-label="View"></nav>
         <input id="filter" type="search" placeholder="Filter by name or type" autocomplete="off">
-        <label class="toggle" id="subs-toggle"><input type="checkbox" id="show-subs" checked> subscriptions</label>
+        <label class="toggle" id="subs-toggle"><input type="checkbox" id="show-subs" checked> <span id="show-roots-label">subscriptions</span></label>
         <div class="exports">
           <button class="btn ghost small" id="export-svg" title="Download this graph as an SVG">SVG</button>
           <button class="btn ghost small" id="export-png" title="Download this graph as a PNG">PNG</button>

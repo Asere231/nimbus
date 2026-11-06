@@ -4,7 +4,8 @@
 // This file does three things only -- load the initial state, apply live
 // events to it, and wire the controls. Everything else lives in a module:
 //
-//   types.js      badges, colours and labels per resource type   (pure)
+//   types.js      badges, colours and labels, dispatched per cloud (pure)
+//   types-*.js    one table per cloud                            (pure)
 //   graph.js      forest building and tree layout                (pure)
 //   state.js      the shared mutable state
 //   api.js        every server call, and fixture mode
@@ -25,29 +26,105 @@ import { $, switchTab } from "./dom.js";
 import { state } from "./state.js";
 import * as api from "./api.js";
 import { addToFeed, clearFeed, setShowReads } from "./feed.js";
-import { render, scheduleRender, select } from "./render.js";
+import { render, scheduleRender, select, viewsFor } from "./render.js";
 import { downloadSVG, downloadPNG } from "./export.js";
 import { initTimeline, refreshRuns, isReplaying } from "./timeline.js";
 import { summarise as summarisePlan } from "./plan.js";
 
-// ---- data loading ---------------------------------------------------------
-async function loadInfo() {
-  try {
-    state.info = await api.getInfo();
-    const az = state.info.clouds && state.info.clouds.azure;
-    if (az) {
-      const host = az.replace(/^https?:\/\//, "");
-      $("#snippet").textContent =
-`provider "azurerm" {
+// ---- clouds and views -----------------------------------------------------
+// Which clouds exist is not a fact the page can know: it depends on what
+// `nimbus start --clouds` was told to run. /api/info reports the endpoints,
+// and the tabs are built from that, so a build with one cloud shows one tab
+// and nothing is greyed out pretending to be coming later.
+const CLOUD_LABELS = { azure: "Azure", aws: "AWS", gcp: "GCP" };
+
+// SNIPPETS is the provider block shown on an empty graph, per cloud.
+const SNIPPETS = {
+  azure: (url) => `provider "azurerm" {
   features {}
-  metadata_host   = "${host}"
+  metadata_host   = "${url.replace(/^https?:\/\//, "")}"
   subscription_id = "00000000-0000-0000-0000-000000000000"
   tenant_id       = "00000000-0000-0000-0000-000000000001"
   client_id       = "00000000-0000-0000-0000-000000000002"
   client_secret   = "nimbus"
   resource_provider_registrations = "none"
-}`;
-    }
+}`,
+  aws: (url) => `provider "aws" {
+  region                      = "us-east-1"
+  access_key                  = "nimbus"
+  secret_key                  = "nimbus"
+  skip_credentials_validation = true
+  skip_requesting_account_id  = true
+  skip_metadata_api_check     = true
+  s3_use_path_style           = true
+
+  endpoints {
+    sts = "${url}"
+    iam = "${url}"
+    ec2 = "${url}"
+    s3  = "${url}"
+  }
+}`,
+};
+
+function renderCloudTabs() {
+  const clouds = Object.keys((state.info && state.info.clouds) || {}).sort();
+  const nav = $("#clouds");
+  nav.innerHTML = "";
+  if (!clouds.includes(state.cloud)) state.cloud = clouds[0] || state.cloud;
+  for (const name of clouds) {
+    const b = document.createElement("button");
+    b.className = "cloud" + (name === state.cloud ? " active" : "");
+    b.dataset.cloud = name;
+    b.textContent = CLOUD_LABELS[name] || name;
+    b.addEventListener("click", () => selectCloud(name));
+    nav.appendChild(b);
+  }
+  renderViewTabs();
+  showSnippet();
+}
+
+// The switcher offers the views this cloud has: a VPC is not a VNet, so the
+// network and Kubernetes views are Azure's and simply are not there for AWS.
+function renderViewTabs() {
+  const available = viewsFor(state.cloud);
+  if (!available.some((v) => v.id === state.view)) state.view = available[0].id;
+  const nav = $("#views");
+  nav.innerHTML = "";
+  for (const v of available) {
+    const b = document.createElement("button");
+    b.className = "view" + (v.id === state.view ? " active" : "");
+    b.dataset.view = v.id;
+    b.textContent = v.label;
+    b.addEventListener("click", () => {
+      state.view = v.id;
+      renderViewTabs();
+      render();
+    });
+    nav.appendChild(b);
+  }
+}
+
+function showSnippet() {
+  const url = ((state.info && state.info.clouds) || {})[state.cloud];
+  const make = SNIPPETS[state.cloud];
+  $("#snippet").textContent = url && make ? make(url) : "";
+}
+
+async function selectCloud(name) {
+  if (name === state.cloud) return;
+  state.cloud = name;
+  state.selected = null;
+  state.replay = null;
+  renderCloudTabs();
+  await loadAll();
+}
+
+// ---- data loading ---------------------------------------------------------
+async function loadInfo() {
+  try {
+    state.info = await api.getInfo();
+    renderCloudTabs();
   } catch (_) { /* server not up yet */ }
 }
 
@@ -129,12 +206,6 @@ function connect() {
 // ---- wiring ---------------------------------------------------------------
 document.querySelectorAll(".tab").forEach((t) =>
   t.addEventListener("click", () => switchTab(t.dataset.tab)));
-document.querySelectorAll(".view").forEach((b) =>
-  b.addEventListener("click", () => {
-    state.view = b.dataset.view;
-    document.querySelectorAll(".view").forEach((o) => o.classList.toggle("active", o === b));
-    render();
-  }));
 $("#filter").addEventListener("input", scheduleRender);
 window.addEventListener("resize", scheduleRender);
 $("#show-subs").addEventListener("change", scheduleRender);

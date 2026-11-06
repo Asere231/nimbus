@@ -83,11 +83,13 @@ Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualize
 1. Write a failing test in `internal/azure/*_test.go` that replays the client's calls (copy the shape from the SDK or a Terraform debug log: `TF_LOG=DEBUG terraform apply`).
 2. Add a hook file (e.g. `storage.go`) and register it in `New()`.
 3. Fill server-generated fields in `BeforePut`; start or stop a real engine in `AfterPut`/`AfterDelete` and set `Backing: "real"` if one runs.
-4. Add a badge/colour for the type in `internal/ui/static/types.js` (`TYPES`). `TestEverySpecTypeHasABadge` fails until you do.
+4. Add a badge/colour for the type in `internal/ui/static/types-azure.js` (`TYPES`). `TestEverySpecTypeHasABadge` fails until you do.
 5. Prove it with Terraform: add it to an example under `examples/terraform/` and apply + destroy.
 
 ## Changing the visualizer
 
+- **It is multi-cloud.** Presentation is dispatched on each resource's own `cloud`: badges, colours, sibling order, which type is the root container, which types are addressing-only, and any non-containment links all come from that cloud's table (`types-azure.js`, `types-aws.js`) through `types.js`. A shared module must never key on a type name — `test/ui/clouds.test.js` fails the build if one does. A module that IS cloud-specific says so in its filename (`inspector-azure.js`) or is declared as that cloud's view in `render.js`'s `VIEWS`.
+- The cloud tabs come from `/api/info`, which lists what `--clouds` started. Nothing is greyed out pretending to be coming later.
 - Modules live in `internal/ui/static`, tests in `test/ui` (`node --test 'test/ui/*.test.js'` -- a glob, not a directory: node 24 tries to load a directory argument as a module). Keep the pure parts — models, layouts, matching — out of the DOM so they can be tested there.
 - `?fixture` renders `static/fixture.json` with no server. Anything new that draws should be exercised by the fixture, so it can be looked at as well as asserted about.
 - Rebuild (`go build -o bin/nimbus ./cmd/nimbus`) and restart before checking a change in the browser: the files are embedded.

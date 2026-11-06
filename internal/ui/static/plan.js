@@ -10,6 +10,8 @@
 //
 // Pure: no DOM, no fetch. Tested by node.
 
+import { groupType } from "./types.js";
+
 const lower = (s) => String(s || "").toLowerCase();
 
 // GHOST_PREFIX marks a synthetic resource. Nothing can collide with it: a
@@ -32,10 +34,14 @@ export function planIndex(overlay) {
 //
 // A create whose group is not here still comes back, as a root -- a pending
 // change nobody can see is worse than one in an odd place.
-export function ghosts(overlay, resources) {
+export function ghosts(overlay, resources, cloud = "azure") {
+  // Which type holds resources together is the cloud's business: an Azure
+  // resource group has no AWS equivalent, so there a pending create simply
+  // has no parent to sit under.
+  const container = groupType(cloud);
   const groups = new Map();
   for (const r of resources.values()) {
-    if (lower(r.type) === "microsoft.resources/resourcegroups") groups.set(lower(r.name), r);
+    if (container && lower(r.type) === container) groups.set(lower(r.name), r);
   }
 
   const out = [];
@@ -45,7 +51,7 @@ export function ghosts(overlay, resources) {
     if (c.id && resources.has(lower(c.id))) continue;
     const group = c.resourceGroup ? groups.get(lower(c.resourceGroup)) : null;
     out.push({
-      cloud: "azure",
+      cloud,
       id: GHOST_PREFIX + c.address,
       type: c.type || "",
       // Without a mapped ARM type the Terraform address is all we honestly
@@ -66,8 +72,8 @@ export function ghosts(overlay, resources) {
 // withGhosts returns a copy of the resource map with the ghosts added, which
 // is what the views draw. The live map is never touched: a plan is a
 // prediction, not state.
-export function withGhosts(overlay, resources) {
-  const list = ghosts(overlay, resources);
+export function withGhosts(overlay, resources, cloud = "azure") {
+  const list = ghosts(overlay, resources, cloud);
   if (!list.length) return resources;
   const merged = new Map(resources);
   for (const g of list) merged.set(lower(g.id), g);

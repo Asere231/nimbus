@@ -51,7 +51,7 @@ export function addToFeed(e, animate, onSelect) {
     if (e.kind === "reset") {
       what.textContent = "All resources deleted";
     } else {
-      const [, , human] = typeStyle(e.resourceType);
+      const [, , human] = typeStyle(e.resourceType, e.cloud);
       what.innerHTML = `<b></b> <span class="t"></span>`;
       what.querySelector("b").textContent = e.name;
       what.querySelector(".t").textContent = human;

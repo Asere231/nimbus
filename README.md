@@ -109,11 +109,11 @@ Not yet: AWS and GCP, and deployments at subscription scope or above — see
 ## Repo layout
 
 ```
-cmd/nimbus/            CLI: start, cert, env, az register, plan-view
+cmd/nimbus/            CLI: start (--clouds), cert, env, az register, plan-view
 internal/core/         cloud-agnostic engine: store, event bus, certs, persistence
 internal/azure/        ARM emulator: routing, identity/metadata, generic CRUD, per-type hooks
 internal/azure/deployments/  ARM template expressions, copy loops, dependency ordering
-internal/ui/           visualizer API + SSE, the plan overlay, and the embedded web app (static/, ES modules)
+internal/ui/           visualizer API + SSE, the plan overlay, and the embedded web app (static/, ES modules, one type table per cloud)
 tools/specgen/         generates the spec-derived type table (separate Go module; the only thing that fetches anything)
 examples/terraform/    configs to apply against Nimbus
 examples/bicep/        an ARM/Bicep template to deploy with az

@@ -213,7 +213,7 @@ func (s *Server) Shutdown(ctx context.Context) {
 // port. Clients join it as {account}.{service}.{suffix}; see the comment in
 // handleMetadata for why the port belongs in it.
 func (s *Server) storageSuffix() string {
-	suffix := core.StorageSuffix
+	suffix := StorageSuffix
 	if u, err := url.Parse(s.cfg.PublicURL); err == nil {
 		if p := u.Port(); p != "" {
 			suffix += ":" + p

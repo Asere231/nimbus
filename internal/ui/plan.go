@@ -201,6 +201,33 @@ var armTypes = map[string]string{
 	"azurerm_managed_disk":                 "Microsoft.Compute/disks",
 }
 
+// awsTypes is the same idea for the aws provider. Nimbus names AWS
+// resources with CloudFormation-style types, which are the closest thing
+// AWS has to a canonical name for a thing.
+var awsTypes = map[string]string{
+	"aws_vpc":                  "AWS::EC2::VPC",
+	"aws_subnet":               "AWS::EC2::Subnet",
+	"aws_internet_gateway":     "AWS::EC2::InternetGateway",
+	"aws_nat_gateway":          "AWS::EC2::NatGateway",
+	"aws_route_table":          "AWS::EC2::RouteTable",
+	"aws_route":                "AWS::EC2::Route",
+	"aws_security_group":       "AWS::EC2::SecurityGroup",
+	"aws_eip":                  "AWS::EC2::EIP",
+	"aws_s3_bucket":            "AWS::S3::Bucket",
+	"aws_iam_role":             "AWS::IAM::Role",
+	"aws_iam_user":             "AWS::IAM::User",
+	"aws_iam_policy":           "AWS::IAM::Policy",
+	"aws_iam_instance_profile": "AWS::IAM::InstanceProfile",
+}
+
+// resourceType maps a Terraform provider type to the type Nimbus stores,
+// for whichever provider the plan came from. A type nobody has mapped
+// returns empty, and the change is still drawn, labelled with its
+// Terraform address.
 func armType(tfType string) string {
-	return armTypes[strings.ToLower(tfType)]
+	key := strings.ToLower(tfType)
+	if t, ok := armTypes[key]; ok {
+		return t
+	}
+	return awsTypes[key]
 }

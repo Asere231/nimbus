@@ -216,7 +216,7 @@ export function draw(svg, model, { selected, filter, onSelect }) {
   }
 
   for (const o of model.orphans) {
-    const [abbr, color, human] = typeStyle(o.type);
+    const [abbr, color, human] = typeStyle(o.type, o.cloud);
     const classes = ["node", "net-orphan"];
     if (selected === lower(o.id)) classes.push("selected");
     if (!matches(o.name, o.type)) classes.push("dim");

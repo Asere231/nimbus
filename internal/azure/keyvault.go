@@ -116,7 +116,7 @@ func (d *deletedVaults) all() []*deletedVault {
 // port. See the comment on the metadata suffixes: a bare hostname would send
 // clients to port 443.
 func (s *Server) keyVaultSuffix() string {
-	suffix := core.KeyVaultSuffix
+	suffix := KeyVaultSuffix
 	if u, err := url.Parse(s.cfg.PublicURL); err == nil {
 		if p := u.Port(); p != "" {
 			suffix += ":" + p

@@ -8,8 +8,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-
-	"github.com/Asere231/nimbus/internal/core"
 )
 
 // The vault's data-plane address comes from properties.vaultUri: azurerm
@@ -35,7 +33,7 @@ func TestVaultServerFieldsAndURI(t *testing.T) {
 	props := body["properties"].(map[string]any)
 	uri := str(props["vaultUri"])
 	u, _ := url.Parse(srv.URL)
-	want := "https://kv-nimbus." + core.KeyVaultSuffix + ":" + u.Port() + "/"
+	want := "https://kv-nimbus." + KeyVaultSuffix + ":" + u.Port() + "/"
 	if uri != want {
 		t.Errorf("vaultUri = %q, want %q", uri, want)
 	}
@@ -72,7 +70,7 @@ func TestKeyVaultSuffixCarriesThePort(t *testing.T) {
 	}
 	suffixes := m["suffixes"].(map[string]any)
 	u, _ := url.Parse(srv.URL)
-	want := core.KeyVaultSuffix + ":" + u.Port()
+	want := KeyVaultSuffix + ":" + u.Port()
 	if suffixes["keyVaultDns"] != want {
 		t.Errorf("keyVaultDns = %v, want %v", suffixes["keyVaultDns"], want)
 	}

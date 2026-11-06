@@ -550,7 +550,7 @@ func TestStorageSuffixCarriesThePort(t *testing.T) {
 
 	// Whatever port the server is on must be in the suffix, or clients go to 443.
 	u, _ := url.Parse(srv.URL)
-	if want := core.StorageSuffix + ":" + u.Port(); suffix != want {
+	if want := StorageSuffix + ":" + u.Port(); suffix != want {
 		t.Errorf("suffixes.storage = %q, want %q", suffix, want)
 	}
 
@@ -563,7 +563,7 @@ func TestStorageSuffixCarriesThePort(t *testing.T) {
 	if bu.Port() != u.Port() {
 		t.Errorf("built URL %s targets port %q, want %q", built, bu.Port(), u.Port())
 	}
-	if bu.Hostname() != "stnimbus.blob."+core.StorageSuffix {
+	if bu.Hostname() != "stnimbus.blob."+StorageSuffix {
 		t.Errorf("built URL hostname = %q", bu.Hostname())
 	}
 }

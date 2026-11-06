@@ -11,10 +11,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { buildForest, layout, extent, typeOrder, PASSTHROUGH, W, H, PAD }
+import { buildForest, layout, extent, W, H, PAD }
   from "../../internal/ui/static/graph.js";
-import { typeStyle, tierOf, displayName, roleName }
+import { typeStyle, tierOf, displayName, typeOrder, isPassthrough }
   from "../../internal/ui/static/types.js";
+import { roleName } from "../../internal/ui/static/types-azure.js";
 
 // resources builds the Map shape the app keeps: lowercased id -> resource.
 function resources(...list) {
@@ -65,21 +66,25 @@ test("buildForest lifts a container past the blobServices node that holds it", (
   assert.equal(account.children[0].r.name, "data", "the container hangs off the account directly");
 });
 
-test("PASSTHROUGH covers all four storage services and nothing else", () => {
+test("passthrough covers all four Azure storage services and nothing else", () => {
   for (const svc of ["blob", "queue", "table", "file"]) {
-    assert.ok(PASSTHROUGH.test(`microsoft.storage/storageaccounts/${svc}services`), svc);
+    assert.ok(isPassthrough(`microsoft.storage/storageaccounts/${svc}services`, "azure"), svc);
   }
-  assert.ok(!PASSTHROUGH.test("microsoft.storage/storageaccounts"));
-  assert.ok(!PASSTHROUGH.test("microsoft.storage/storageaccounts/blobservices/containers"));
+  assert.ok(!isPassthrough("microsoft.storage/storageaccounts", "azure"));
+  assert.ok(!isPassthrough("microsoft.storage/storageaccounts/blobservices/containers", "azure"));
+  // AWS has no addressing-only types, and an unknown cloud must not throw.
+  assert.ok(!isPassthrough("aws::s3::bucket", "aws"));
+  assert.ok(!isPassthrough("whatever", "nope"));
+  assert.ok(!isPassthrough(undefined, undefined));
 });
 
-test("showSubs false makes resource groups roots", () => {
+test("showRoots false makes resource groups roots", () => {
   const all = resources(
     res(SUB, "Microsoft.Resources/subscriptions", "s1", ""),
     res(RG, "Microsoft.Resources/resourceGroups", "rg", SUB),
   );
-  assert.equal(buildForest(all, { showSubs: false }).length, 1);
-  assert.equal(buildForest(all, { showSubs: false })[0].r.name, "rg");
+  assert.equal(buildForest(all, { showRoots: false }).length, 1);
+  assert.equal(buildForest(all, { showRoots: false })[0].r.name, "rg");
 });
 
 test("siblings are ordered by type, then by name", () => {
@@ -93,9 +98,14 @@ test("siblings are ordered by type, then by name", () => {
 });
 
 test("typeOrder puts known types first and unknown ones last", () => {
-  assert.ok(typeOrder("Microsoft.Resources/subscriptions") < typeOrder("Microsoft.Storage/storageAccounts"));
-  assert.ok(typeOrder("Microsoft.Storage/storageAccounts") < typeOrder("Contoso.Thing/widgets"));
-  assert.equal(typeOrder(undefined), typeOrder("Contoso.Thing/widgets"), "a missing type must not throw");
+  const order = (t) => typeOrder(t, "azure");
+  assert.ok(order("Microsoft.Resources/subscriptions") < order("Microsoft.Storage/storageAccounts"));
+  assert.ok(order("Microsoft.Storage/storageAccounts") < order("Contoso.Thing/widgets"));
+  assert.equal(order(undefined), order("Contoso.Thing/widgets"), "a missing type must not throw");
+  // Each cloud orders by its own list.
+  assert.ok(typeOrder("AWS::EC2::VPC", "aws") < typeOrder("AWS::S3::Bucket", "aws"));
+  assert.equal(typeOrder("AWS::EC2::VPC", "azure"), typeOrder("Contoso.Thing/widgets", "azure"),
+    "an AWS type means nothing to Azure's ordering");
 });
 
 test("layout puts each level in its own column and centres a parent on its children", () => {
@@ -126,14 +136,14 @@ test("layout returns parents after their children, so edges draw over cards", ()
 });
 
 test("typeStyle falls back to an abbreviation for an unstyled type", () => {
-  const [abbr, color, human] = typeStyle("Contoso.Widgets/superWidgets");
+  const [abbr, color, human] = typeStyle("Contoso.Widgets/superWidgets", "azure");
   assert.equal(human, "superWidgets");
   assert.equal(abbr, "W", "the capitals of the last segment: superWidgets has exactly one");
   assert.ok(color.startsWith("#"));
   // With no capitals to take there is nothing to abbreviate, so the first
   // three letters stand in rather than the badge coming out empty.
-  assert.equal(typeStyle("Contoso.Widgets/widgets")[0], "WID");
-  assert.doesNotThrow(() => typeStyle(undefined), "a missing type must not throw");
+  assert.equal(typeStyle("Contoso.Widgets/widgets", "azure")[0], "WID");
+  assert.doesNotThrow(() => typeStyle(undefined, undefined), "a missing type must not throw");
 });
 
 test("tierOf maps anything unknown to the accepted-only tier", () => {

@@ -60,6 +60,10 @@ gcloud storage cat gs://nimbus-data/README.md
 single quotes, which is not what RFC 2045 allows — Nimbus reads it anyway,
 because the alternative is a CLI that cannot upload. See CLAUDE.md.
 
+An object the CLI adds to a bucket Terraform manages is removed by
+`terraform destroy` when the bucket has `force_destroy = true`, the same as
+on real Cloud Storage.
+
 `auth/disable_credentials` sends every request unauthenticated, which
 Nimbus accepts: it never verifies a token, the same decision SigV4 and
 Azure's bearer tokens got. A local emulator rejecting a signature could

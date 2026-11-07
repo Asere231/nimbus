@@ -638,3 +638,26 @@ func TestStorageLayoutIsAnswered(t *testing.T) {
 		t.Errorf("Nimbus does not emulate a hierarchical bucket and must not claim to: %v", doc)
 	}
 }
+
+// Anywhere Caches matter far more than they look.
+//
+// The provider asks for them INSIDE its force_destroy loop and breaks out
+// of that loop if the call errors -- so a 404 here is never seen as a 404.
+// It silently skips deleting the bucket's objects, and the destroy then
+// fails on "the bucket is not empty" with nothing connecting the two.
+// Measured against google 6.50.0, which listed the object and then deleted
+// the bucket without ever trying to delete the object.
+func TestAnywhereCachesAnswersAnEmptyListSoForceDestroyWorks(t *testing.T) {
+	s := newTestServer(t)
+	must(t, s, http.MethodPost, "/storage/v1/b?project=nimbus-local", bucketBody)
+
+	// The provider asks with a trailing slash.
+	doc := must(t, s, http.MethodGet, "/storage/v1/b/nimbus-data/anywhereCaches/?alt=json", "")
+	if doc["kind"] != "storage#anywhereCaches" {
+		t.Fatalf("anywhereCaches = %v", doc)
+	}
+	items, ok := doc["items"].([]any)
+	if !ok || len(items) != 0 {
+		t.Errorf("items = %v; an empty list is what keeps force_destroy working", doc["items"])
+	}
+}

@@ -42,6 +42,27 @@ func (s *Server) serveStorage(w http.ResponseWriter, r *http.Request, parts []st
 		return s.deleteBucket(w, r, rest[0])
 	}
 
+	// Anywhere Caches, which matter far more than they look.
+	//
+	// The provider asks for them INSIDE its force_destroy loop, and its own
+	// code breaks out of that loop if the call errors -- so a 404 here does
+	// not produce a 404 anywhere the user can see it. It silently skips
+	// deleting the bucket's objects, and the destroy then fails on our own
+	// "bucket is not empty" with nothing to connect the two. Measured
+	// against google 6.50.0: the provider listed the object and deleted the
+	// bucket without ever trying to delete the object.
+	//
+	// Nimbus emulates no caches, so the honest answer is an empty list --
+	// and an empty list is also what keeps force_destroy working. This is
+	// the S3 sub-resource lesson in its most expensive form yet: it is not
+	// enough for an unimplemented sub-resource to fail politely.
+	if len(rest) == 2 && rest[0] != "" && rest[1] == "anywhereCaches" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"kind": "storage#anywhereCaches", "items": []any{},
+		})
+		return ""
+	}
+
 	// `gcloud storage cp` asks for this before it uploads anything, to
 	// decide whether the bucket is hierarchical. Measured; a 404 does not
 	// stop the upload, but it puts a red line in the activity feed for

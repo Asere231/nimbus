@@ -1,9 +1,9 @@
 # Roadmap
 
-**Current: Milestone 9 — GCP core. Prompt: `docs/prompts/m09-gcp-core.md`.**
+**Current: Milestone 10 — GCP compute. Prompt: `docs/prompts/m10-gcp-compute.md`.**
 
-Milestones 1 to 8 are done, on macOS 27 (arm64) with azurerm 4.81.0,
-aws 5.100.0, az 2.90.0, aws-cli 1.40.33 and Terraform 1.16.4.
+Milestones 1 to 9 are done, on macOS 27 (arm64) with azurerm 4.81.0,
+aws 5.100.0, google 6.x, az 2.90.0, aws-cli 1.40.33 and Terraform 1.16.4.
 
 - `examples/terraform/azure-basic` applies, plans clean (`-detailed-exitcode`
   = 0) and destroys; survives a `--persist` restart; every resource imports
@@ -61,6 +61,12 @@ aws 5.100.0, az 2.90.0, aws-cli 1.40.33 and Terraform 1.16.4.
   destroy verified.
 - The k3s engine lives in `internal/engines/k3s` and serves both clouds; the
   function runner is `internal/engines/funcs`, equally cloud-neutral.
+- `examples/terraform/gcp-basic` is the third cloud: a custom VPC, two
+  subnetworks with a secondary range, a firewall rule, a service account
+  and a versioned bucket holding an object. Seven resources, applying
+  against the same process that serves Azure and AWS, with a clean plan
+  and a clean destroy. The GCP tab came from a type table and one line in
+  `types.js`, which was the point of Milestone 7's refactor.
 - CI is green on ubuntu, macos and windows, plus the SDK harness, the
   generator's tests, the visualizer's node tests, the Terraform
   apply/plan/destroy jobs (Azure AND AWS against one server), the two
@@ -93,7 +99,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 | # | Milestone | Done when |
 |---|---|---|
-| 9 | Core: OAuth, Resource Manager projects, Compute networks, GCS | The `google` provider creates a VPC and a bucket via `*_custom_endpoint` settings |
+| 9 | ~~Core: OAuth, Resource Manager projects, Compute networks, GCS~~ **done** | The `google` provider creates a VPC and a bucket via `*_custom_endpoint` settings |
 | 10 | GKE on k3s, Pub/Sub, Cloud Run in Docker | A GKE cluster is reachable with `kubectl` |
 
 ## Design decisions still open
@@ -121,6 +127,24 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 ## Later
 
+- **GCP is control plane plus Cloud Storage.** No GKE, Cloud Run, Cloud
+  Functions, Pub/Sub or Compute instances: Milestone 10. Cloud Routers and
+  their NAT configuration round-trip as state and nothing routes, and the
+  project IAM policy is recorded but never enforced — the same honest
+  limitation Azure RBAC and AWS IAM have.
+- **GCS has no object versioning history.** `versioning` round-trips as a
+  bucket setting and every write bumps the generation, but the previous
+  generation is gone: `?versions=true` lists one entry per name. No
+  lifecycle rule ever runs, and there are no signed URLs, no composite
+  objects and no customer-managed keys.
+- **`gcloud` is documented but was not run here.** `docs/GCLOUD.md` gives
+  the endpoint overrides and `auth/disable_credentials`; the SDK is not
+  installed on the owner's machine yet, so the commands in it are written
+  from the configuration surface rather than from a session. The Terraform
+  half is proven.
+- **No OAuth.** The provider is given an `access_token` directly and Nimbus
+  never looks at it. There is no token exchange, no metadata server and no
+  `gcloud auth login`.
 - **No EC2 instances.** EKS node groups are k3s agent containers, not
   instances, so nothing answers `RunInstances`. NAT gateways are recorded
   but nothing routes, and IAM is recorded but nothing is enforced — the same

@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.9.0 — 2026-11-06
+
+Milestone 9: GCP core. A third cloud, and the one that tested whether
+"multi-cloud" survived being built twice.
+
+- **GCP on port 4703**, plain HTTP. `nimbus start --clouds azure,aws,gcp`
+  runs all three in one process, sharing the store, the event journal and
+  the visualizer.
+- **Measured before it was built.** The google provider was pointed at a
+  logging server first, and what came back shaped everything: it makes no
+  startup calls at all, it never polls an operation that already says DONE,
+  and its `*_custom_endpoint` settings carry their API version for some
+  services and not others.
+- **Resource Manager**: projects over v1 and v3 from one stored project, and
+  the project IAM policy — recorded, never enforced.
+- **Compute**: networks, subnetworks with secondary ranges, firewalls,
+  routes, Cloud Routers, regions and zones, and operations. Routed
+  generically on `/projects/{p}/{scope}/{collection}/{name}` with a table of
+  per-type fill functions rather than a switch. A PATCH applies only the
+  fields its `updateMask` names.
+- **IAM**: service accounts, with the email derived from the account id and
+  the project so it never drifts between reads.
+- **Cloud Storage**: buckets and objects with real bytes on disk, all three
+  upload protocols (`media`, `multipart/related` and resumable with its 308s
+  and `Content-Range` arithmetic), `md5Hash` and `crc32c` computed from the
+  content, delimiter listings, and a bucket that refuses to be deleted while
+  it holds anything.
+- **The visualizer gains a GCP tab** from a `types-gcp.js` table and one
+  line in `types.js` — which was the whole point of the Milestone 7
+  refactor. The lint test that forbids a shared module naming a cloud's
+  types now covers three clouds, and `gcp` could no longer play the unknown
+  cloud in its own assertions.
+- **`examples/terraform/gcp-basic`**: a custom VPC, two subnetworks, a
+  firewall rule, a service account and a bucket with an object. Applies,
+  plans clean and destroys, and runs in CI beside the Azure and AWS examples
+  against one server.
+- **`docs/GCLOUD.md`**: the endpoint overrides and `auth/disable_credentials`
+  that point the `gcloud` CLI at Nimbus.
+
+
 ## 0.8.0 — 2026-11-06
 
 Milestone 8: AWS compute. Three services that run rather than record, and the

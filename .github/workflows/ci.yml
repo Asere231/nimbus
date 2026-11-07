@@ -20,7 +20,7 @@ env:
   GO_MIN_VERSION: "1.22"
   # Every Terraform example, applied/planned/destroyed by the terraform job.
   # Add new ones here.
-  EXAMPLES: "azure-basic azure-storage aws-basic"
+  EXAMPLES: "azure-basic azure-storage aws-basic gcp-basic"
 
 jobs:
   test:
@@ -608,7 +608,7 @@ jobs:
           # Both clouds in ONE process, which is the point: they share a
           # store, a journal and a visualizer, and an example of each
           # running side by side is the real test that they still do.
-          ./bin/nimbus start --clouds azure,aws &
+          ./bin/nimbus start --clouds azure,aws,gcp &
           for i in $(seq 1 30); do
             curl -sf http://localhost:4700/api/info >/dev/null && break
             sleep 1
@@ -627,7 +627,10 @@ jobs:
           # write path with everything else, so it is the example most likely
           # to catch collateral damage from an unrelated change. aws-basic
           # covers the other cloud entirely: SigV4 routing, EC2 Query/XML, S3
-          # REST and IAM, against the same running server.
+          # REST and IAM, and gcp-basic the third -- Compute's operations,
+          # IAM service accounts and a Cloud Storage object with real bytes.
+          # All three clouds against the same running server, which is the
+          # point: they share a store, a journal and a visualizer.
           for example in ${{ env.EXAMPLES }}; do
             echo "::group::$example"
             cd "$GITHUB_WORKSPACE/examples/terraform/$example"
@@ -652,8 +655,13 @@ jobs:
 
       - name: Nothing left behind
         run: |
-          remaining=$(curl -sf "http://localhost:4700/api/resources?cloud=azure" \
-            | grep -o '"type":"[^"]*"' | grep -v 'Microsoft.Resources/subscriptions' || true)
+          # Each cloud keeps its root container -- a subscription, an
+          # account, a project -- and nothing else may survive a destroy.
+          remaining=$(curl -sf "http://localhost:4700/api/resources" \
+            | grep -o '"type":"[^"]*"' \
+            | grep -v 'Microsoft.Resources/subscriptions' \
+            | grep -v 'AWS::Account' \
+            | grep -v 'cloudresourcemanager.googleapis.com/Project' || true)
           if [ -n "$remaining" ]; then
             echo "::error::destroy left resources behind:"
             echo "$remaining"

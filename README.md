@@ -1,6 +1,6 @@
 # Nimbus
 
-A from-scratch, offline, multi-cloud emulator with a live visualizer. Azure and AWS run side by side on the same engine; GCP plugs into it later.
+A from-scratch, offline, multi-cloud emulator with a live visualizer. Azure, AWS and GCP run side by side on the same engine.
 
 Real tools talk to it unchanged: the Terraform `azurerm` provider and the Azure SDKs see an Azure Resource Manager endpoint, and the visualizer at `http://localhost:4700` draws every resource as it is created.
 
@@ -118,6 +118,27 @@ path — every Query service posts to `/` — except DynamoDB and CloudWatch Log
 which name the action in `X-Amz-Target`, and Lambda and EKS, whose paths do
 say what they want.
 
+## GCP
+
+`nimbus start --clouds azure,aws,gcp` adds a Google Cloud endpoint on port
+4703. Plain HTTP, like AWS: Cloud Storage is addressed by path, so no bucket
+name becomes a hostname and there is nothing to trust.
+
+| API | What works |
+|---|---|
+| Resource Manager | Projects over v1 and v3, project IAM policy get/set — recorded, never enforced |
+| Compute | VPC networks (auto and custom mode), subnetworks with secondary ranges, firewalls, routes, Cloud Routers, regions and zones, and operations |
+| IAM | Service accounts, with a derived email that never drifts between reads |
+| Cloud Storage | Buckets and objects with real bytes, all three upload protocols — media, multipart/related and resumable — plus `md5Hash`, `crc32c` and delimiter listings |
+
+```bash
+curl http://localhost:4703/compute/v1/projects/nimbus-local/global/networks
+```
+
+`examples/terraform/gcp-basic` applies seven resources, plans clean and
+destroys. For the `gcloud` CLI against the same server, see
+[docs/GCLOUD.md](docs/GCLOUD.md).
+
 ## The visualizer
 
 `http://localhost:4700`, served from inside the binary: no build step, no CDN,
@@ -141,8 +162,8 @@ works with the network off.
 - `?fixture` renders a sample stack with no server state, which is how the
   browser and layout checks are done.
 
-Not yet: GCP, EC2 instances, and Azure deployments
-at subscription scope or above — see `docs/ROADMAP.md`.
+Not yet: GKE and the rest of GCP's compute, EC2 instances, and Azure
+deployments at subscription scope or above — see `docs/ROADMAP.md`.
 
 ## Repo layout
 

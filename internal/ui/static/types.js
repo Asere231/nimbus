@@ -11,8 +11,9 @@
 
 import * as azure from "./types-azure.js";
 import * as aws from "./types-aws.js";
+import * as gcp from "./types-gcp.js";
 
-const CLOUDS = { azure, aws };
+const CLOUDS = { azure, aws, gcp };
 
 // cloudOf returns a cloud's table, or null when it has none -- an unknown
 // cloud still draws, just without badges anybody chose.

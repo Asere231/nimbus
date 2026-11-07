@@ -65,6 +65,16 @@ const SNIPPETS = {
     s3  = "${url}"
   }
 }`,
+  gcp: (url) => `provider "google" {
+  project      = "nimbus-local"
+  region       = "us-central1"
+  access_token = "nimbus"
+
+  compute_custom_endpoint          = "${url}/compute/v1/"
+  storage_custom_endpoint          = "${url}/storage/v1/"
+  iam_custom_endpoint              = "${url}/"
+  resource_manager_custom_endpoint = "${url}/v1/"
+}`,
 };
 
 function renderCloudTabs() {

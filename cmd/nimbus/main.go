@@ -33,6 +33,7 @@ import (
 	"github.com/Asere231/nimbus/internal/azure/keyvault"
 	"github.com/Asere231/nimbus/internal/azure/storage"
 	"github.com/Asere231/nimbus/internal/core"
+	"github.com/Asere231/nimbus/internal/gcp"
 	"github.com/Asere231/nimbus/internal/ui"
 )
 
@@ -66,7 +67,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `nimbus: a local multi-cloud emulator with a live visualizer
 
 Usage:
-  nimbus start [--home DIR] [--ui-port 4700] [--azure-port 4701] [--persist]
+  nimbus start [--home DIR] [--ui-port 4700] [--clouds azure,aws,gcp] [--persist]
   nimbus cert  [--home DIR]      where the CA is, and how to trust it on your OS
   nimbus env azure               environment variables for Terraform and the SDKs
   nimbus az register [--run]     register Nimbus as a custom cloud for the az CLI
@@ -89,7 +90,7 @@ func defaultHome() string {
 // knownClouds is every cloud this build can run, in the order they appear in
 // the banner. A name not in here is rejected by --clouds rather than quietly
 // ignored, so a typo says so instead of starting a server that is not there.
-var knownClouds = []string{"azure", "aws"}
+var knownClouds = []string{"azure", "aws", "gcp"}
 
 // parseClouds turns the --clouds list into a set, rejecting anything unknown.
 func parseClouds(list string) (map[string]bool, error) {
@@ -133,6 +134,7 @@ func start(args []string) {
 	uiPort := fs.Int("ui-port", 4700, "visualizer port (http)")
 	azPort := fs.Int("azure-port", 4701, "Azure Resource Manager port (https)")
 	awsPort := fs.Int("aws-port", 4702, "AWS port (http)")
+	gcpPort := fs.Int("gcp-port", 4703, "Google Cloud port (http)")
 	clouds := fs.String("clouds", "azure", "which clouds to run, comma separated: "+strings.Join(knownClouds, ", "))
 	persist := fs.Bool("persist", false, "save state to disk so it survives restarts")
 	host := fs.String("host", "localhost", "hostname clients use to reach Nimbus")
@@ -216,6 +218,26 @@ func start(args []string) {
 				ReadHeaderTimeout: 10 * time.Second},
 			back: a.Start(),
 			stop: a.Shutdown,
+		})
+	}
+
+	if running["gcp"] {
+		// Plain HTTP, like AWS and for the same reasons: the google
+		// provider's *_custom_endpoint settings and gcloud's
+		// api_endpoint_overrides take any URL, and Cloud Storage is
+		// addressed by path so no bucket name becomes a hostname.
+		gcpURL := fmt.Sprintf("http://%s:%d", *host, *gcpPort)
+		gcpCfg := gcp.Config{PublicURL: gcpURL}
+		if dataDir != "" {
+			gcpCfg.DataDir = dataDir
+		}
+		g := gcp.New(gcpCfg, store, bus)
+		servers = append(servers, &cloudServer{
+			name:  "gcp",
+			label: fmt.Sprintf(`GCP          %s      project = "%s"`, gcpURL, g.ProjectID()),
+			url:   gcpURL,
+			srv: &http.Server{Addr: fmt.Sprintf(":%d", *gcpPort), Handler: g,
+				ReadHeaderTimeout: 10 * time.Second},
 		})
 	}
 

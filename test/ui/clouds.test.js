@@ -12,6 +12,7 @@ import { typeStyle, typeOrder, displayName, isPassthrough, isRoot, rootLabel, cl
 import { buildForest } from "../../internal/ui/static/graph.js";
 import * as azureTable from "../../internal/ui/static/types-azure.js";
 import * as awsTable from "../../internal/ui/static/types-aws.js";
+import * as gcpTable from "../../internal/ui/static/types-gcp.js";
 
 const res = (cloud, id, type, name, parentId = "") =>
   ({ cloud, id, type, name, parentId, backing: "state", body: {} });
@@ -36,11 +37,13 @@ test("a type is not styled by another cloud's table", () => {
 });
 
 test("an unknown or missing cloud still draws, without badges", () => {
-  assert.equal(cloudOf("gcp"), null);
-  assert.doesNotThrow(() => typeStyle("Google::Compute::Network", "gcp"));
+  // "oracle" is the stand-in for a cloud nobody has built: gcp is a real
+  // one now, which is exactly the change this test has to survive.
+  assert.equal(cloudOf("oracle"), null);
+  assert.doesNotThrow(() => typeStyle("Oracle::Compute::Network", "oracle"));
   assert.doesNotThrow(() => typeStyle("x", undefined));
   assert.doesNotThrow(() => displayName({ name: "n" }));
-  assert.equal(displayName({ cloud: "gcp", name: "n" }), "n");
+  assert.equal(displayName({ cloud: "oracle", name: "n" }), "n");
 });
 
 test("each cloud names its own root container", () => {
@@ -49,7 +52,9 @@ test("each cloud names its own root container", () => {
   assert.ok(isRoot("AWS::Account", "aws"));
   assert.equal(rootLabel("azure"), "subscriptions");
   assert.equal(rootLabel("aws"), "account");
-  assert.equal(rootLabel("gcp"), "roots", "an unknown cloud still gets a label for the toggle");
+  assert.ok(isRoot("cloudresourcemanager.googleapis.com/Project", "gcp"));
+  assert.equal(rootLabel("gcp"), "project");
+  assert.equal(rootLabel("oracle"), "roots", "an unknown cloud still gets a label for the toggle");
 });
 
 // Two clouds' resources live in one store and one graph. They must nest
@@ -93,7 +98,7 @@ test("sibling order comes from the resource's own cloud", () => {
 // Every cloud table has to carry the same shape, or a view will reach for a
 // field that one of them does not have.
 test("every cloud table exports the same shape", () => {
-  for (const [name, table] of [["azure", azureTable], ["aws", awsTable]]) {
+  for (const [name, table] of [["azure", azureTable], ["aws", awsTable], ["gcp", gcpTable]]) {
     assert.equal(typeof table.TYPES, "object", name + " TYPES");
     assert.ok(Array.isArray(table.ORDER), name + " ORDER");
     assert.equal(typeof table.ROOT_TYPE, "string", name + " ROOT_TYPE");
@@ -108,7 +113,12 @@ test("every cloud table exports the same shape", () => {
     // Both clouds run managed Kubernetes on the same engine, so both have
     // to name the type the Kubernetes view groups objects under.
     assert.equal(typeof table.K8S_CLUSTER_TYPE, "string", name + " K8S_CLUSTER_TYPE");
-    assert.ok(table.TYPES[table.K8S_CLUSTER_TYPE], name + " should style its own cluster type");
+    // A cloud with no managed Kubernetes yet declares an empty one, which
+    // keeps the Kubernetes view out of its tabs rather than drawing an
+    // empty box.
+    if (table.K8S_CLUSTER_TYPE !== "") {
+      assert.ok(table.TYPES[table.K8S_CLUSTER_TYPE], name + " should style its own cluster type");
+    }
   }
 });
 

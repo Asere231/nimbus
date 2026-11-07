@@ -107,12 +107,13 @@ func (s *Server) uploadObject(w http.ResponseWriter, r *http.Request, bucket str
 
 // uploadMultipart reads multipart/related: metadata first, then bytes.
 func (s *Server) uploadMultipart(w http.ResponseWriter, r *http.Request, bucket string) string {
-	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || params["boundary"] == "" {
-		writeError(w, badRequest("a multipart upload needs a boundary: %v", err))
+	boundary := boundaryOf(r.Header.Get("Content-Type"))
+	if boundary == "" {
+		writeError(w, badRequest("a multipart upload needs a boundary, and %q has none",
+			r.Header.Get("Content-Type")))
 		return "storage upload: no boundary"
 	}
-	mr := multipart.NewReader(io.LimitReader(r.Body, maxObject), params["boundary"])
+	mr := multipart.NewReader(io.LimitReader(r.Body, maxObject), boundary)
 
 	meta := map[string]any{}
 	var data []byte
@@ -337,6 +338,47 @@ func (s *Server) patchObject(w http.ResponseWriter, r *http.Request, bucket, nam
 		return "storage object patch: not found"
 	}
 	writeJSON(w, http.StatusOK, doc)
+	return ""
+}
+
+// boundaryOf reads the boundary out of a Content-Type, leniently.
+//
+// `gcloud storage cp` sends
+//
+//	multipart/related; boundary='===============1505451749338133828=='
+//
+// with the boundary in SINGLE quotes. RFC 2045 allows a bare token or a
+// double-quoted string and nothing else, so `mime.ParseMediaType` refuses
+// it outright -- "mime: invalid media parameter" -- and the upload fails
+// with an error that blames the request rather than the quoting. The same
+// shape of problem as `az deployment` splicing a template into a body and
+// calling it JSON: the client is what it is, and a local emulator that
+// only accepts the standard spelling does not work with the standard
+// tools.
+//
+// So: try the strict parser first, and fall back to reading the parameter
+// by hand and stripping whichever quotes are around it.
+func boundaryOf(contentType string) string {
+	if _, params, err := mime.ParseMediaType(contentType); err == nil {
+		if b := params["boundary"]; b != "" {
+			return b
+		}
+	}
+	for _, part := range strings.Split(contentType, ";") {
+		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "boundary") {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		// Only a MATCHING pair is stripped: a boundary legitimately ends
+		// in "==", and trimming those would corrupt it.
+		for _, q := range []string{"'", "\""} {
+			if len(value) >= 2 && strings.HasPrefix(value, q) && strings.HasSuffix(value, q) {
+				return value[1 : len(value)-1]
+			}
+		}
+		return value
+	}
 	return ""
 }
 

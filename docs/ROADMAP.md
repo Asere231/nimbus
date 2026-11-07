@@ -67,6 +67,13 @@ aws 5.100.0, google 6.x, az 2.90.0, aws-cli 1.40.33 and Terraform 1.16.4.
   against the same process that serves Azure and AWS, with a clean plan
   and a clean destroy. The GCP tab came from a type table and one line in
   `types.js`, which was the point of Milestone 7's refactor.
+- `gcloud` works against the same server, with endpoint overrides and
+  `auth/disable_credentials`: `compute networks list`, `networks subnets
+  list`, `firewall-rules list`, `iam service-accounts list`,
+  `projects describe`, `storage ls/cp/cat`, all verified on macOS with
+  gcloud 592.0.0 and written up in `docs/GCLOUD.md`. The CLI found a bug
+  Terraform never would: it quotes its multipart boundary in a way RFC
+  2045 forbids and Go refuses.
 - CI is green on ubuntu, macos and windows, plus the SDK harness, the
   generator's tests, the visualizer's node tests, the Terraform
   apply/plan/destroy jobs (Azure AND AWS against one server), the two
@@ -137,11 +144,6 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
   generation is gone: `?versions=true` lists one entry per name. No
   lifecycle rule ever runs, and there are no signed URLs, no composite
   objects and no customer-managed keys.
-- **`gcloud` is documented but was not run here.** `docs/GCLOUD.md` gives
-  the endpoint overrides and `auth/disable_credentials`; the SDK is not
-  installed on the owner's machine yet, so the commands in it are written
-  from the configuration surface rather than from a session. The Terraform
-  half is proven.
 - **No OAuth.** The provider is given an `access_token` directly and Nimbus
   never looks at it. There is no token exchange, no metadata server and no
   `gcloud auth login`.

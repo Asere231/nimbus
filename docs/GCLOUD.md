@@ -31,6 +31,11 @@ carry their version in the override and some do not — `compute` and
 `storage` do, `iam` does not — which is the same asymmetry the Terraform
 provider's `*_custom_endpoint` settings have.
 
+Each override prints a warning about the **universe domain** not being
+`googleapis.com`. That is expected and harmless: it is a newer gcloud
+concept for alternative Google universes, and everything below works
+through it. `--universe-domain` is not the answer for a local emulator.
+
 Switch between Nimbus and the real thing with:
 
 ```bash
@@ -38,6 +43,8 @@ gcloud config configurations activate nimbus     # or: default
 ```
 
 ## Use it
+
+All of these were run against Nimbus 0.9.0 with gcloud 592.0.0 on macOS:
 
 ```bash
 gcloud compute networks list
@@ -48,6 +55,10 @@ gcloud storage ls
 gcloud storage cp README.md gs://nimbus-data/
 gcloud storage cat gs://nimbus-data/README.md
 ```
+
+`gcloud storage cp` uploads as `multipart/related` with its boundary in
+single quotes, which is not what RFC 2045 allows — Nimbus reads it anyway,
+because the alternative is a CLI that cannot upload. See CLAUDE.md.
 
 `auth/disable_credentials` sends every request unauthenticated, which
 Nimbus accepts: it never verifies a token, the same decision SigV4 and

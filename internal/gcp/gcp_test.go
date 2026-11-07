@@ -575,3 +575,66 @@ func TestResourcesAreStoredAsGCPWithTheProjectAsRoot(t *testing.T) {
 		t.Errorf("a network's id is %q, want a self link", byType[TypeNetwork].ID)
 	}
 }
+
+// `gcloud storage cp` sends its boundary in SINGLE quotes, which RFC 2045
+// does not allow and Go's own parser refuses outright. Measured against
+// gcloud 592.0.0: the upload failed with "mime: invalid media parameter"
+// and an error that blamed the request rather than the quoting.
+func TestTheBoundaryIsReadHoweverTheClientQuotedIt(t *testing.T) {
+	cases := map[string]string{
+		`multipart/related; boundary='===============150545174933813382=='`: "===============150545174933813382==",
+		`multipart/related; boundary="simple"`:                              "simple",
+		`multipart/related; boundary=simple`:                                "simple",
+		`multipart/related; boundary=abc==`:                                 "abc==",
+		`multipart/related`:                                                 "",
+	}
+	for header, want := range cases {
+		if got := boundaryOf(header); got != want {
+			t.Errorf("boundaryOf(%q) = %q, want %q", header, got, want)
+		}
+	}
+}
+
+// The same, end to end: an upload whose Content-Type gcloud wrote.
+func TestAGcloudStyleMultipartUploadIsAccepted(t *testing.T) {
+	s := newTestServer(t)
+	must(t, s, http.MethodPost, "/storage/v1/b?project=nimbus-local", bucketBody)
+
+	boundary := "===============1505451749338133828=="
+	body := "--" + boundary + "\r\n" +
+		"Content-Type: application/json\r\n\r\n" +
+		`{"name":"probe.txt"}` + "\r\n" +
+		"--" + boundary + "\r\n" +
+		"Content-Type: text/plain\r\n\r\n" +
+		"hello from gcloud\r\n" +
+		"--" + boundary + "--\r\n"
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/upload/storage/v1/b/nimbus-data/o?alt=json&uploadType=multipart",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "multipart/related; boundary='"+boundary+"'")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	rec, _ = call(t, s, http.MethodGet, "/storage/v1/b/nimbus-data/o/probe.txt?alt=media", "")
+	if rec.Body.String() != "hello from gcloud" {
+		t.Errorf("content = %q", rec.Body.String())
+	}
+}
+
+// gcloud asks for the bucket's layout before it uploads. A 404 does not
+// stop it, but it puts a red line in the activity feed for something that
+// is working.
+func TestStorageLayoutIsAnswered(t *testing.T) {
+	s := newTestServer(t)
+	must(t, s, http.MethodPost, "/storage/v1/b?project=nimbus-local", bucketBody)
+	doc := must(t, s, http.MethodGet, "/storage/v1/b/nimbus-data/storageLayout?alt=json", "")
+	if doc["bucket"] != "nimbus-data" {
+		t.Errorf("layout = %v", doc)
+	}
+	if doc["hierarchicalNamespace"].(map[string]any)["enabled"] != false {
+		t.Errorf("Nimbus does not emulate a hierarchical bucket and must not claim to: %v", doc)
+	}
+}

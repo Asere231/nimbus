@@ -42,6 +42,14 @@ func (s *Server) serveStorage(w http.ResponseWriter, r *http.Request, parts []st
 		return s.deleteBucket(w, r, rest[0])
 	}
 
+	// `gcloud storage cp` asks for this before it uploads anything, to
+	// decide whether the bucket is hierarchical. Measured; a 404 does not
+	// stop the upload, but it puts a red line in the activity feed for
+	// something that is working.
+	if len(rest) == 2 && rest[1] == "storageLayout" && r.Method == http.MethodGet {
+		return s.storageLayout(w, rest[0])
+	}
+
 	// Object paths. The object name may itself contain slashes, which is
 	// why it is rejoined rather than read as one segment -- "img/logo.svg"
 	// is one object, not two.
@@ -208,6 +216,26 @@ func (s *Server) deleteBucket(w http.ResponseWriter, r *http.Request, name strin
 	}
 	_, _ = s.store.Delete(s.bucketLink(name))
 	w.WriteHeader(http.StatusNoContent)
+	return ""
+}
+
+// storageLayout says the bucket is a flat one. A hierarchical namespace
+// bucket is a different product with folder operations of its own, and
+// Nimbus does not emulate it -- saying so plainly is what keeps a client
+// from trying.
+func (s *Server) storageLayout(w http.ResponseWriter, name string) string {
+	if _, aerr := s.loadBucket(name); aerr != nil {
+		writeError(w, aerr)
+		return "storage layout: no bucket"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"kind":                  "storage#storageLayout",
+		"bucket":                name,
+		"location":              "US",
+		"locationType":          "multi-region",
+		"hierarchicalNamespace": map[string]any{"enabled": false},
+		"customPlacementConfig": map[string]any{},
+	})
 	return ""
 }
 

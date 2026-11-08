@@ -28,7 +28,7 @@ import (
 // direction to diverge in, as soft-deleted vaults already do.
 
 type operation struct {
-	Kind          string `json:"kind"`
+	Kind          string `json:"kind,omitempty"`
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	OperationType string `json:"operationType"`

@@ -153,3 +153,50 @@ test("a managed cluster is recognised only in its own cloud", () => {
   assert.ok(!isK8sCluster("AWS::EKS::Nodegroup", "aws"));
   assert.ok(!isK8sCluster(undefined, undefined));
 });
+
+// Milestone 10's whole claim about the visualizer: GKE needed a type table
+// entry and nothing else. If this passes with no new drawing code, the
+// engine lift in Milestone 8 and the cloud dispatch in Milestone 7 held.
+//
+// render.js is read rather than imported: it pulls in api.js, which touches
+// `location` at module scope, so it cannot load outside a browser. The
+// VIEWS registry is a literal, which is what makes reading it enough.
+test("all three clouds offer the Kubernetes view", () => {
+  const src = readFileSync(
+    new URL("../../internal/ui/static/render.js", import.meta.url), "utf8");
+  const view = src.match(/id:\s*"kubernetes"[^}]*clouds:\s*\[([^\]]*)\]/);
+  assert.ok(view, "render.js should declare the Kubernetes view with a clouds list");
+  const clouds = view[1].split(",").map((s) => s.trim().replace(/['"]/g, ""));
+  for (const cloud of ["azure", "aws", "gcp"]) {
+    assert.ok(clouds.includes(cloud), cloud + " should offer the Kubernetes view");
+  }
+});
+
+// A GCP resource type that nothing styled falls back to an abbreviation,
+// which reads as a bug rather than as a new type. Every type the plugin
+// can put in the store has a badge here.
+test("every GCP type the plugin stores has a badge", () => {
+  const stored = [
+    "cloudresourcemanager.googleapis.com/Project",
+    "compute.googleapis.com/Network",
+    "compute.googleapis.com/Subnetwork",
+    "compute.googleapis.com/Firewall",
+    "compute.googleapis.com/Route",
+    "compute.googleapis.com/Router",
+    "iam.googleapis.com/ServiceAccount",
+    "storage.googleapis.com/Bucket",
+    "container.googleapis.com/Cluster",
+    "container.googleapis.com/NodePool",
+    "pubsub.googleapis.com/Topic",
+    "pubsub.googleapis.com/Subscription",
+    "run.googleapis.com/Service",
+    "run.googleapis.com/Revision",
+  ];
+  for (const type of stored) {
+    assert.ok(gcpTable.TYPES[type.toLowerCase()], type + " has no badge");
+    // And it has to sort somewhere deliberate, or it lands after
+    // everything else by accident.
+    const last = type.toLowerCase().split("/").pop();
+    assert.ok(gcpTable.ORDER.includes(last), type + " is missing from ORDER");
+  }
+});

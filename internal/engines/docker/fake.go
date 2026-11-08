@@ -44,6 +44,10 @@ type Fake struct {
 	// Calls records every method invoked, in order, for assertions about what
 	// was actually done.
 	Calls []string
+	// Runs records the full options of every container started, for the
+	// assertions Calls cannot carry -- the environment a container was
+	// given, and which ports were published.
+	Runs []RunOptions
 }
 
 // NewFake returns an empty Fake with a running "daemon".
@@ -90,6 +94,7 @@ func (f *Fake) Run(ctx context.Context, opts RunOptions) (string, error) {
 	if _, exists := f.containers[opts.Name]; exists {
 		return "", fmt.Errorf("docker: container %s already exists", opts.Name)
 	}
+	f.Runs = append(f.Runs, opts)
 	ports := map[string]string{}
 	for host, container := range opts.Ports {
 		ports[container+"/tcp"] = host

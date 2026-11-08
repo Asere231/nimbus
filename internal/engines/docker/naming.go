@@ -24,6 +24,7 @@ const (
 	LabelResource = "nimbus.resource-id"
 	LabelRole     = "nimbus.role"
 	LabelFunction = "nimbus.function"
+	LabelService  = "nimbus.service"
 )
 
 // Name derives a stable, legal container name from a resource id.

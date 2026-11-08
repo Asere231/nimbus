@@ -53,6 +53,8 @@ func main() {
 		printEnv(os.Args[2:])
 	case "az":
 		azCLI(os.Args[2:])
+	case "gcp":
+		gcpCLI(os.Args[2:])
 	case "plan-view":
 		planView(os.Args[2:])
 	case "version", "--version", "-v":
@@ -71,6 +73,8 @@ Usage:
   nimbus cert  [--home DIR]      where the CA is, and how to trust it on your OS
   nimbus env azure               environment variables for Terraform and the SDKs
   nimbus az register [--run]     register Nimbus as a custom cloud for the az CLI
+  nimbus gcp register [--run]    point the gcloud CLI at Nimbus
+  nimbus gcp kubeconfig CLUSTER  a kubeconfig for a GKE cluster, for kubectl
   nimbus plan-view PLAN          show a terraform plan on the graph before applying it
   nimbus version
 `)
@@ -227,7 +231,7 @@ func start(args []string) {
 		// api_endpoint_overrides take any URL, and Cloud Storage is
 		// addressed by path so no bucket name becomes a hostname.
 		gcpURL := fmt.Sprintf("http://%s:%d", *host, *gcpPort)
-		gcpCfg := gcp.Config{PublicURL: gcpURL}
+		gcpCfg := gcp.Config{PublicURL: gcpURL, KeepClusters: *persist}
 		if dataDir != "" {
 			gcpCfg.DataDir = dataDir
 		}
@@ -238,6 +242,8 @@ func start(args []string) {
 			url:   gcpURL,
 			srv: &http.Server{Addr: fmt.Sprintf(":%d", *gcpPort), Handler: g,
 				ReadHeaderTimeout: 10 * time.Second},
+			back: g.Start(),
+			stop: g.Shutdown,
 		})
 	}
 

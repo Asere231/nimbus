@@ -10,6 +10,7 @@ import (
 	"net/textproto"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Asere231/nimbus/internal/core"
 )
@@ -660,4 +661,18 @@ func TestAnywhereCachesAnswersAnEmptyListSoForceDestroyWorks(t *testing.T) {
 	if !ok || len(items) != 0 {
 		t.Errorf("items = %v; an empty list is what keeps force_destroy working", doc["items"])
 	}
+}
+
+// waitFor polls a condition for a few seconds. Several things here finish
+// in a background goroutine -- a cluster starting, an operation being
+// marked done -- and a test that asserted immediately would be racing them.
+func waitFor(cond func() bool) bool {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
 }

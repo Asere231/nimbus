@@ -89,13 +89,13 @@ export const VIEWS = [
       "and its subnets, their security groups and route tables, and any peering appear here.",
   },
   {
-    id: "kubernetes", label: "Kubernetes", clouds: ["azure", "aws"],
+    id: "kubernetes", label: "Kubernetes", clouds: ["azure", "aws", "gcp"],
     model: kubernetesModel, layout: kubernetesLayout, draw: drawKubernetes,
     empty: (m) => !m.clusters.length,
     emptyTitle: "No clusters here",
-    emptyBody: "This stack has no Kubernetes clusters. Create an <code>azurerm_kubernetes_cluster</code> " +
-      "or an <code>aws_eks_cluster</code> \u2014 Nimbus runs either as k3s in Docker \u2014 and its " +
-      "namespaces, workloads, services and nodes appear here.",
+    emptyBody: "This stack has no Kubernetes clusters. Create an <code>azurerm_kubernetes_cluster</code>, " +
+      "an <code>aws_eks_cluster</code> or a <code>google_container_cluster</code> \u2014 Nimbus runs " +
+      "any of them as k3s in Docker \u2014 and its namespaces, workloads, services and nodes appear here.",
   },
 ];
 

@@ -81,6 +81,16 @@ func apiFor(parts []string) string {
 		return apiResourceManager
 	case "v1", "v1beta1":
 		return apiForV1(parts)
+	case "projects":
+		// A path with no version prefix at all, which is what an endpoint
+		// setting that was expected to carry its version but did not
+		// produces. Routed rather than refused: whether the version
+		// belongs to the endpoint or to the client differs per service
+		// with nothing announcing which, and this project has now been
+		// caught by it three times (iam, container, pubsub). Accepting
+		// both spellings can only ever answer a call that was meant for
+		// us anyway.
+		return apiForV1(append([]string{"v1"}, parts...))
 	}
 	return ""
 }

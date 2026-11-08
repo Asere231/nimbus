@@ -26,7 +26,25 @@ import (
 // fifty times in a row locally.
 
 // serveNodePools handles .../clusters/{c}/nodePools[/{np}[:verb]].
+//
+// The verb is a COLON SUFFIX on the pool's own name --
+// `nodePools/workers:setSize` -- not a path segment. Measured: a scale
+// failed with
+//
+//	Nimbus does not emulate POST .../nodePools/nimbus-workers:setSize yet
+//
+// against a handler that expected `/setSize` as its own segment. Both
+// spellings are accepted now, since accepting the other costs nothing and
+// gcloud has used different ones before.
 func (s *Server) serveNodePools(w http.ResponseWriter, r *http.Request, location, cluster string, rest []string) string {
+	// Split a colon verb off the pool name before anything matches on
+	// shape, or the name carries the verb into every lookup.
+	if len(rest) >= 1 {
+		if name, verb := trimVerb(rest[0]); verb != "" {
+			rest = append([]string{name, verb}, rest[1:]...)
+		}
+	}
+
 	var e *apiError
 	switch {
 	case len(rest) == 0 && r.Method == http.MethodPost:
@@ -106,6 +124,16 @@ func (s *Server) createNodePool(w http.ResponseWriter, r *http.Request, location
 
 	body["selfLink"] = s.nodePoolLink(location, cluster, name)
 	body["status"] = "RUNNING"
+	// A create sends `initialNodeCount`; the provider reads `nodeCount`
+	// back. Filling only the one that arrived left every plan wanting to
+	// change the count from 0 to what it already was -- the same rule
+	// setSize already follows, which is that a client reads whichever
+	// field it set.
+	if n := poolCount(body); n > 0 {
+		body["nodeCount"] = n
+		body["initialNodeCount"] = n
+	}
+	body["instanceGroupUrls"] = s.instanceGroupURLs(location, cluster, name)
 	if str(body["version"]) == "" {
 		body["version"] = s.k3s.Version()
 	}
@@ -126,6 +154,28 @@ func (s *Server) createNodePool(w http.ResponseWriter, r *http.Request, location
 	return nil
 }
 
+// instanceGroupURLs is why a pool needs instance groups at all, and it is
+// the subtlest thing measured in this milestone.
+//
+// `node_count` is not READ from the API: the provider COMPUTES it as
+//
+//	initialNodeCount / len(instanceGroupUrls)
+//
+// so a pool with no instance groups reports a count of zero -- by
+// division, not by absence -- and every plan after a successful apply
+// wanted to change the count from 0 to what it already was. Nothing in
+// the error said "instance group".
+//
+// The number of groups is the number of ZONES the pool spans, not the
+// number of nodes, so it does not change when the pool is scaled. One
+// group for the zonal clusters Nimbus runs. The URL is derived from the
+// pool's identity, so it is the same on every read -- the rule that keeps
+// a plan clean, applied once more.
+func (s *Server) instanceGroupURLs(location, cluster, pool string) []any {
+	group := "gke-" + cluster + "-" + pool + "-" + hexID(8) + "-grp"
+	return []any{s.computeLink("zones/"+location, "instanceGroupManagers", group)}
+}
+
 // mirrorPool writes a pool into its cluster's nodePools array, replacing
 // an entry of the same name. Through Store.Update, so it cannot lose a
 // concurrent write to the same cluster.
@@ -143,6 +193,12 @@ func (s *Server) mirrorPool(location, cluster, name string, pool map[string]any)
 			out = append(out, pool)
 		}
 		body["nodePools"] = out
+		// `gcloud container clusters list` reads NUM_NODES from here, not
+		// from the pools, so a cluster with two nodes reported one until
+		// this was kept in step. The provider does not read it -- it
+		// derives its count from the instance groups -- which is why this
+		// only ever showed up in the CLI.
+		body["currentNodeCount"] = totalNodes(body)
 		return nil
 	})
 	if err != nil {
@@ -154,13 +210,27 @@ func (s *Server) mirrorPool(location, cluster, name string, pool map[string]any)
 // rescale brings the cluster's agent containers in line with what its
 // pools now add up to. One node is the k3s server container itself, so a
 // cluster of N nodes needs N-1 agents -- which ScaleAgents handles.
+//
+// It holds gkeMu for the whole operation, and so does the cluster's
+// delete. Without that, a destroy LEAVES CONTAINERS RUNNING: Terraform
+// deletes the node pool, whose rescale runs in the background, then
+// deletes the cluster, whose stop removes the containers -- and the
+// rescale, already past its check that the cluster exists, starts a fresh
+// agent behind it. Measured: a clean `terraform destroy` with nothing left
+// in the store and two k3s containers still up.
+//
+// This is the engine-level cousin of the lost update core.Store.Update
+// exists for. The check and the act have to be one step.
 func (s *Server) rescale(location, cluster string) {
 	ctx, cancel := context.WithTimeout(context.Background(), backgroundTimeout)
 	defer cancel()
+	s.gkeMu.Lock()
+	defer s.gkeMu.Unlock()
+
 	id := s.clusterLink(location, cluster)
 	cl := s.k3s.Get(id)
 	if cl == nil {
-		return // not started yet; provisionCluster will size it
+		return // not started yet, or already gone
 	}
 	want := s.wantedNodes(id)
 	if err := s.k3s.ScaleAgents(ctx, cl, want); err != nil {

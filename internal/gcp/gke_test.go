@@ -2,6 +2,7 @@ package gcp
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Asere231/nimbus/internal/core"
@@ -257,5 +258,253 @@ func TestTokenReviewEchoesTheApiVersionAndGrantsClusterAdmin(t *testing.T) {
 	spec, _ := doc["spec"].(map[string]any)
 	if spec != nil && spec["token"] != nil && spec["token"] != "" {
 		t.Errorf("the token was echoed back: %v", spec["token"])
+	}
+}
+
+// Measured against the provider 6.50.0, which failed the apply with
+//
+//	json: cannot unmarshal number into Go struct field
+//	Operation.progress of type container.OperationProgress
+//
+// naming neither GKE nor Nimbus. Compute's `progress` is a number and the
+// container API's is an object: the same field name in two
+// almost-identical documents, with different types.
+func TestAGKEOperationDoesNotCarryComputesNumericProgress(t *testing.T) {
+	s := newGKETestServer(t)
+	doc := must(t, s, http.MethodPost, clusterPath, clusterBody)
+	if _, present := doc["progress"]; present {
+		t.Fatalf("the operation carries `progress` (%#v); the container client "+
+			"unmarshals it as an object and refuses a number", doc["progress"])
+	}
+
+	// Compute's still has it, because Compute's really is a number.
+	net := must(t, s, http.MethodPost,
+		"/compute/v1/projects/nimbus-local/global/networks",
+		`{"name": "n1", "autoCreateSubnetworks": false}`)
+	if net["progress"] != float64(100) {
+		t.Errorf("a Compute operation's progress = %#v, want 100", net["progress"])
+	}
+}
+
+// `remove_default_node_pool = true` is in almost every real GKE config,
+// and it makes the provider DELETE default-pool right after the create.
+// Measured: with the pool existing only as an entry in the cluster's
+// array, the apply failed on a 404 for a pool Terraform had just been
+// told about.
+func TestTheDefaultPoolIsARealResourceSoItCanBeRemoved(t *testing.T) {
+	s := newGKETestServer(t)
+	must(t, s, http.MethodPost, clusterPath, clusterBody)
+
+	pool := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke/nodePools/default-pool", "")
+	if pool["name"] != "default-pool" {
+		t.Fatalf("default-pool = %v, want a readable node pool", pool)
+	}
+	must(t, s, http.MethodDelete, clusterPath+"/nimbus-gke/nodePools/default-pool", "")
+
+	rec, _ := call(t, s, http.MethodGet, clusterPath+"/nimbus-gke/nodePools/default-pool", "")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("after deleting it the pool still reads %d", rec.Code)
+	}
+	cluster := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke", "")
+	for _, p := range cluster["nodePools"].([]any) {
+		if entry, _ := p.(map[string]any); entry != nil && entry["name"] == "default-pool" {
+			t.Error("the cluster still lists the removed default pool")
+		}
+	}
+}
+
+// Both fields are ForceNew, and the provider reads them out of
+// `networkConfig` rather than the top-level fields the create sent them
+// in. Measured: with only the top-level ones filled, a plan after a
+// successful apply wanted to REPLACE the cluster.
+func TestTheNetworkComesBackWhereTheProviderLooksForIt(t *testing.T) {
+	s := newGKETestServer(t)
+	must(t, s, http.MethodPost, clusterPath, `{"cluster": {
+		"name": "nimbus-gke",
+		"initialNodeCount": 1,
+		"network": "projects/nimbus-local/global/networks/nimbus-gke-net",
+		"subnetwork": "projects/nimbus-local/regions/us-central1/subnetworks/nodes",
+		"networkConfig": {}
+	}}`)
+
+	cluster := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke", "")
+	cfg, _ := cluster["networkConfig"].(map[string]any)
+	if cfg == nil {
+		t.Fatal("networkConfig is missing: the provider reads the network from it")
+	}
+	if cfg["network"] != "projects/nimbus-local/global/networks/nimbus-gke-net" {
+		t.Errorf("networkConfig.network = %v", cfg["network"])
+	}
+	if cfg["subnetwork"] != "projects/nimbus-local/regions/us-central1/subnetworks/nodes" {
+		t.Errorf("networkConfig.subnetwork = %v", cfg["subnetwork"])
+	}
+}
+
+// A create sends initialNodeCount and the provider reads nodeCount back.
+// Measured: filling only the field that arrived left every plan wanting to
+// change the count from 0 to what it already was.
+func TestANewPoolReportsBothCountFields(t *testing.T) {
+	s := newGKETestServer(t)
+	must(t, s, http.MethodPost, clusterPath, clusterBody)
+	must(t, s, http.MethodPost, clusterPath+"/nimbus-gke/nodePools", nodePoolBody)
+
+	pool := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke/nodePools/nimbus-pool", "")
+	if pool["nodeCount"] != float64(2) {
+		t.Errorf("nodeCount = %#v, want 2", pool["nodeCount"])
+	}
+	if pool["initialNodeCount"] != float64(2) {
+		t.Errorf("initialNodeCount = %#v, want 2", pool["initialNodeCount"])
+	}
+}
+
+// The subtlest thing in this milestone. `node_count` is not read from the
+// API at all: the provider computes it as
+//
+//	initialNodeCount / len(instanceGroupUrls)
+//
+// so a pool with no instance groups reports ZERO -- by division, not by
+// absence -- and every plan after a clean apply wanted to change the count
+// from 0 to what it already was. Nothing in the diff mentioned instance
+// groups.
+func TestAPoolHasInstanceGroupsOrItsCountComputesToZero(t *testing.T) {
+	s := newGKETestServer(t)
+	must(t, s, http.MethodPost, clusterPath, clusterBody)
+	must(t, s, http.MethodPost, clusterPath+"/nimbus-gke/nodePools", nodePoolBody)
+
+	for _, path := range []string{"nimbus-pool", "default-pool"} {
+		pool := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke/nodePools/"+path, "")
+		groups, _ := pool["instanceGroupUrls"].([]any)
+		if len(groups) != 1 {
+			t.Fatalf("%s has %d instance groups, want exactly one per zone: "+
+				"the provider divides by this", path, len(groups))
+		}
+	}
+
+	// And it must not move between reads, or the derived count moves with it.
+	first := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke/nodePools/nimbus-pool", "")
+	second := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke/nodePools/nimbus-pool", "")
+	if first["instanceGroupUrls"].([]any)[0] != second["instanceGroupUrls"].([]any)[0] {
+		t.Error("the instance group URL changed between reads, so the node count would too")
+	}
+}
+
+// Scaling changes the node count, not the number of zones, so the groups
+// stay as they were -- and the count the provider derives still follows.
+func TestScalingDoesNotChangeTheInstanceGroups(t *testing.T) {
+	s := newGKETestServer(t)
+	must(t, s, http.MethodPost, clusterPath, clusterBody)
+	must(t, s, http.MethodPost, clusterPath+"/nimbus-gke/nodePools", nodePoolBody)
+	before := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke/nodePools/nimbus-pool", "")
+
+	must(t, s, http.MethodPost, clusterPath+"/nimbus-gke/nodePools/nimbus-pool/setSize",
+		`{"nodeCount": 4}`)
+	after := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke/nodePools/nimbus-pool", "")
+
+	if len(after["instanceGroupUrls"].([]any)) != len(before["instanceGroupUrls"].([]any)) {
+		t.Error("scaling changed the number of instance groups; it should change the count")
+	}
+	if after["nodeCount"] != float64(4) {
+		t.Errorf("nodeCount = %v, want 4", after["nodeCount"])
+	}
+}
+
+// The provider does not read node_count from the container API -- that API
+// does not report it. It takes the pool's instanceGroupUrls, GETs each one
+// from the COMPUTE API and divides the summed targetSize by their number.
+// Found by reading the provider's source after the plan would not settle.
+func TestTheInstanceGroupManagerReportsThePoolsCount(t *testing.T) {
+	s := newGKETestServer(t)
+	must(t, s, http.MethodPost, clusterPath, clusterBody)
+	must(t, s, http.MethodPost, clusterPath+"/nimbus-gke/nodePools", nodePoolBody)
+
+	pool := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke/nodePools/nimbus-pool", "")
+	url := pool["instanceGroupUrls"].([]any)[0].(string)
+	path := strings.TrimPrefix(url, base)
+
+	igm := must(t, s, http.MethodGet, path, "")
+	if igm["targetSize"] != float64(2) {
+		t.Fatalf("targetSize = %#v, want the pool's 2: the provider divides by this",
+			igm["targetSize"])
+	}
+
+	// And it follows a scale, or the derived count goes stale.
+	must(t, s, http.MethodPost, clusterPath+"/nimbus-gke/nodePools/nimbus-pool/setSize",
+		`{"nodeCount": 5}`)
+	igm = must(t, s, http.MethodGet, path, "")
+	if igm["targetSize"] != float64(5) {
+		t.Errorf("after a scale targetSize = %v, want 5", igm["targetSize"])
+	}
+}
+
+// A manager nobody owns must 404 rather than report a size, or a stale URL
+// in someone's state reads as a real pool.
+func TestAnUnownedInstanceGroupManagerIsANotFound(t *testing.T) {
+	s := newGKETestServer(t)
+	rec, _ := call(t, s, http.MethodGet,
+		"/compute/v1/projects/nimbus-local/zones/us-central1-a/instanceGroupManagers/gke-nope-grp", "")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+// The create must report the endpoint, not only the eventual read.
+//
+// Measured: with the endpoint filled in only once the cluster became
+// RUNNING, it was EMPTY in Terraform state after a successful apply and
+// the next plan reported it as changed outside of Terraform. The provider
+// writes state from a read taken while the cluster is still PROVISIONING.
+func TestANewClusterAlreadyKnowsItsEndpoint(t *testing.T) {
+	s := newGKETestServer(t)
+	must(t, s, http.MethodPost, clusterPath, clusterBody)
+
+	cluster := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke", "")
+	endpoint, _ := cluster["endpoint"].(string)
+	if !strings.HasPrefix(endpoint, "127.0.0.1:") {
+		t.Fatalf("endpoint = %q while PROVISIONING; a client reads state from "+
+			"exactly this moment", endpoint)
+	}
+}
+
+// The verb is a COLON SUFFIX on the pool's name, not a path segment.
+// Measured: a scale failed with "Nimbus does not emulate POST
+// .../nodePools/nimbus-workers:setSize yet" against a handler that
+// expected /setSize as its own segment.
+func TestSetSizeArrivesAsAColonVerbOnTheName(t *testing.T) {
+	for _, path := range []string{
+		"/nimbus-gke/nodePools/nimbus-pool:setSize",
+		"/nimbus-gke/nodePools/nimbus-pool/setSize",
+	} {
+		s := newGKETestServer(t)
+		must(t, s, http.MethodPost, clusterPath, clusterBody)
+		must(t, s, http.MethodPost, clusterPath+"/nimbus-gke/nodePools", nodePoolBody)
+		must(t, s, http.MethodPost, clusterPath+path, `{"nodeCount": 3}`)
+
+		pool := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke/nodePools/nimbus-pool", "")
+		if pool["nodeCount"] != float64(3) {
+			t.Errorf("%s did not scale the pool: nodeCount = %v", path, pool["nodeCount"])
+		}
+	}
+}
+
+// `gcloud container clusters list` reads NUM_NODES from the cluster's
+// currentNodeCount, not from its pools. The provider never looks at it --
+// it derives its count from the instance groups -- so this only ever
+// showed up in the CLI, reporting one node for a two-node cluster.
+func TestTheClusterReportsItsTotalNodeCountForTheCLI(t *testing.T) {
+	s := newGKETestServer(t)
+	must(t, s, http.MethodPost, clusterPath, clusterBody)
+	must(t, s, http.MethodPost, clusterPath+"/nimbus-gke/nodePools", nodePoolBody)
+
+	cluster := must(t, s, http.MethodGet, clusterPath+"/nimbus-gke", "")
+	// default-pool's 1 plus the new pool's 2.
+	if cluster["currentNodeCount"] != float64(3) {
+		t.Errorf("currentNodeCount = %v, want 3", cluster["currentNodeCount"])
+	}
+
+	must(t, s, http.MethodDelete, clusterPath+"/nimbus-gke/nodePools/default-pool", "")
+	cluster = must(t, s, http.MethodGet, clusterPath+"/nimbus-gke", "")
+	if cluster["currentNodeCount"] != float64(2) {
+		t.Errorf("after removing the default pool currentNodeCount = %v, want 2",
+			cluster["currentNodeCount"])
 	}
 }

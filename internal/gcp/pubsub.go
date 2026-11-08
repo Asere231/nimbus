@@ -45,6 +45,11 @@ func (s *Server) subscriptionName(name string) string {
 
 // servePubSub routes /v1/projects/{p}/{topics|subscriptions}[/{name}[:verb]].
 func (s *Server) servePubSub(w http.ResponseWriter, r *http.Request, parts []string) string {
+	// A path that arrived without its version prefix is one segment
+	// shorter; see router.go on why both are accepted.
+	if parts[0] == "projects" {
+		parts = append([]string{"v1"}, parts...)
+	}
 	collection := parts[3]
 	var name, verb string
 	if len(parts) > 4 {

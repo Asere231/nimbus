@@ -51,6 +51,12 @@ func TestApiForRoutesEveryMeasuredPath(t *testing.T) {
 		{"/storage/v1/b/bucket", apiStorage, "a bucket"},
 		{"/upload/storage/v1/b/bucket/o", apiStorage, "an object upload"},
 
+		// A path whose endpoint setting did not carry the version. The
+		// provider appends it for some services and not others, so both
+		// spellings have to arrive somewhere sensible.
+		{"/projects/nimbus-local/topics/t1", apiPubSub, "pubsub with no version prefix"},
+		{"/projects/nimbus-local/serviceAccounts", apiIAM, "iam with no version prefix"},
+
 		// Nothing at all.
 		{"/", "", "the empty path"},
 		{"/nope/v1/projects/p", "", "an API nobody serves"},

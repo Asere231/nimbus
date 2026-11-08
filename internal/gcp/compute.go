@@ -159,6 +159,12 @@ func (s *Server) serveCompute(w http.ResponseWriter, r *http.Request, parts []st
 		if r.Method == http.MethodGet && name != "" {
 			return s.getOperation(w, s.computeLink(scope, "operations", name))
 		}
+	case "instanceGroupManagers":
+		// A GKE node pool's nodes, as the Compute API sees them. Derived
+		// from the pool rather than stored; see gke_instancegroup.go.
+		if r.Method == http.MethodGet && name != "" {
+			return s.getInstanceGroupManager(w, scope, name)
+		}
 	case "regions", "zones":
 		// `/regions` lists them, `/regions/{name}` describes one. The
 		// scope splitter cannot tell those apart on its own, because

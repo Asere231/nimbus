@@ -38,6 +38,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Asere231/nimbus/internal/core"
@@ -114,6 +115,9 @@ type Server struct {
 	// engines are shared with the other clouds and know about none of them.
 	k3s      *k3s.Engine
 	services *run.Engine
+	// gkeMu serialises everything that starts or stops a cluster's
+	// containers. See rescale in gke_nodepool.go for the race it closes.
+	gkeMu sync.Mutex
 }
 
 // New builds the server and makes sure the project exists.

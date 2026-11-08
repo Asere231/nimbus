@@ -35,14 +35,26 @@ type operation struct {
 	TargetLink    string `json:"targetLink"`
 	TargetID      string `json:"targetId"`
 	Status        string `json:"status"`
-	Progress      int    `json:"progress"`
-	User          string `json:"user"`
-	InsertTime    string `json:"insertTime"`
-	StartTime     string `json:"startTime"`
-	EndTime       string `json:"endTime"`
-	SelfLink      string `json:"selfLink"`
-	Region        string `json:"region,omitempty"`
-	Zone          string `json:"zone,omitempty"`
+	// Progress is a NUMBER in Compute (0-100) and an OBJECT in the
+	// container API (`{name, metrics, stages}`): same field name, same
+	// field in the same-looking document, different type. Measured the
+	// hard way -- a GKE create answered with Compute's `progress: 100`
+	// fails in the provider with
+	//
+	//	json: cannot unmarshal number into Go struct field
+	//	Operation.progress of type container.OperationProgress
+	//
+	// which names neither GKE nor Nimbus. So this is `any`, Compute fills
+	// it with 100, and GKE leaves it out: absent is valid everywhere, and
+	// nothing reads it.
+	Progress   any    `json:"progress,omitempty"`
+	User       string `json:"user"`
+	InsertTime string `json:"insertTime"`
+	StartTime  string `json:"startTime"`
+	EndTime    string `json:"endTime"`
+	SelfLink   string `json:"selfLink"`
+	Region     string `json:"region,omitempty"`
+	Zone       string `json:"zone,omitempty"`
 }
 
 // operations remembers the recent ones, bounded so a long session cannot

@@ -51,6 +51,12 @@ func (s *Server) regionLink(region, kind, name string) string {
 	return s.computeLink("regions/"+region, kind, name)
 }
 
+// scopeLink is the URL of a scope itself -- the zone or region a resource
+// lives in, which several documents report as a full link.
+func (s *Server) scopeLink(scope string) string {
+	return s.base() + "/compute/v1/projects/" + s.cfg.ProjectID + "/" + scope
+}
+
 // projectSelfLink is the project's own id in the store, and the parent of
 // everything else in this cloud.
 func (s *Server) projectSelfLink() string {

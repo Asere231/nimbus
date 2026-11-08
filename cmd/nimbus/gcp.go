@@ -77,13 +77,23 @@ func gcpKubeconfig(args []string) {
 	project := fs.String("project", gcp.DefaultProjectID, "the project the cluster is in")
 	out := fs.String("out", "", "write here instead of stdout; - is stdout")
 	context := fs.String("context", "", "name for the context (default: the cluster's)")
-	_ = fs.Parse(args)
 
-	if fs.NArg() != 1 {
+	// The cluster name is taken before parsing, because Go's flag package
+	// stops at the first non-flag argument: `kubeconfig NAME --out X`
+	// would otherwise leave --out unparsed, which is how anyone would
+	// actually type it.
+	name := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		name, args = args[0], args[1:]
+	}
+	_ = fs.Parse(args)
+	if name == "" && fs.NArg() == 1 {
+		name = fs.Arg(0)
+	}
+	if name == "" {
 		fmt.Fprintln(os.Stderr, "usage: nimbus gcp kubeconfig CLUSTER [--out PATH]")
 		os.Exit(2)
 	}
-	name := fs.Arg(0)
 
 	base := fmt.Sprintf("http://%s:%d", *host, *port)
 	cluster, err := fetchCluster(base, *project, name)

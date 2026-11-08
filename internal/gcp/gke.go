@@ -192,11 +192,46 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, location 
 	}
 
 	s.fillCluster(body, location, name)
+
+	// The endpoint is set NOW, before the container exists.
+	//
+	// Measured: with it filled in only when the cluster became RUNNING,
+	// `endpoint` was empty in Terraform state after a successful apply and
+	// the next plan reported it as having "changed outside of Terraform".
+	// The provider writes state from a read that happens while the cluster
+	// is still PROVISIONING, and never reads it again.
+	//
+	// Nothing is being faked: reserving the cluster allocates its host
+	// port, so the address is genuinely known -- the container will answer
+	// there. This is the same move as deriving an etag or a kubeconfig
+	// instead of generating one, pulled earlier in the lifecycle.
+	cl, err := s.k3s.NewCluster(s.clusterLink(location, name), name)
+	if err != nil {
+		return internalError(err)
+	}
+	body["endpoint"] = fmt.Sprintf("127.0.0.1:%d", cl.Port)
+
 	// PROVISIONING, because the container really is not up yet. This is
 	// the field the provider polls -- not the operation.
 	body["status"] = "PROVISIONING"
 	body["statusMessage"] = "Nimbus is starting a k3s container for this cluster"
 	if aerr := s.saveCluster(location, body); aerr != nil {
+		return aerr
+	}
+	// The default pool has to be a REAL resource, not only an entry in the
+	// cluster's array.
+	//
+	// Measured: `remove_default_node_pool = true` -- which almost every
+	// real GKE config sets, so that a managed node pool owns the nodes --
+	// makes the provider DELETE `default-pool` immediately after the
+	// create, and the apply fails on
+	//
+	//	Error deleting default node pool: googleapi: Error 404:
+	//	Not found: .../clusters/nimbus-gke/nodePools/default-pool
+	//
+	// A mirrored array entry is not something that can be deleted. Real
+	// GKE's default pool is an ordinary node pool, and so is this one.
+	if aerr := s.saveInitialPools(location, name, body); aerr != nil {
 		return aerr
 	}
 
@@ -228,9 +263,28 @@ func (s *Server) fillCluster(body map[string]any, location, name string) {
 	body["clusterIpv4Cidr"] = "10.42.0.0/16"
 	body["labelFingerprint"] = etagOf(link)
 	body["nodePools"] = s.initialNodePools(body, location, name)
+	body["currentNodeCount"] = totalNodes(body)
 	if str(body["network"]) == "" {
 		body["network"] = "default"
 	}
+	// The network has to come back where the provider LOOKS for it, which
+	// is `networkConfig`, not the top-level field the create sent it in.
+	//
+	// Measured: with only the top-level `network` and `subnetwork` filled,
+	// a plan after a successful apply wanted to REPLACE the cluster --
+	// both fields are ForceNew, and the provider read them as null. Real
+	// GKE answers in both places. This is the same shape as every other
+	// perpetual diff in this project: the value is right, and it is not
+	// where the client reads it.
+	netCfg, _ := body["networkConfig"].(map[string]any)
+	if netCfg == nil {
+		netCfg = map[string]any{}
+	}
+	netCfg["network"] = relativeName(str(body["network"]))
+	if sub := str(body["subnetwork"]); sub != "" {
+		netCfg["subnetwork"] = relativeName(sub)
+	}
+	body["networkConfig"] = netCfg
 	if str(body["loggingService"]) == "" {
 		body["loggingService"] = "none"
 	}
@@ -247,18 +301,38 @@ func (s *Server) initialNodePools(body map[string]any, location, name string) []
 		return pools
 	}
 	count := gkeDefaultNodeCount
-	if n, ok := body["initialNodeCount"].(float64); ok && n > 0 {
-		count = int(n)
+	if n := asInt(body["initialNodeCount"]); n > 0 {
+		count = n
 	}
 	pool := map[string]any{
 		"name":             "default-pool",
 		"initialNodeCount": count,
+		"nodeCount":        count,
 		"status":           "PROVISIONING",
 		"version":          s.k3s.Version(),
 		"selfLink":         s.nodePoolLink(location, name, "default-pool"),
 		"config":           orDefault(body["nodeConfig"], map[string]any{}),
+		// Without these the provider computes a node count of zero; see
+		// instanceGroupURLs in gke_nodepool.go.
+		"instanceGroupUrls": s.instanceGroupURLs(location, name, "default-pool"),
 	}
 	return []any{pool}
+}
+
+// saveInitialPools stores the pools a create implied as real resources,
+// so each one can be read, scaled and deleted like any other.
+func (s *Server) saveInitialPools(location, cluster string, body map[string]any) *apiError {
+	pools, _ := body["nodePools"].([]any)
+	for _, p := range pools {
+		pool, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		if aerr := s.saveNodePool(location, cluster, pool); aerr != nil {
+			return aerr
+		}
+	}
+	return nil
 }
 
 // provisionCluster starts the container and moves the cluster to RUNNING,
@@ -277,6 +351,11 @@ func (s *Server) provisionCluster(location, name string) {
 			return nil
 		})
 	}
+
+	// Already reserved by createCluster, which needed the port to report
+	// the endpoint; this returns the same cluster.
+	s.gkeMu.Lock()
+	defer s.gkeMu.Unlock()
 
 	cl, err := s.k3s.NewCluster(id, name)
 	if err != nil {
@@ -303,6 +382,8 @@ func (s *Server) provisionCluster(location, name string) {
 	if err := s.store.Update(id, func(body map[string]any) error {
 		body["status"] = "RUNNING"
 		delete(body, "statusMessage")
+		// The endpoint is already there from the create; only confirm it,
+		// in case the port was adopted from a container that outlived us.
 		body["endpoint"] = fmt.Sprintf("127.0.0.1:%d", cl.Port)
 		body["masterAuth"] = map[string]any{
 			"clusterCaCertificate": base64.StdEncoding.EncodeToString(cl.CA),
@@ -339,9 +420,7 @@ func totalNodes(body map[string]any) int {
 		total += poolCount(pool)
 	}
 	if total == 0 {
-		if n, ok := body["initialNodeCount"].(float64); ok {
-			total = int(n)
-		}
+		total = asInt(body["initialNodeCount"])
 	}
 	if total < 1 {
 		total = gkeDefaultNodeCount
@@ -352,11 +431,34 @@ func totalNodes(body map[string]any) int {
 // poolCount reads a pool's node count from whichever field carries it.
 // `nodeCount` is what a client sets; `initialNodeCount` is what a create
 // sends and what GKE keeps reporting afterwards.
+//
+// It accepts an int as well as a float64, which is not pedantry: a number
+// DECODED from JSON is a float64, and the same number just assigned in Go
+// is an int. Reading only float64 made a count written moments earlier in
+// this process invisible, while the identical value read back from the
+// store worked -- so `gcloud container clusters list` reported one node
+// for a three-node cluster and every test that round-tripped through the
+// store passed.
 func poolCount(pool map[string]any) int {
 	for _, field := range []string{"nodeCount", "initialNodeCount"} {
-		if n, ok := pool[field].(float64); ok && n > 0 {
-			return int(n)
+		if n := asInt(pool[field]); n > 0 {
+			return n
 		}
+	}
+	return 0
+}
+
+// asInt reads a number however it arrived.
+func asInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case string:
+		return atoiOr(n, 0)
 	}
 	return 0
 }
@@ -437,6 +539,10 @@ func (s *Server) deleteCluster(w http.ResponseWriter, location, name string) *ap
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), backgroundTimeout)
 		defer cancel()
+		// Under gkeMu, so a node pool's rescale cannot start an agent
+		// behind the stop; see rescale in gke_nodepool.go.
+		s.gkeMu.Lock()
+		defer s.gkeMu.Unlock()
 		cl := s.k3s.Remove(id)
 		if cl == nil {
 			cl = s.k3s.ClusterFor(id, name)
@@ -467,12 +573,13 @@ func (s *Server) newGKEOperation(location, opType, targetLink string) *operation
 		OperationType: opType,
 		TargetLink:    targetLink,
 		Status:        "DONE",
-		Progress:      100,
-		InsertTime:    timestamp(),
-		StartTime:     timestamp(),
-		EndTime:       timestamp(),
-		SelfLink:      s.gkeOperationLink(location, name),
-		Zone:          location,
+		// No `progress`: see operations.go. The container API's is an
+		// object where Compute's is a number.
+		InsertTime: timestamp(),
+		StartTime:  timestamp(),
+		EndTime:    timestamp(),
+		SelfLink:   s.gkeOperationLink(location, name),
+		Zone:       location,
 	}
 	s.operations.put(op)
 	return op

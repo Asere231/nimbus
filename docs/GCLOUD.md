@@ -24,12 +24,29 @@ gcloud config set api_endpoint_overrides/compute http://localhost:4703/compute/v
 gcloud config set api_endpoint_overrides/storage http://localhost:4703/storage/v1/
 gcloud config set api_endpoint_overrides/iam http://localhost:4703/
 gcloud config set api_endpoint_overrides/cloudresourcemanager http://localhost:4703/
+gcloud config set api_endpoint_overrides/container http://localhost:4703/
+gcloud config set api_endpoint_overrides/pubsub http://localhost:4703/
+gcloud config set api_endpoint_overrides/run http://run.nimbus.localhost:4703/
 ```
+
+Or let Nimbus print them: `nimbus gcp register`, or `nimbus gcp register
+--run` to execute them.
 
 The trailing slash matters: `gcloud` joins paths onto these. Some services
 carry their version in the override and some do not — `compute` and
-`storage` do, `iam` does not — which is the same asymmetry the Terraform
-provider's `*_custom_endpoint` settings have.
+`storage` do, `iam`, `container` and `pubsub` do not — and **there is no
+rule**. It is not even a property of the service: `gcloud` wants the bare
+origin for `pubsub`, while the Terraform provider wants
+`pubsub_custom_endpoint` to end in `/v1/` for the same API. The version
+belongs to the client, not to the service. Nimbus routes a path with or
+without the prefix, so a wrong guess still works.
+
+`run` is the odd one. `gcloud run` prefixes the REGION onto the HOST,
+because real Cloud Run lives at `us-central1-run.googleapis.com` — so an
+IP address cannot work: it would try to resolve `us-central1-127.0.0.1`.
+A nested `*.localhost` name can take the prefix, and resolves to loopback
+on macOS and Windows with nothing installed, which is why the override is
+`run.nimbus.localhost` rather than `localhost`.
 
 Each override prints a warning about the **universe domain** not being
 `googleapis.com`. That is expected and harmless: it is a newer gcloud
@@ -44,7 +61,7 @@ gcloud config configurations activate nimbus     # or: default
 
 ## Use it
 
-All of these were run against Nimbus 0.9.0 with gcloud 592.0.0 on macOS:
+All of these were run against Nimbus 0.10.0 with gcloud 592.0.0 on macOS:
 
 ```bash
 gcloud compute networks list
@@ -55,6 +72,70 @@ gcloud storage ls
 gcloud storage cp README.md gs://nimbus-data/
 gcloud storage cat gs://nimbus-data/README.md
 ```
+
+### Kubernetes (GKE)
+
+`gcloud container clusters get-credentials` writes a kubeconfig whose user
+runs `gke-gcloud-auth-plugin`, and that plugin exists to exchange a Google
+OAuth credential for a Kubernetes token. With `auth/disable_credentials`
+there is no credential, so it produces nothing and **nothing ever reaches
+Nimbus**. By default the plugin is not even installed, and
+`USE_GKE_GCLOUD_AUTH_PLUGIN=False` falls back to the in-tree `gcp` auth
+provider that kubectl removed in 1.26.
+
+There are two ways through, and the simpler one needs no gcloud at all:
+
+```bash
+# 1. Nimbus writes the kubeconfig itself. Works in CI, no plugin, no PATH.
+nimbus gcp kubeconfig nimbus-gke --out kubeconfig
+kubectl --kubeconfig ./kubeconfig get nodes
+```
+
+```bash
+# 2. Or make gcloud's own kubeconfig work, by installing a shim.
+nimbus gcp install-auth-plugin        # prints the PATH line to add
+export PATH="$HOME/.nimbus/bin:$PATH"
+
+gcloud container clusters list
+gcloud container clusters get-credentials nimbus-gke --zone us-central1-a
+kubectl get nodes
+```
+
+The shim is a two-line script that answers Kubernetes' ExecCredential
+protocol with a token the cluster accepts. It reads `KUBERNETES_EXEC_INFO`
+and only answers for clusters on this machine, handing off to a real
+`gke-gcloud-auth-plugin` elsewhere on PATH for anything else — so a
+machine that also talks to real GKE is unaffected.
+
+The token itself is accepted by a **token authentication webhook**, which
+is how real GKE and real EKS both do it: a bearer token is built on the
+client side, and the only thing that can validate it is something the
+cluster's API server asks. Nimbus says yes to every token, the same
+decision every other signature here got.
+
+### Pub/Sub and Cloud Run
+
+```bash
+gcloud pubsub topics list
+gcloud pubsub topics publish nimbus-events --message '{"hello":"world"}'
+gcloud pubsub subscriptions create puller --topic nimbus-events
+gcloud pubsub subscriptions pull puller --auto-ack --limit 5
+
+gcloud run services list --region us-central1
+gcloud run services describe nimbus-echo --region us-central1
+```
+
+Publishing to a topic with a **push** subscription really POSTs the
+message to its endpoint, so a Cloud Run service subscribed to a topic is
+invoked for real — see `examples/terraform/gcp-run-pubsub`. Nimbus only
+pushes to endpoints on this machine; anything else is recorded in the
+activity feed and not called.
+
+`gcloud run` is served through a read-only projection of the **Knative**
+API, which is what it speaks — the Terraform provider uses the Cloud Run
+Admin v2 API instead, and the two are different documents for the same
+resource. Deploying through `gcloud run deploy` is not implemented; use
+Terraform or the Admin API.
 
 `gcloud storage cp` uploads as `multipart/related` with its boundary in
 single quotes, which is not what RFC 2045 allows — Nimbus reads it anyway,
@@ -74,6 +155,9 @@ only ever be reporting a clock skew.
 - **`gcloud auth login`** and anything that needs a real identity. There is
   no OAuth flow here and nothing to log in to; `disable_credentials` is the
   substitute.
+- **`gke-gcloud-auth-plugin` on its own.** It needs a Google credential, so
+  the shim above (or `nimbus gcp kubeconfig`) is the way in.
+- **`gcloud run deploy`.** The Knative API is served read-only.
 - **Anything Nimbus does not emulate.** The activity feed at
   <http://localhost:4700> flags every 4xx with the path that caused it, so
   an unimplemented call shows up there as the next thing to build rather

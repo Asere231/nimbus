@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.10.0 — 2026-11-07
+
+Milestone 10: GCP compute. GKE, Pub/Sub and Cloud Run, which finishes the
+third cloud — and one apply that stands up a cluster on all three.
+
+- **GKE is real Kubernetes**, on the same k3s engine behind AKS and EKS.
+  Clusters and node pools, a node count that really adds and removes agent
+  containers, and a token authentication webhook so `kubectl` can reach
+  the API server. `nimbus gcp kubeconfig CLUSTER` writes a kubeconfig;
+  `nimbus gcp install-auth-plugin` makes `gcloud container clusters
+  get-credentials` work too, by shimming the plugin gcloud insists on.
+- **Pub/Sub** topics and subscriptions, publish, pull, acknowledge and ack
+  deadlines with redelivery — plus **push delivery**, the first thing
+  Nimbus does outbound. It POSTs the real envelope, only to endpoints on
+  this machine, with bounded retries, and puts every delivery in the
+  activity feed.
+- **Cloud Run services really run**: any image the Docker daemon can pull,
+  started with `PORT` set and every request proxied through, so the
+  response is the one the container produced. Revisions, IAM recorded, and
+  a URL that is stable across redeploys because it points at Nimbus.
+- **`internal/engines/run`** is a new cloud-neutral engine for HTTP
+  services, beside `k3s` and `funcs`. A service is not a function: it
+  answers any method on any path, it is its own image, and its status code
+  is its answer.
+- **`examples/terraform/gcp-gke`** and **`examples/terraform/gcp-run-pubsub`**,
+  both applying, planning clean and destroying.
+- **`examples/multicloud`**: a network and a managed Kubernetes cluster on
+  Azure, AWS and GCP in one apply, against one process. Twelve resources,
+  three k3s containers, three tabs.
+- **The visualizer needed one type-table entry** to draw GKE in the
+  Kubernetes view, and one name in a clouds list. No new drawing code,
+  which is what Milestones 7 and 8 were for.
+- **A `nimbus gcp` command group**: `register`, `kubeconfig`,
+  `install-auth-plugin`.
+- New protocol facts in CLAUDE.md, including the two that cost the most:
+  a GKE node pool's count is computed from the Compute API's instance
+  group managers rather than read, and GKE and Cloud Run poll opposite
+  things — the cluster's status versus the operation's `done`.
+- Two bugs of our own: a count written as an `int` was invisible to a
+  reader expecting `float64`, and a node pool's background rescale could
+  start a container after the cluster's delete had stopped everything,
+  leaving a "successful" destroy with k3s still running.
+
 ## 0.9.0 — 2026-11-06
 
 Milestone 9: GCP core. A third cloud, and the one that tested whether

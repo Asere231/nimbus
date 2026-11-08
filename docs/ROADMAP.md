@@ -1,9 +1,11 @@
 # Roadmap
 
-**Current: Milestone 10 — GCP compute. Prompt: `docs/prompts/m10-gcp-compute.md`.**
+**Current: Phase 3 is complete. There is no Milestone 11 prompt yet —
+`docs/prompts/README.md` says what a new one should look like.**
 
-Milestones 1 to 9 are done, on macOS 27 (arm64) with azurerm 4.81.0,
-aws 5.100.0, google 6.x, az 2.90.0, aws-cli 1.40.33 and Terraform 1.16.4.
+Milestones 1 to 10 are done, on macOS 27 (arm64) with azurerm 4.81.0,
+aws 5.100.0, google 6.50.0, az 2.90.0, aws-cli 1.40.33, gcloud 592.0.0 and
+Terraform 1.16.4.
 
 - `examples/terraform/azure-basic` applies, plans clean (`-detailed-exitcode`
   = 0) and destroys; survives a `--persist` restart; every resource imports
@@ -74,6 +76,23 @@ aws 5.100.0, google 6.x, az 2.90.0, aws-cli 1.40.33 and Terraform 1.16.4.
   gcloud 592.0.0 and written up in `docs/GCLOUD.md`. The CLI found a bug
   Terraform never would: it quotes its multipart boundary in a way RFC
   2045 forbids and Go refuses.
+- `examples/terraform/gcp-gke` runs a real GKE cluster: k3s in Docker,
+  `kubectl get nodes` showing two nodes through a token authentication
+  webhook, a node pool whose count really adds and removes agent
+  containers, and a clean plan and destroy. `nimbus gcp kubeconfig`
+  writes the kubeconfig; `gcloud container clusters get-credentials`
+  works too, after `nimbus gcp install-auth-plugin`.
+- `examples/terraform/gcp-run-pubsub` ties Pub/Sub to Cloud Run: a Python
+  container that really runs, a push subscription, and a published
+  message arriving in the handler's own log. Verified with Terraform, a
+  plain curl and `gcloud pubsub topics publish`.
+- `examples/multicloud` creates a network and a managed Kubernetes
+  cluster on all three clouds in one apply, against one Nimbus process:
+  twelve resources, three k3s containers, three tabs, `kubectl get nodes`
+  against each. Applies, plans clean and destroys.
+- The GKE cluster needed one entry in `types-gcp.js` and one name in
+  `render.js`'s clouds list to appear in the Kubernetes view — no new
+  drawing code at all, which is what Milestones 7 and 8 were for.
 - CI is green on ubuntu, macos and windows, plus the SDK harness, the
   generator's tests, the visualizer's node tests, the Terraform
   apply/plan/destroy jobs (Azure AND AWS against one server), the two
@@ -107,7 +126,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 | # | Milestone | Done when |
 |---|---|---|
 | 9 | ~~Core: OAuth, Resource Manager projects, Compute networks, GCS~~ **done** | The `google` provider creates a VPC and a bucket via `*_custom_endpoint` settings |
-| 10 | GKE on k3s, Pub/Sub, Cloud Run in Docker | A GKE cluster is reachable with `kubectl` |
+| 10 | ~~GKE on k3s, Pub/Sub, Cloud Run in Docker~~ **done** | A GKE cluster is reachable with `kubectl` |
 
 ## Design decisions still open
 
@@ -134,11 +153,34 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 ## Later
 
-- **GCP is control plane plus Cloud Storage.** No GKE, Cloud Run, Cloud
-  Functions, Pub/Sub or Compute instances: Milestone 10. Cloud Routers and
-  their NAT configuration round-trip as state and nothing routes, and the
-  project IAM policy is recorded but never enforced — the same honest
-  limitation Azure RBAC and AWS IAM have.
+- **GCP still has no Compute instances and no Cloud Functions.** Cloud
+  Routers and their NAT configuration round-trip as state and nothing
+  routes, and the project IAM policy is recorded but never enforced — the
+  same honest limitation Azure RBAC and AWS IAM have.
+- **GKE is k3s, so most of its surface is not modelled.** No Autopilot, no
+  workload identity, no private clusters, no release channels, no
+  autoscaling: those fields round-trip and nothing acts on them. Every
+  request to the cluster is `system:masters`, because the token webhook
+  says yes to everything — the same limitation EKS has. A node pool's
+  nodes are agent containers, not VM instances, so nothing answers
+  `instances.list`; the instance group manager behind a pool is derived
+  on demand purely so the provider can compute a node count.
+- **Cloud Run runs the FIRST container of a service and the latest
+  revision only.** Sidecars are stored and not started, and `traffic`
+  round-trips without splitting anything: running every revision at once
+  is what that would cost, and nothing a local apply does needs it. There
+  is no scale-to-zero, no concurrency limit, no CPU or memory limit, and
+  no Cloud Run jobs. `gcloud run deploy` is not implemented — the Knative
+  API is served read-only, for `list` and `describe`.
+- **Pub/Sub messages live in memory and are bounded**, like CloudWatch
+  Logs': they do not survive a restart even with `--persist`. There is no
+  ordering guarantee, no dead-letter topic, no `seek` and no snapshots;
+  an `oidcToken` on a push subscription is recorded and never minted or
+  verified. Push only reaches endpoints on this machine, by design.
+- **An AKS cluster's node resource group outlives its cluster.** Deleting
+  the cluster leaves `MC_<rg>_<cluster>_<location>` in the store, where
+  real Azure removes it. Noticed during Milestone 10's multicloud
+  destroy; it predates that work and affects only the graph.
 - **GCS has no object versioning history.** `versioning` round-trips as a
   bucket setting and every write bumps the generation, but the previous
   generation is gone: `?versions=true` lists one entry per name. No

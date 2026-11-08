@@ -130,14 +130,55 @@ name becomes a hostname and there is nothing to trust.
 | Compute | VPC networks (auto and custom mode), subnetworks with secondary ranges, firewalls, routes, Cloud Routers, regions and zones, and operations |
 | IAM | Service accounts, with a derived email that never drifts between reads |
 | Cloud Storage | Buckets and objects with real bytes, all three upload protocols — media, multipart/related and resumable — plus `md5Hash`, `crc32c` and delimiter listings |
+| GKE | Clusters and node pools as **real Kubernetes** (k3s in Docker), scaled by node count. `nimbus gcp kubeconfig CLUSTER` — or `gcloud container clusters get-credentials` after `nimbus gcp install-auth-plugin` — then `kubectl get nodes` |
+| Pub/Sub | Topics and subscriptions, publish, pull, acknowledge, ack deadlines with redelivery, and **push delivery** that really POSTs to a local endpoint |
+| Cloud Run | Services from any image the Docker daemon can pull, **running for real** with `PORT` set and every request proxied through. Revisions, a stable URL, and IAM recorded |
 
 ```bash
 curl http://localhost:4703/compute/v1/projects/nimbus-local/global/networks
+curl "$(cd examples/terraform/gcp-run-pubsub && terraform output -raw service_url)"
 ```
 
-`examples/terraform/gcp-basic` applies seven resources, plans clean and
-destroys. For the `gcloud` CLI against the same server, see
-[docs/GCLOUD.md](docs/GCLOUD.md).
+Three examples: `gcp-basic` applies seven resources across Compute, IAM and
+Cloud Storage; `gcp-gke` brings up a cluster `kubectl` can reach; and
+`gcp-run-pubsub` wires a Pub/Sub topic to a Cloud Run service, so publishing a
+message invokes a container that really runs. All plan clean and destroy. For
+the `gcloud` CLI against the same server, see [docs/GCLOUD.md](docs/GCLOUD.md).
+
+## All three at once
+
+`examples/multicloud` is one `terraform apply` that creates a network and a
+managed Kubernetes cluster on **each** cloud, against one Nimbus process:
+
+| | Network | Cluster | Reached with |
+|---|---|---|---|
+| Azure | VNet + subnet | AKS | `kube_config_raw` from the state |
+| AWS | VPC + two subnets | EKS | `aws eks update-kubeconfig` |
+| GCP | VPC + subnetwork | GKE | `nimbus gcp kubeconfig` |
+
+Twelve resources, three k3s containers, three tabs in the visualizer, one
+store and one activity feed behind all of it. It is the heaviest thing here —
+expect minutes and a few gigabytes of containers.
+
+| | Azure | AWS | GCP |
+|---|---|---|---|
+| Transport | HTTPS (the SDKs insist) | HTTP | HTTP |
+| Endpoint config | one `metadata_host` | one per service | one per service |
+| Networking | VNets, subnets, NSGs, route tables | VPCs, subnets, gateways, security groups | VPC networks, subnetworks, firewalls, routes |
+| Object storage | Blob (+ Queue, Table) | S3 | Cloud Storage |
+| Managed Kubernetes | AKS | EKS | GKE |
+| Serverless compute | — | Lambda | Cloud Run |
+| Messaging | — | — | Pub/Sub |
+| NoSQL | Table storage | DynamoDB | — |
+| Secrets | Key Vault | — | — |
+| Registry | ACR | — | — |
+| Templates | ARM + Bicep | — | — |
+| Identity | Managed identities, RBAC | IAM | Service accounts, IAM |
+| CLI | `nimbus az register` | `aws --endpoint-url` | `nimbus gcp register` |
+
+Everything in the Identity row is **recorded and never enforced**: no request
+is refused for lacking a role, on any of the three. A local apply cannot
+prove a deployment's permissions are right.
 
 ## The visualizer
 

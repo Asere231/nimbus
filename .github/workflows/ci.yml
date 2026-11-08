@@ -586,6 +586,94 @@ jobs:
             exit 1
           fi
 
+  gcp-compute:
+    name: terraform gcp-gke + run/pubsub (k3s, docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Docker and the images both examples need
+        run: |
+          docker version --format '{{.Server.Version}}'
+          docker pull rancher/k3s:v1.34.12-k3s1
+          docker pull python:3.12-alpine
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus start --clouds gcp &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: GKE -- apply, kubectl, clean plan, destroy
+        working-directory: examples/terraform/gcp-gke
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          # `gcloud container clusters get-credentials` cannot work here --
+          # its auth plugin needs a Google credential Nimbus has none of --
+          # so this is the path CI and the docs both use.
+          ../../../bin/nimbus gcp kubeconfig nimbus-gke --out kubeconfig
+          kubectl --kubeconfig ./kubeconfig wait --for=condition=Ready node --all --timeout=300s
+          kubectl --kubeconfig ./kubeconfig get nodes
+          [ "$(kubectl --kubeconfig ./kubeconfig get nodes --no-headers | wc -l)" -ge 2 ] || {
+            echo "::error::the node pool did not add a node"; exit 1; }
+
+          set +e; terraform plan -detailed-exitcode -input=false; code=$?; set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::plan -detailed-exitcode returned $code; expected 0"
+            exit 1
+          fi
+
+          terraform destroy -auto-approve -input=false
+
+      - name: Cloud Run + Pub/Sub -- publish a message and see it arrive
+        working-directory: examples/terraform/gcp-run-pubsub
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          url=$(terraform output -raw service_url)
+          [ "$(curl -s --max-time 30 "$url")" = "nimbus cloud run: ok" ] || {
+            echo "::error::the Cloud Run service did not answer"; exit 1; }
+
+          eval "$(terraform output -raw publish_with_curl)"
+          sleep 5
+
+          # The handler prints what it decoded out of the push envelope, so
+          # finding this line proves the whole chain: publish, push, a real
+          # container running real code.
+          container=$(docker ps --filter label=nimbus.service=nimbus-echo -q)
+          docker logs "$container" 2>&1 | tee /tmp/run.log
+          grep -q '"hello":"world"' /tmp/run.log || {
+            echo "::error::the service never received the pushed message"; exit 1; }
+
+          terraform destroy -auto-approve -input=false
+
+      - name: No containers left behind
+        run: |
+          left=$(docker ps -aq --filter label=nimbus.resource-id)
+          if [ -n "$left" ]; then
+            echo "::error::destroy left containers running:"
+            docker ps -a --filter label=nimbus.resource-id
+            exit 1
+          fi
+
   terraform:
     name: terraform examples
     runs-on: ubuntu-latest

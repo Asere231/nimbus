@@ -4,10 +4,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,15 +21,37 @@ import (
 // A zip entry is a NAME, not a path that can be trusted. "../../etc/passwd"
 // is a legal entry, and extracting it with filepath.Join leaves the
 // directory entirely -- the same trap as an S3 key, refused the same way.
+// Every name here must be refused on EVERY platform. The old check deferred
+// to filepath, and the two hosts disagreed: "/absolute.py" is not absolute on
+// Windows (no volume name), so CI accepted an entry this test says to refuse,
+// while "C:/x" is absolute on Windows and an ordinary name on Unix. A package
+// that deploys on one machine and is refused on another is the bug; which way
+// round matters less.
 func TestUnpackRefusesAnEntryThatEscapesTheDirectory(t *testing.T) {
-	for _, name := range []string{"../escape.py", "../../etc/passwd", "/absolute.py"} {
+	for _, name := range []string{
+		"../escape.py", "../../etc/passwd", "/absolute.py",
+		"nested/../../escape.py",
+		`..\..\escape.py`, // backslashes: separators on Windows only
+		"C:/absolute.py",  // a drive letter, absolute on Windows only
+	} {
 		archive := zipWith(t, map[string]string{name: "x = 1\n"})
 		dir := filepath.Join(t.TempDir(), "code")
 		if err := Unpack(archive, dir); err == nil {
 			t.Errorf("%q was accepted", name)
-		} else if !strings.Contains(err.Error(), name) {
+		} else if !strings.Contains(err.Error(), fmt.Sprintf("%q", name)) {
+			// Quoted, because %q escapes a backslash and the raw name would
+			// not be a substring of its own error message.
 			t.Errorf("the error must name the entry it refused: %v", err)
 		}
+	}
+}
+
+// The drive-letter rule must not swallow a colon used as an ordinary
+// character, which is legal in a zip name and in an S3 key.
+func TestUnpackAcceptsAColonThatIsNotADriveLetter(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "code")
+	if err := Unpack(zipWith(t, map[string]string{"a:b.py": "x = 1\n"}), dir); err != nil {
+		t.Fatalf("a legal name with a colon was refused: %v", err)
 	}
 }
 
@@ -40,6 +64,15 @@ func TestUnpackWritesTheCodeAndKeepsTheExecutableBit(t *testing.T) {
 	info, err := os.Stat(filepath.Join(dir, "bootstrap"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Windows has no executable bit: a file mode there drives only the
+	// read-only flag, so this comes out as -rw-rw-rw- however it was
+	// written. Nothing is lost -- the bit matters inside the Linux
+	// container that runs the handler, and the host it was unpacked on
+	// cannot express it. Skipped rather than weakened, so the assertion
+	// stays exact where it can be made.
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows file modes cannot carry an executable bit")
 	}
 	// A custom runtime's bootstrap has to stay runnable, or the container
 	// fails with "exec format error" and names nothing useful.

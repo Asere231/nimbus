@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+Four red CI jobs, three causes, none of them visible on a Mac. The two AWS
+Docker jobs had never passed since Milestone 8 and the GKE one failed on its
+first run — all of it one missing Docker flag.
+
+- **Every container now gets `--add-host host.docker.internal:host-gateway`.**
+  That name is a Docker Desktop convenience; on Docker Engine, which is what
+  Linux CI runs, it does not resolve at all. A Lambda's `AWS_ENDPOINT_URL`
+  and the k3s token-webhook kubeconfig both use it, so EKS and GKE answered
+  `kubectl` with a 401 — the API server was up and could not reach the
+  webhook to review the token. Passed unconditionally in `docker.runArgs`,
+  because a per-cloud opt-in is what was forgotten in the first place.
+- **A zip entry and an S3 key are judged as names, not paths.** `funcs.safeJoin`
+  deferred to `filepath.IsAbs`, which is false for `/absolute.py` on Windows
+  — so an absolute entry was accepted there. `cleanKey` split only on `/`, so
+  `a\..\..\x` reached `filepath.Join`, where Windows reads the backslashes
+  as separators and the key leaves the data directory. Both now refuse the
+  same name on every platform.
+- **The Lambda example and its CI job send `--payload fileb://`.** There is no
+  inline payload both aws-cli versions accept: v2 reads one as base64, v1
+  rejects the flag that fixes that as an unknown option.
+- The executable-bit assertion is skipped on Windows, which cannot express one.
+
 ## 0.10.0 — 2026-11-07
 
 Milestone 10: GCP compute. GKE, Pub/Sub and Cloud Run, which finishes the

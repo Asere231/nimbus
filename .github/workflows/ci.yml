@@ -486,8 +486,18 @@ jobs:
 
           # The handler must really run, and reach DynamoDB through
           # AWS_ENDPOINT_URL with no endpoint in its own code.
+          #
+          # The payload goes through fileb:// because the two aws-cli major
+          # versions disagree about an inline one, and there is no inline
+          # spelling that both accept. v2 -- what the runners ship -- reads
+          # --payload as base64 and fails with `Invalid base64: "{"id":...`,
+          # wanting --cli-binary-format raw-in-base64-out; v1, which this
+          # project was measured against, takes the JSON raw and rejects
+          # that flag outright as an unknown option. fileb:// means "these
+          # bytes, verbatim" to BOTH, so it is the one portable form.
+          printf '{"id":"ci","note":"from CI"}' > payload.json
           aws $E lambda invoke --function-name nimbus-writer \
-            --payload '{"id":"ci","note":"from CI"}' out.json
+            --payload fileb://payload.json out.json
           cat out.json
           grep -q '"written": "ci"' out.json || {
             echo "::error::the handler did not return what it should"; exit 1; }

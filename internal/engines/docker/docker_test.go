@@ -292,3 +292,52 @@ func TestRealContainerLifecycle(t *testing.T) {
 		t.Error("container still exists after removal")
 	}
 }
+
+// Every container Nimbus starts has to be able to reach back to Nimbus:
+// a Lambda handler reads AWS_ENDPOINT_URL, a k3s API server calls the
+// TokenReview webhook, and both of those addresses say
+// host.docker.internal. That name is a DOCKER DESKTOP convenience and does
+// not exist on Docker Engine, which is what Linux CI runs -- so the flag
+// has to be passed explicitly, and the one place that cannot be forgotten
+// per cloud is here.
+//
+// Measured: without it, the EKS and GKE jobs failed with
+// "You must be logged in to the server" -- a 401, because the API server
+// could not resolve the webhook host, NOT a connection error. The AKS job
+// passed throughout, because Azure authenticates with k3s's own kubeconfig
+// and never calls back out. A 401 from a cluster you just created is this
+// bug's signature.
+func TestEveryContainerCanReachTheHostThatStartedIt(t *testing.T) {
+	args := runArgs(RunOptions{Name: "nimbus-test-1", Image: "alpine"})
+
+	found := ""
+	for i, a := range args {
+		if a == "--add-host" && i+1 < len(args) {
+			found = args[i+1]
+		}
+	}
+	if found != "host.docker.internal:host-gateway" {
+		t.Errorf("no host-gateway mapping in %v", args)
+	}
+}
+
+// The image and its arguments must stay LAST: anything after the image name
+// is the container's command, so a flag appended there silently becomes an
+// argument to the entrypoint instead of to docker.
+func TestTheImageAndItsArgumentsComeLast(t *testing.T) {
+	args := runArgs(RunOptions{
+		Name:  "nimbus-test-1",
+		Image: "rancher/k3s:v1.34.12-k3s1",
+		Args:  []string{"server", "--disable=traefik"},
+		Ports: map[string]string{"127.0.0.1:6443": "6443"},
+		Env:   map[string]string{"K3S_TOKEN": "x"},
+	})
+
+	tail := args[len(args)-3:]
+	want := []string{"rancher/k3s:v1.34.12-k3s1", "server", "--disable=traefik"}
+	for i := range want {
+		if tail[i] != want[i] {
+			t.Fatalf("args end %v, want them to end %v", tail, want)
+		}
+	}
+}

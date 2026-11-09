@@ -200,8 +200,21 @@ func (s *objectStore) load() {
 // Nothing a client sends is trusted with a path. "../../etc/passwd" is a
 // legal S3 key -- S3 stores it flat and it means nothing -- but written
 // through filepath.Join it would leave the data directory entirely.
+// A key knows only "/", so anything the HOST filesystem would read as a
+// separator has to be refused here, while it is still just a character.
+// `a\..\..\x` is one harmless segment to a "/"-split check and three
+// levels up to filepath.Join on Windows; "C:/x" is an ordinary name on Unix
+// and absolute on Windows. Judging the key by S3's own rules makes the same
+// request refused on every machine, which is what a client's key deserves.
 func cleanKey(key string) (string, bool) {
-	if key == "" || strings.HasPrefix(key, "/") {
+	if key == "" || strings.HasPrefix(key, "/") || strings.Contains(key, `\`) {
+		return "", false
+	}
+	// A single letter then a colon, at the end of the first segment: a
+	// Windows drive. Narrow, because a colon elsewhere is a legal character
+	// in a key -- a timestamp has two of them.
+	if len(key) >= 2 && key[1] == ':' && isASCIILetter(key[0]) &&
+		(len(key) == 2 || key[2] == '/') {
 		return "", false
 	}
 	for _, part := range strings.Split(key, "/") {
@@ -210,4 +223,8 @@ func cleanKey(key string) (string, bool) {
 		}
 	}
 	return key, true
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }

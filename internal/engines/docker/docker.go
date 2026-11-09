@@ -233,7 +233,30 @@ func (c *CLI) Available(ctx context.Context) error {
 
 // Run starts a detached container.
 func (c *CLI) Run(ctx context.Context, opts RunOptions) (string, error) {
+	out, err := c.run(ctx, runArgs(opts)...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// runArgs builds the `docker run` command line. It is a pure function so the
+// flags can be asserted about: a missing one is usually not a failure to start
+// but a container that starts and then cannot do its job, which surfaces
+// somewhere else entirely.
+func runArgs(opts RunOptions) []string {
 	args := []string{"run", "-d", "--name", opts.Name}
+
+	// Every container Nimbus starts needs a route back to Nimbus --
+	// AWS_ENDPOINT_URL for a Lambda handler, the TokenReview webhook for a
+	// k3s API server. Those addresses are written as host.docker.internal,
+	// which Docker DESKTOP provides for free and Docker ENGINE does not; on
+	// Linux it resolves only with this mapping. Unconditional rather than a
+	// field on RunOptions, because a per-cloud opt-in is exactly what was
+	// forgotten: the name worked on a Mac and every Linux CI job that
+	// depended on it failed. Needs Docker 20.10+ for host-gateway.
+	args = append(args, "--add-host", "host.docker.internal:host-gateway")
+
 	if opts.Privileged {
 		args = append(args, "--privileged")
 	}
@@ -255,14 +278,11 @@ func (c *CLI) Run(ctx context.Context, opts RunOptions) (string, error) {
 	for _, t := range opts.TmpFS {
 		args = append(args, "--tmpfs", t)
 	}
+	// The image and its command go last: docker treats everything after the
+	// image name as the container's own arguments.
 	args = append(args, opts.Image)
 	args = append(args, opts.Args...)
-
-	out, err := c.run(ctx, args...)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
+	return args
 }
 
 // Stop stops a container; one that is already gone is not an error.

@@ -89,20 +89,66 @@ func copyEntry(f *zip.File, target string) error {
 }
 
 // safeJoin refuses an entry that would land outside dir.
+//
+// The decision is made on the RAW zip name, by zip's own rules -- entries
+// are always forward-slash separated, whatever wrote them -- and not on a
+// platform-cleaned path, because the two host platforms disagree about the
+// same name in both directions:
+//
+//   - "/absolute.py" is absolute on Unix, and filepath.IsAbs is FALSE for it
+//     on Windows, where a path needs a volume name to be absolute. So the
+//     old check let it through on Windows (CI caught this, with the entry
+//     landing inside dir rather than escaping -- harmless there, and
+//     accepted when it should never be).
+//   - "C:/x" is the mirror image: absolute on Windows, an ordinary relative
+//     name containing a colon on Unix.
+//
+// Judging the name itself makes a package that is refused on one machine
+// refused on every machine, which matters more than either platform's rules:
+// the same zip must not deploy in CI and fail on a laptop.
 func safeJoin(dir, name string) (string, error) {
-	// Zip entries always use forward slashes, whatever wrote them.
-	clean := filepath.Clean(filepath.FromSlash(name))
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("the deployment package contains the entry %q, "+
-			"which would be written outside the function's directory", name)
+	bad := func(why string) error {
+		return fmt.Errorf("the deployment package contains the entry %q, "+
+			"which %s", name, why)
 	}
-	target := filepath.Join(dir, clean)
-	// Belt and braces, for a name that cleans to something unexpected on
-	// one platform's path rules and not another's.
-	if rel, err := filepath.Rel(dir, target); err != nil || strings.HasPrefix(rel, "..") {
+	if name == "" {
+		return "", bad("has no name")
+	}
+	// A backslash is not a separator in a zip name, so a name containing one
+	// means either a non-conformant writer or an attempt to be read as a path
+	// on Windows only. Either way it is not a name to guess about.
+	if strings.Contains(name, `\`) {
+		return "", bad("contains a backslash, which is not a zip path separator")
+	}
+	if strings.HasPrefix(name, "/") {
+		return "", bad("is an absolute path")
+	}
+	// A drive letter, which only the leading segment can carry: "C:/x" is
+	// absolute on Windows and an ordinary name with a colon in it on Unix.
+	// The rule is a single letter, a colon, then the end of the segment --
+	// narrow on purpose, because a colon is a legal character in a zip name
+	// and refusing "a:b.py" would reject a package that works everywhere.
+	if len(name) >= 2 && name[1] == ':' && isLetter(name[0]) &&
+		(len(name) == 2 || name[2] == '/') {
+		return "", bad("begins with a drive letter")
+	}
+	for _, seg := range strings.Split(name, "/") {
+		if seg == ".." {
+			return "", bad("would be written outside the function's directory")
+		}
+	}
+
+	target := filepath.Join(dir, filepath.FromSlash(name))
+	// Belt and braces: whatever the rules above missed, the result still has
+	// to be inside dir.
+	if rel, err := filepath.Rel(dir, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("the deployment package contains the unusable entry %q", name)
 	}
 	return target, nil
+}
+
+func isLetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 // hashOf is a short stable digest, for container and directory names.

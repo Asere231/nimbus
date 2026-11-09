@@ -15,8 +15,16 @@
 #     export AWS_ACCESS_KEY_ID=nimbus AWS_SECRET_ACCESS_KEY=nimbus
 #     export AWS_DEFAULT_REGION=us-east-1
 #
-#   4. aws --endpoint-url http://localhost:4702 lambda invoke \
-#        --function-name nimbus-writer --payload '{"id":"1"}' /dev/stdout
+#   4. printf '{"id":"1"}' > payload.json
+#      aws --endpoint-url http://localhost:4702 lambda invoke \
+#        --function-name nimbus-writer --payload fileb://payload.json /dev/stdout
+#
+#      The payload comes from a file because no INLINE --payload works on
+#      both aws-cli versions: v2 reads one as base64 and fails with
+#      `Invalid base64: "{"id":"1"}"` unless given
+#      --cli-binary-format raw-in-base64-out, and v1 rejects that flag as an
+#      unknown option. fileb:// means "these bytes, verbatim" to both.
+#
 #      aws --endpoint-url http://localhost:4702 dynamodb scan --table-name nimbus-items
 #      aws --endpoint-url http://localhost:4702 logs filter-log-events \
 #        --log-group-name /aws/lambda/nimbus-writer
@@ -146,7 +154,9 @@ resource "aws_lambda_function" "writer" {
 }
 
 output "invoke" {
-  value = "aws --endpoint-url ${var.nimbus_endpoint} lambda invoke --function-name ${aws_lambda_function.writer.function_name} --payload '{\"id\":\"1\"}' /dev/stdout"
+  # fileb:// rather than an inline payload: it is the only spelling both
+  # aws-cli v1 and v2 read as raw bytes. See the note at the top.
+  value = "printf '{\"id\":\"1\"}' > payload.json && aws --endpoint-url ${var.nimbus_endpoint} lambda invoke --function-name ${aws_lambda_function.writer.function_name} --payload fileb://payload.json /dev/stdout"
 }
 
 output "scan" {

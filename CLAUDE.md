@@ -171,6 +171,18 @@ Anything that really runs lives in `internal/engines`, shared by every cloud and
 
 The k3s engine now serves three clouds (AKS, EKS, GKE) unchanged. A cloud plugin supplies the resource id, the node count and a container name prefix; it keeps its own hooks, API shapes and bookkeeping. If you find yourself adding a cloud's vocabulary to an engine, it belongs in the plugin instead.
 
+## Host and platform facts (the machine, not a cloud)
+
+These are about the host Nimbus runs on, so they bite every cloud at once and
+only ever show up on a machine you are not using.
+
+- **`host.docker.internal` is a Docker DESKTOP convenience and does not exist on Docker Engine.** Nimbus writes it into a Lambda's `AWS_ENDPOINT_URL` and into the k3s token-webhook kubeconfig, and on Linux it resolves only with `--add-host host.docker.internal:host-gateway` — which `docker.runArgs` now passes on **every** container, unconditionally, because a per-cloud opt-in is exactly what was forgotten. The signature is a **401 from a cluster you just created**: `kubectl` says "You must be logged in to the server", not a connection error, because the API server is up and could not reach the webhook to review the token. AKS passed throughout while EKS and GKE failed, which is the discriminator — Azure authenticates with k3s's own kubeconfig and never calls back out. Nimbus binds `:port` rather than loopback, so the bridge gateway reaches it; needs Docker 20.10+ for `host-gateway`. Verified on Docker Desktop 29.9.2 that the override still reaches the host, so it is not a Linux-only flag with a macOS cost.
+- **A name that will become a path must be judged as a NAME, not handed to `filepath`.** The two hosts disagree in both directions: `/absolute.py` is absolute on Unix and `filepath.IsAbs` is **false** for it on Windows, which needs a volume name — so a `filepath.IsAbs` guard let it through there; `C:/x` is the mirror image, absolute on Windows and an ordinary name containing a colon on Unix; and a backslash is a separator on Windows only, so `a\..\..\x` is one harmless segment to a `/`-split check and three levels up to `filepath.Join`. `funcs.safeJoin` and S3's `cleanKey` both judge the raw, slash-separated name now, so the same zip or key is refused on every machine. A drive letter is one letter, a colon, then end-of-segment — narrow on purpose, because a colon elsewhere is legal in a key and a timestamp has two.
+- **Windows has no executable bit.** A file mode there drives only the read-only flag, so an unpacked `bootstrap` comes out `-rw-rw-rw-` however it was written. Nothing is lost — the bit matters inside the Linux container that runs the handler — but an assertion about it has to be skipped on Windows rather than weakened everywhere.
+- **Windows's `filepath.IsAbs` and its missing executable bit are why the Windows CI leg exists.** It is the only leg that is not Linux or macOS, and both of the above were invisible on the other two.
+- **aws-cli v1 and v2 have NO common inline `--payload`.** v2 reads one as base64 and fails with `Invalid base64: "{"id":...`, wanting `--cli-binary-format raw-in-base64-out`; v1 — what this project was measured against — takes the JSON raw and rejects that flag outright as `Unknown options`. Measured both ways. `--payload fileb://file` means "these bytes, verbatim" to both, so it is the only portable spelling, and it is what CI and the example use.
+- **A CI job added in a close-out and never looked at can be red for three milestones.** The two AWS Docker jobs went in with M8 and had never once passed; the GKE job failed on its first run. All of it was the `host.docker.internal` gap, invisible on the Mac everything was proven on. Reading `gh run list` is part of closing out a milestone, not an optional extra.
+
 ## How a request flows (AWS)
 
 1. `internal/aws/server.go` `ServeHTTP` records the request on the bus and routes it.
@@ -213,6 +225,7 @@ Each milestone has a prompt in `docs/prompts/`. When asked to work on one:
 4. **Prove it with the real client** (Terraform, `az`, `kubectl`, `aws`, `gcloud`) on the owner's machine. The owner runs commands that need their machine (Docker, trusting certs, installing tools); tell them exactly what to run and what output to paste back.
 5. **Stop at the done-criteria.** Do not start the next milestone. Note follow-ups in `docs/ROADMAP.md` under "Later".
 6. **Close out:** all checks pass (`gofmt -l .`, `go vet ./...`, `go test ./...`); add any new protocol facts to the list above; mark the milestone done in `docs/ROADMAP.md` and move "Current" to the next one; write a short entry in `docs/CHANGELOG.md`; commit with a clear message.
+7. **Then read CI** (`gh run list`, `gh run view --log-failed`) on the pushed commit, and fix what is red before calling the milestone finished. Local green is not CI green: the Linux runners have no Docker Desktop and the Windows leg has neither Unix path rules nor an executable bit. Any job added in this milestone has never run before — check it specifically, and check that a job added in an EARLIER one has actually been passing, because a job nobody looks at stays red.
 
 If a session runs long, stop at a green, committed checkpoint and write what is left at the top of `docs/ROADMAP.md`, so the next session can resume from it.
 

@@ -330,6 +330,24 @@ func TestKeysCannotEscapeTheBucketDirectory(t *testing.T) {
 	if _, ok := cleanKey("img/logo.svg"); !ok {
 		t.Error("an ordinary nested key must still be allowed")
 	}
+
+	// A key is judged by S3's rules, which know only "/" -- so a backslash
+	// has to be refused HERE, where it is still just a character. By the
+	// time the key reaches filepath.Join on Windows the backslashes are
+	// separators and `a\..\..\x` leaves the data directory, while the
+	// "/"-split check above sees one harmless segment. The same asymmetry
+	// the funcs unpacker was caught by, in the service that set the rule.
+	for _, key := range []string{
+		`..\..\escape`, `a\..\..\escape`, `C:/absolute`, "C:",
+	} {
+		if _, ok := cleanKey(key); ok {
+			t.Errorf("cleanKey(%q) was accepted", key)
+		}
+	}
+	// And a colon that is not a drive letter is an ordinary S3 key.
+	if _, ok := cleanKey("logs/2026-11-08T04:45:17Z.json"); !ok {
+		t.Error("a key with a colon in it must still be allowed")
+	}
 }
 
 // Objects are bytes on disk with --persist, and they have to come back.

@@ -23,6 +23,15 @@ first run — all of it one missing Docker flag.
   inline payload both aws-cli versions accept: v2 reads one as base64, v1
   rejects the flag that fixes that as an unknown option.
 - The executable-bit assertion is skipped on Windows, which cannot express one.
+- **An AKS test stopped racing the thing it was testing.** It asked for
+  credentials straight after the PUT and expected "not ready", which means
+  beating the provisioning goroutine: 200 passes in a row locally, and one
+  red macOS build. It now holds the cluster un-ready by making the container
+  fail to start, which nothing can race.
+- **The EKS and GKE jobs wait for the node COUNT before waiting on Ready.**
+  `kubectl wait --all` matches only the nodes that exist when it runs, so it
+  was returning satisfied with the control plane alone and never waiting for
+  the pool's agent to register.
 
 ## 0.10.0 — 2026-11-07
 

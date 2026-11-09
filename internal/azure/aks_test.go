@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"github.com/Asere231/nimbus/internal/engines/k3s"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/Asere231/nimbus/internal/core"
 	"github.com/Asere231/nimbus/internal/engines/docker"
+	"github.com/Asere231/nimbus/internal/engines/k3s"
 )
 
 // Fake PEM blobs. Only renderKubeconfig's base64 handling cares what is in
@@ -165,8 +166,19 @@ func TestKubeconfigIsStableAcrossCalls(t *testing.T) {
 
 // Asking for credentials before the cluster is ready must say so, not hand
 // back an empty kubeconfig that fails confusingly in kubectl later.
+//
+// The cluster is held un-ready by making the container fail to start, NOT by
+// asking immediately after the PUT and hoping to beat the provisioning
+// goroutine. That race passes 200 times in a row on an idle machine and
+// loses on a loaded CI runner -- measured: eight concurrent copies of this
+// test, seven failures -- which is how it reached macOS as a red build
+// having never failed locally. The same lesson as the AKS node pool's lost
+// update: if a test's subject is a state, put it in that state rather than
+// arriving before something else changes it.
 func TestCredentialsBeforeReadyReportNotReady(t *testing.T) {
-	srv, _, _ := newAKSTestServer(t)
+	srv, _, f := newAKSTestServer(t)
+	f.FailRun = errors.New("no container for you")
+
 	rg := sub + "/resourceGroups/rg-aks4"
 	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
 	id := rg + "/providers/Microsoft.ContainerService/managedClusters/demo4"

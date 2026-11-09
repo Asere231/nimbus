@@ -574,8 +574,19 @@ jobs:
           # so this passing means the token authentication webhook worked.
           aws --endpoint-url http://localhost:4702 eks update-kubeconfig \
             --name nimbus --kubeconfig ./kubeconfig
-          kubectl --kubeconfig ./kubeconfig get nodes
+          # `kubectl wait --all` matches only the nodes that EXIST when it
+          # runs, so on a slower runner it returns satisfied with the control
+          # plane alone and never waits for the pool's agent to register --
+          # which is what happened here: one Ready node, five seconds after
+          # the apply. Wait for the COUNT first, the way the AKS scale step
+          # already does, and only then on the condition.
+          for i in $(seq 1 60); do
+            n=$(kubectl --kubeconfig ./kubeconfig get nodes --no-headers 2>/dev/null | wc -l)
+            [ "$n" -ge 2 ] && break
+            sleep 5
+          done
           kubectl --kubeconfig ./kubeconfig wait --for=condition=Ready node --all --timeout=300s
+          kubectl --kubeconfig ./kubeconfig get nodes
           [ "$(kubectl --kubeconfig ./kubeconfig get nodes --no-headers | wc -l)" -ge 2 ] || {
             echo "::error::the node group did not add a node"; exit 1; }
 
@@ -638,6 +649,17 @@ jobs:
           # its auth plugin needs a Google credential Nimbus has none of --
           # so this is the path CI and the docs both use.
           ../../../bin/nimbus gcp kubeconfig nimbus-gke --out kubeconfig
+          # `kubectl wait --all` matches only the nodes that EXIST when it
+          # runs, so on a slower runner it returns satisfied with the control
+          # plane alone and never waits for the pool's agent to register --
+          # which is what happened here: one Ready node, five seconds after
+          # the apply. Wait for the COUNT first, the way the AKS scale step
+          # already does, and only then on the condition.
+          for i in $(seq 1 60); do
+            n=$(kubectl --kubeconfig ./kubeconfig get nodes --no-headers 2>/dev/null | wc -l)
+            [ "$n" -ge 2 ] && break
+            sleep 5
+          done
           kubectl --kubeconfig ./kubeconfig wait --for=condition=Ready node --all --timeout=300s
           kubectl --kubeconfig ./kubeconfig get nodes
           [ "$(kubectl --kubeconfig ./kubeconfig get nodes --no-headers | wc -l)" -ge 2 ] || {

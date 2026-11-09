@@ -1,7 +1,11 @@
 # Roadmap
 
-**Current: Phase 3 is complete. There is no Milestone 11 prompt yet —
-`docs/prompts/README.md` says what a new one should look like.**
+**Current: Milestone 11 — compute instances
+(`docs/prompts/m11-compute-instances.md`). Phases 1 to 3 are complete.**
+
+Phase 4 is what is left for the three clouds to be functional rather than
+merely broad: the primitive that still does not run, the defects that
+mislead, and the limitation that most undercuts the point of the project.
 
 Milestones 1 to 10 are done, on macOS 27 (arm64) with azurerm 4.81.0,
 aws 5.100.0, google 6.50.0, az 2.90.0, aws-cli 1.40.33, gcloud 592.0.0 and
@@ -127,6 +131,20 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 |---|---|---|
 | 9 | ~~Core: OAuth, Resource Manager projects, Compute networks, GCS~~ **done** | The `google` provider creates a VPC and a bucket via `*_custom_endpoint` settings |
 | 10 | ~~GKE on k3s, Pub/Sub, Cloud Run in Docker~~ **done** | A GKE cluster is reachable with `kubectl` |
+
+## Phase 4 — making it functional
+
+| # | Milestone | Done when |
+|---|---|---|
+| 11 | **Compute instances** on a new `vm` engine, all three clouds | `ssh` into an instance Terraform created, and its user-data output is in the console log |
+| 12 | **Correctness pass**: AKS node resource group, namespaces, S3 multipart, the feed after a restart | A >8 MB `aws s3 cp` works, a destroy leaves no `MC_*` group, and a pod outside `default` is drawn |
+| 13 | **Authorization core + AWS IAM**, opt-in via `--enforce-iam` | An apply fails with a legible `AccessDenied` and succeeds once the policy grants the action |
+| 14 | **Azure RBAC, GCP IAM, and explaining a decision** | The inspector says why the current principal is allowed or denied, on all three clouds |
+
+Milestone 11 is first because it is the clearest gap and the `vm` engine
+follows a pattern that has now worked twice (`k3s`, `run`). Authorization
+comes last because it is the largest, and because refusing access is easier
+to demonstrate once there are instances to refuse it to.
 
 ## Design decisions still open
 

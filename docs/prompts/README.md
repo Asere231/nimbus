@@ -21,6 +21,10 @@ Do them in order. Each one ends at a clean commit with the milestone marked done
 | `m08-aws-compute.md` | EKS, Lambda, DynamoDB | + Docker |
 | `m09-gcp-core.md` | GCP: projects, networks, Cloud Storage | + gcloud CLI |
 | `m10-gcp-compute.md` | GKE, Pub/Sub, Cloud Run | + Docker |
+| `m11-compute-instances.md` | Instances on all three clouds, on a new `vm` engine | + Docker, ssh |
+| `m12-correctness-pass.md` | Four defects that mislead rather than merely lack | + Docker, AWS CLI |
+| `m13-authorization-core.md` | Authorization that can say no: the engine, and AWS IAM | Terraform |
+| `m14-rbac-and-explain.md` | Azure RBAC, GCP IAM, and showing why | Browser |
 
 ## If a session goes off track
 

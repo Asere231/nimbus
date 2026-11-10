@@ -372,3 +372,105 @@ func TestASnapshotSharingTheRunsTimestampStillCounts(t *testing.T) {
 		t.Errorf("steps = %d, want the create to still be a step", run.Steps)
 	}
 }
+
+// The activity feed after a restart.
+//
+// A browser connecting to /api/events was seeded from the bus's in-memory
+// ring, which a new process starts empty -- so the feed said nothing had
+// ever happened, while the timeline beside it replayed the whole history
+// from the journal. RecentEvents is what the feed uses instead.
+//
+// Snapshots are excluded, and that is the point of having a method rather
+// than reusing AllEvents: a restart writes one `kind: "snapshot"` record
+// per resource straight to the journal, saying "this already existed". They
+// are deliberately never published, because a feed that listed them would
+// be reporting things that did not happen -- every restart would look like
+// somebody had recreated the world.
+func TestRecentEventsFeedsTheActivityFeedAfterARestart(t *testing.T) {
+	dir := t.TempDir()
+	bus := NewBus(10)
+	j, err := OpenJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bus.SetJournal(j)
+	for i := 0; i < 5; i++ {
+		bus.Publish(Event{Kind: "resource", Action: "create", ResourceID: "/id/r", Name: "r"})
+	}
+	// A restart: the resources that survived are snapshotted into the
+	// journal without being published.
+	j.AppendSnapshot([]*Resource{
+		{Cloud: "azure", ID: "/id/r", Type: "T", Name: "r"},
+		{Cloud: "azure", ID: "/id/s", Type: "T", Name: "s"},
+	})
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := NewBus(10)
+	j2, err := OpenJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j2.Close()
+	fresh.SetJournal(j2)
+
+	// The ring is empty, which is exactly the bug: Subscribe's history has
+	// nothing to hand a browser.
+	if _, hist, cancel := fresh.Subscribe(); len(hist) != 0 {
+		cancel()
+		t.Fatalf("a fresh bus's ring has %d events, want 0", len(hist))
+	} else {
+		cancel()
+	}
+
+	got := fresh.RecentEvents(100)
+	if len(got) != 5 {
+		t.Fatalf("RecentEvents returned %d, want the 5 real events", len(got))
+	}
+	for _, e := range got {
+		if e.Kind == "snapshot" {
+			t.Error("a snapshot reached the feed; a restart is not something that happened")
+		}
+	}
+}
+
+// Bounded, and the most recent: a long-lived journal must not send a
+// browser everything it has ever seen.
+func TestRecentEventsIsBoundedAndKeepsTheLatest(t *testing.T) {
+	dir := t.TempDir()
+	bus := NewBus(10)
+	j, err := OpenJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	bus.SetJournal(j)
+	for i := 0; i < 50; i++ {
+		bus.Publish(Event{Kind: "resource", Action: "create", ResourceID: "/id/r", Name: "r"})
+	}
+
+	got := bus.RecentEvents(10)
+	if len(got) != 10 {
+		t.Fatalf("RecentEvents(10) returned %d", len(got))
+	}
+	// The LAST ten, not the first: a feed shows what just happened.
+	if got[len(got)-1].Seq != 50 {
+		t.Errorf("the newest event is seq %d, want 50", got[len(got)-1].Seq)
+	}
+	if got[0].Seq != 41 {
+		t.Errorf("the oldest kept is seq %d, want 41", got[0].Seq)
+	}
+}
+
+// With no journal at all -- Nimbus without --persist -- it falls back to the
+// ring, so the feed behaves exactly as it did before.
+func TestRecentEventsFallsBackToTheRingWithNoJournal(t *testing.T) {
+	bus := NewBus(10)
+	for i := 0; i < 3; i++ {
+		bus.Publish(Event{Kind: "resource", Action: "create", ResourceID: "/id/r", Name: "r"})
+	}
+	if got := bus.RecentEvents(100); len(got) != 3 {
+		t.Errorf("RecentEvents with no journal returned %d, want 3", len(got))
+	}
+}

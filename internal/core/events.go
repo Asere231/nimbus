@@ -90,6 +90,37 @@ func (b *Bus) AllEvents() []Event {
 	return b.History()
 }
 
+// RecentEvents returns the last n events a browser should be shown when it
+// connects, newest last.
+//
+// It exists because the activity feed used to be seeded from the in-memory
+// ring alone, which a new process starts empty: after a restart the feed
+// said nothing had ever happened, while the timeline beside it replayed
+// the whole history from the journal. The journal is the superset, so this
+// reads from it when there is one and falls back to the ring otherwise.
+//
+// **Snapshots are excluded**, which is the reason this is not just
+// AllEvents with a limit. Startup writes one `kind: "snapshot"` record per
+// surviving resource straight to the journal -- never through the bus --
+// to give a later replay its baseline. They are a statement that something
+// already existed, not something that happened, and a feed listing them
+// would make every restart look like somebody had recreated the world.
+func (b *Bus) RecentEvents(n int) []Event {
+	all := b.AllEvents()
+
+	out := make([]Event, 0, len(all))
+	for _, e := range all {
+		if e.Kind == "snapshot" {
+			continue
+		}
+		out = append(out, e)
+	}
+	if n > 0 && len(out) > n {
+		out = out[len(out)-n:]
+	}
+	return out
+}
+
 // Subscribe returns a channel of events plus the recent history, and a
 // function to unsubscribe.
 func (b *Bus) Subscribe() (<-chan Event, []Event, func()) {

@@ -123,6 +123,13 @@ func Handler(store *core.Store, bus *core.Bus, info Info, blobs BlobBrowser, sec
 	})
 
 	// Live stream: replays recent history, then pushes every new event.
+	// feedBacklog is how much history a newly connected browser is shown.
+	// Enough to cover a `terraform apply` of any example -- the biggest is
+	// about sixty events -- and small enough that a long-lived journal does
+	// not flood a page that has just opened. The timeline is where the rest
+	// of the history lives.
+	const feedBacklog = 200
+
 	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -133,9 +140,21 @@ func Handler(store *core.Store, bus *core.Bus, info Info, blobs BlobBrowser, sec
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
-		ch, history, cancel := bus.Subscribe()
+		// Subscribe FIRST, then seed: an event published between the two
+		// is queued on the channel rather than lost, so the worst case is
+		// a line shown twice instead of one missing.
+		ch, _, cancel := bus.Subscribe()
 		defer cancel()
-		for _, e := range history {
+
+		// Seeded from the journal when there is one, not from the bus's
+		// in-memory ring, which a new process starts empty -- the feed used
+		// to say nothing had ever happened after a restart while the
+		// timeline beside it replayed everything. Snapshots are excluded by
+		// RecentEvents: a restart is not something that happened.
+		//
+		// Seeded from ONE source. Every published event is in both the ring
+		// and the journal, so sending both would double every line.
+		for _, e := range bus.RecentEvents(feedBacklog) {
 			send(w, e)
 		}
 		flusher.Flush()

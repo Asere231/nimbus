@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -418,5 +419,87 @@ func TestRunsAreListedAsSummariesAndFetchedWithEvents(t *testing.T) {
 
 	if code := getJSON(t, srv.URL+"/api/run?id=nope", nil); code != 404 {
 		t.Errorf("GET /api/run for an unknown id = %d, want 404", code)
+	}
+}
+
+// The activity feed after a restart.
+//
+// A browser connecting to /api/events was seeded from the bus's in-memory
+// ring, which a new process starts empty -- so the feed said nothing had
+// ever happened, while the timeline beside it replayed the whole history
+// from the journal. This is the same restart the timeline already survived:
+// a fresh bus and store, reading the journal the previous process wrote.
+func TestTheFeedIsPopulatedAfterARestart(t *testing.T) {
+	dir := t.TempDir()
+
+	// First process: three resources created, then a snapshot of what
+	// survived -- which is what startup writes and which must NOT reach
+	// the feed.
+	bus := core.NewBus(100)
+	store, err := core.NewStore(bus, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := core.OpenJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bus.SetJournal(j)
+	seed(store)
+	j.AppendSnapshot(store.List(func(*core.Resource) bool { return true }))
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second process: a new bus with an empty ring, the same journal.
+	fresh := core.NewBus(100)
+	freshStore, err := core.NewStore(fresh, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	j2, err := core.OpenJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j2.Close()
+	fresh.SetJournal(j2)
+
+	srv := httptest.NewServer(Handler(freshStore, fresh,
+		Info{Version: "test", Clouds: map[string]string{}}, nil, nil))
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/events", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+
+	type sseEvent struct {
+		Kind       string `json:"kind"`
+		ResourceID string `json:"resourceId"`
+	}
+	var seen []sseEvent
+	sc := bufio.NewScanner(res.Body)
+	for sc.Scan() && len(seen) < 3 {
+		line, ok := strings.CutPrefix(sc.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		var e sseEvent
+		if json.Unmarshal([]byte(line), &e) == nil {
+			seen = append(seen, e)
+		}
+	}
+
+	if len(seen) != 3 {
+		t.Fatalf("the feed replayed %d events after a restart, want the 3 creates", len(seen))
+	}
+	for _, e := range seen {
+		if e.Kind == "snapshot" {
+			t.Errorf("a snapshot reached the feed: %+v", e)
+		}
 	}
 }

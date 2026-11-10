@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.12.0 — 2026-11-10
+
+Milestone 12: the correctness pass. Defects that made Nimbus quietly
+**wrong** rather than merely incomplete — the kind that teach a reader
+something false.
+
+Four were planned. One of them did not exist, and fixing another uncovered
+something worse.
+
+- **S3 multipart upload.** `aws s3 cp` switches protocol by itself above
+  8 MB and never attempts a plain PUT, so a large file failed outright.
+  Five operations, all hanging off the object's path and told apart by
+  query parameters rather than by verb. A multipart object's ETag is the
+  digest of the PART digests with a `-N` suffix, not the MD5 of the bytes.
+- **...and the ranged GET that found.** The upload worked and the download
+  was still wrong: `aws s3 cp` downloads a large object with concurrent
+  ranged GETs, and Nimbus advertised `Accept-Ranges: bytes` while ignoring
+  the header — so every request returned the whole object and the client
+  assembled overlapping copies. A 20,000,000-byte file came back as
+  36,777,216 bytes with nothing erroring. `Range` is honoured now: 206 with
+  `Content-Range`, 416 for a range past the end, suffix ranges, clamping,
+  and the whole object for a header nothing can parse.
+- **An AKS cluster's node resource group dies with it.** The `MC_*` group
+  survived every destroy, and the cause was structural: a resource group is
+  parented to the subscription, so neither of `Store.Delete`'s cascade
+  routes could reach it. An audit of every side-effect `store.Put` found no
+  others; a Lambda's log group deliberately outlives its function, as in
+  real AWS, and is now pinned by a test saying so.
+- **The activity feed survives a restart.** It was seeded from the bus's
+  in-memory ring, which a new process starts empty, while the timeline
+  beside it replayed the journal — two panels, one store, opposite answers.
+  It reads `Bus.RecentEvents` now, which excludes the `snapshot` records a
+  restart writes: those say something already existed, not that something
+  happened.
+- **The namespace defect did not exist.** Both the prompt and the roadmap
+  said the k3s watcher mirrored only `default`. It never did — it hides the
+  system namespaces and mirrors the rest. Proven on all three clouds, and
+  the real gap was that nothing tested it: every UI test and the fixture
+  used a single namespace, so a false claim stood for three milestones. The
+  tests exist now, and the claim is corrected.
+
 ## 0.11.0 — 2026-11-10
 
 Milestone 11: compute instances. All three clouds now boot a machine — the

@@ -92,7 +92,7 @@ so there is nothing to trust on your machine.
 |---|---|
 | STS | `GetCallerIdentity`, `AssumeRole` |
 | EC2 | VPCs, subnets, internet and NAT gateways, route tables and routes, security groups and rules, tags, availability zones, account attributes, with the describe filters the provider sends |
-| S3 | Buckets path-style with their whole sub-configuration matrix (versioning, tagging, policy, encryption, public access block, ownership, …) and objects with real bytes on disk |
+| S3 | Buckets path-style with their whole sub-configuration matrix (versioning, tagging, policy, encryption, public access block, ownership, …) and objects with real bytes on disk. Large files work both ways: multipart upload above the CLI's 8 MB threshold, with the `-N` part-count ETag, and ranged GETs so a parallel download reassembles correctly |
 | IAM | Roles, users, managed and inline policies, attachments, instance profiles — recorded, never enforced |
 | EKS | Clusters and node groups as **real Kubernetes** (k3s in Docker). `aws eks update-kubeconfig` then `kubectl get nodes` works, through the same token authentication webhook real EKS uses |
 | EC2 instances | Machines that **really boot**: a container per instance, running your user data, keeping its filesystem across a stop and start, and serving its own metadata. Key pairs, instance types, lifecycle states and the attribute read-backs the provider makes |

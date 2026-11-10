@@ -1,8 +1,9 @@
 # Roadmap
 
-**Current: Milestone 12 — the correctness pass
-(`docs/prompts/m12-correctness-pass.md`). Phases 1 to 3 are complete, and
-Milestone 11 has given all three clouds instances that really boot.**
+**Current: Milestone 13 — authorization that can say no
+(`docs/prompts/m13-authorization-core.md`). Phases 1 to 3 are complete,
+Milestone 11 gave all three clouds instances that really boot, and
+Milestone 12 cleared the defects that made Nimbus quietly wrong.**
 
 Phase 4 is what is left for the three clouds to be functional rather than
 merely broad: the primitive that did not run (done), the defects that
@@ -138,7 +139,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 | # | Milestone | Done when |
 |---|---|---|
 | 11 | ~~**Compute instances** on a new `vm` engine, all three clouds~~ **done** | `nimbus ssh` into an instance Terraform created, and its boot-script output is in the console log |
-| 12 | **Correctness pass**: AKS node resource group, namespaces, S3 multipart, the feed after a restart | A >8 MB `aws s3 cp` works, a destroy leaves no `MC_*` group, and a pod outside `default` is drawn |
+| 12 | ~~**Correctness pass**: AKS node resource group, namespaces, S3 multipart, the feed after a restart~~ **done** | A >8 MB `aws s3 cp` round-trips byte for byte, a destroy leaves no `MC_*` group, and a pod outside `default` is drawn |
 | 13 | **Authorization core + AWS IAM**, opt-in via `--enforce-iam` | An apply fails with a legible `AccessDenied` and succeeds once the policy grants the action |
 | 14 | **Azure RBAC, GCP IAM, and explaining a decision** | The inspector says why the current principal is allowed or denied, on all three clouds |
 
@@ -154,6 +155,17 @@ to demonstrate once there are instances to refuse it to.
   apply does not finish before the machine is up. All three apply, plan clean,
   stop and start keeping their filesystem, and destroy leaving no containers.
   `nimbus ssh NAME` gives a shell on any of them without knowing which cloud.
+
+- Milestone 12 was the correctness pass, and one of its four defects turned
+  out not to exist: the k3s watcher had never filtered to `default`, so a
+  custom namespace already appeared — proven on all three clouds and now
+  covered by tests, with the stale claim corrected here and in CLAUDE.md.
+  The other three were real. The AKS node resource group now dies with its
+  cluster; S3 multipart upload works, and implementing it uncovered a worse
+  bug on the DOWNLOAD side, where ignoring `Range` while advertising
+  `Accept-Ranges` silently corrupted every large file; and the activity feed
+  is seeded from the journal, so it no longer claims nothing has happened
+  after a restart.
 
 ## Design decisions still open
 
@@ -173,8 +185,12 @@ to demonstrate once there are instances to refuse it to.
   mid-session would have disrupted the machine, so the ARM error and feed note
   are covered by a test against the Fake rather than by pulling the plug.
 
-- **Windows has only been DNS-tested.** No Windows machine has run Terraform,
+- **Windows has only been DNS-tested**, and Milestone 12 deliberately left it
+  that way rather than half-doing it. No Windows machine has run Terraform,
   `az` or `kubectl` against Nimbus; CI's Windows leg runs the Go tests only.
+  Given that three platform bugs reached `main` by only ever being proven on
+  a Mac, this is the gap to trust least, and it wants a session of its own on
+  a Windows machine.
   The certificate path matters there too: Windows has its own rules, and
   `nimbus cert` uses `Import-Certificate` into `CurrentUser\Root`.
 
@@ -265,10 +281,14 @@ to demonstrate once there are instances to refuse it to.
   Every request to the cluster is authenticated as `system:masters`, because
   the token webhook says yes to everything; the aws-auth ConfigMap and IAM
   role mapping are not modelled.
-- **S3 has no multipart upload and no object versioning.** `?versioning`
+- **S3 has multipart upload but no object versioning.** `?versioning`
   round-trips as a setting, but every PUT overwrites: there is one version
-  of an object. A file big enough for the CLI to switch to multipart (8 MB
-  by default) will fail.
+  of an object. An upload in flight is held in memory and bounded at 512 MB,
+  so it does not survive a restart — real S3 keeps an incomplete upload
+  until a lifecycle rule reaps it, and `ListMultipartUploads` here only ever
+  shows what this process started. A ranged GET honours one range; a
+  multi-range request is answered with the whole object rather than a
+  `multipart/byteranges` body, because no client Nimbus serves sends one.
 - **No presigned-URL verification.** A presigned request is routed by its
   `X-Amz-Credential` and then served like any other; the signature and the
   expiry are not checked, like every other signature here.

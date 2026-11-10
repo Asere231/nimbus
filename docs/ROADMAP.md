@@ -297,10 +297,10 @@ to demonstrate once there are instances to refuse it to.
   Terraform address; add a line when an example needs one.
 - **Plan overlays are topology-only.** The network and Kubernetes views draw
   the live graph and ignore a loaded plan.
-- **The Kubernetes view has only been checked against the fixture and one
-  real cluster shape.** Namespaces other than `default` are still filtered
-  out by the watcher, so a workload deployed elsewhere appears in neither
-  view.
+- **The Kubernetes view has been checked against the fixture and a real
+  cluster on each of the three clouds**, including a workload in a namespace
+  of its own. What it has not been checked against is a big cluster: the
+  layout is untested beyond a handful of objects, and nothing paginates.
 - **`REQUESTS_CA_BUNDLE` replaces the trust store rather than adding to it**,
   so while it points at the Nimbus CA, `az` cannot reach any real host — which
   breaks `az bicep install`, `az upgrade` and anything else that downloads.
@@ -331,8 +331,13 @@ to demonstrate once there are instances to refuse it to.
 - **Cluster watching polls every 3s per cluster.** Fine for a few clusters
   someone is looking at; the Kubernetes watch API would scale better but needs
   resourceVersion bookkeeping and re-sync handling.
-- **Only the default namespace is mirrored** into the graph; kube-system and
-  friends are hidden, so a workload deployed elsewhere will not appear.
+- **The SYSTEM namespaces are hidden** from the graph — `kube-system`,
+  `kube-public` and `kube-node-lease` — and every other namespace is
+  mirrored. That is deliberate: k3s runs about ten pods of its own, and
+  drawing them would bury the one deployment somebody made. (This entry used
+  to say only `default` was mirrored, which was never true; Milestone 12
+  proved a custom namespace appears on all three clouds and added the tests
+  that were missing.)
 
 - **Certificates expire yearly now** (397 days, forced by Apple's limit).
   `EnsureCerts` reissues the leaf automatically within 30 days of expiry and

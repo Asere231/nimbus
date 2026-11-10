@@ -140,3 +140,46 @@ func TestAnObjectWithNoOwnerIsFine(t *testing.T) {
 		t.Error("only a pod has restarts")
 	}
 }
+
+// Which namespaces reach the graph.
+//
+// This test exists because a claim with no test behind it survived three
+// milestones: both the Milestone 12 prompt and CLAUDE.md said the watcher
+// "mirrors only the default namespace". It never did -- it skips the SYSTEM
+// namespaces and mirrors everything else. Proven on all three clouds before
+// this was written: a pod in `demo` on AKS, `demo-aws` on EKS and
+// `demo-gcp` on GKE all appeared, and no kube-system object did.
+//
+// The filter is deliberate rather than incidental. k3s runs about ten pods
+// of its own -- coredns, traefik, metrics-server, local-path-provisioner and
+// their replica sets -- and drawing them would bury the one deployment
+// somebody actually made.
+func TestEveryNamespaceIsMirroredExceptTheSystemOnes(t *testing.T) {
+	for _, ns := range []string{"default", "demo", "demo-aws", "demo-gcp", "argocd", "a-namespace-nobody-predicted"} {
+		if isSystemNamespace(ns) {
+			t.Errorf("%q is treated as a system namespace; a workload there would vanish", ns)
+		}
+	}
+	// The three k3s creates for itself, and which stay hidden.
+	for _, ns := range []string{"kube-system", "kube-public", "kube-node-lease"} {
+		if !isSystemNamespace(ns) {
+			t.Errorf("%q should be hidden; k3s fills it with infrastructure", ns)
+		}
+	}
+}
+
+// An object's namespace reaches the stored body, which is what the
+// Kubernetes view groups by. Without it every workload would land in one
+// unnamed bucket.
+func TestTheNamespaceReachesTheStoredBody(t *testing.T) {
+	pod := decode(t, `{
+	  "metadata": {"name": "web", "namespace": "demo"},
+	  "spec": {"nodeName": "node-1"},
+	  "status": {"phase": "Running"}
+	}`)
+	body := k8sBody(typeK8sPod, "/clusters/c/kubernetes/pods/demo/web", "web", pod)
+	props, _ := body["properties"].(map[string]any)
+	if props["namespace"] != "demo" {
+		t.Errorf("namespace = %v, want demo", props["namespace"])
+	}
+}

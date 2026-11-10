@@ -245,3 +245,44 @@ test("a cluster belongs to the cloud it came from", () => {
   ));
   assert.deepEqual(m.clusters.map((c) => c.name), ["aks1", "eks1"]);
 });
+
+// More than one namespace, which nothing tested until Milestone 12.
+//
+// That gap is why a false claim survived three milestones: both the M12
+// prompt and CLAUDE.md said the watcher mirrored only `default`. It never
+// did — it hides the system namespaces and mirrors the rest — but every
+// test and the fixture used a single namespace, so nothing contradicted it.
+// Proven against real clusters on all three clouds before this was written.
+test("workloads are grouped by namespace, with default first", () => {
+  const objects = [
+    cluster("aks1"),
+    node("k3s-server"),
+    obj("pods", "web", { status: "Running" }, "demo"),
+    obj("pods", "batch", { status: "Running" }, "argocd"),
+    obj("pods", "nginx-1", { status: "Running" }),
+  ];
+  const c = kubernetesModel(map(...objects)).clusters[0];
+
+  assert.equal(c.namespaces.length, 3);
+  // default first, because it is where most things are; the rest by name,
+  // so the drawing does not reshuffle between polls.
+  assert.deepEqual(c.namespaces.map((n) => n.name), ["default", "argocd", "demo"]);
+
+  const demo = c.namespaces.find((n) => n.name === "demo");
+  // loosePods: a pod with no replica set behind it sits directly in its
+  // namespace rather than under a deployment.
+  assert.equal(demo.loosePods.length, 1);
+  assert.equal(demo.loosePods[0].name, "web");
+});
+
+// A namespace with nothing in it but a pod still gets drawn: hiding it
+// would say the cluster is empty when it is not.
+test("a namespace holding only loose pods is still a namespace", () => {
+  const c = kubernetesModel(map(
+    cluster("aks1"),
+    obj("pods", "worker", { status: "Running" }, "demo"),
+  )).clusters[0];
+  assert.equal(c.namespaces.length, 1);
+  assert.equal(c.namespaces[0].name, "demo");
+  assert.equal(c.namespaces[0].loosePods.length, 1);
+});

@@ -758,6 +758,35 @@
       },
       "createdAt": "2026-11-10T02:00:05Z",
       "updatedAt": "2026-11-10T02:00:20Z"
+    },
+    {
+      "cloud": "azure",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.ContainerService/managedClusters/aks-nimbus/kubernetes/pods/demo/worker",
+      "type": "Nimbus.Kubernetes/pods",
+      "name": "worker",
+      "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.ContainerService/managedClusters/aks-nimbus",
+      "location": "",
+      "backing": "real",
+      "body": {
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.ContainerService/managedClusters/aks-nimbus/kubernetes/pods/demo/worker",
+        "name": "worker",
+        "type": "Nimbus.Kubernetes/pods",
+        "namespace": "demo",
+        "status": "Running",
+        "properties": {
+          "namespace": "demo",
+          "status": "Running",
+          "node": "k3s-agent-1",
+          "labels": {
+            "app": "worker"
+          },
+          "restarts": 0,
+          "ownerName": "",
+          "ownerKind": ""
+        }
+      },
+      "createdAt": "2026-10-28T15:04:46Z",
+      "updatedAt": "2026-10-28T15:04:46Z"
     }
   ],
   "events": [
@@ -1167,6 +1196,17 @@
       "resourceType": "Microsoft.Compute/virtualMachines",
       "name": "vm-web",
       "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app"
+    },
+    {
+      "seq": 38,
+      "time": "2026-10-28T15:05:06Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "azure",
+      "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.ContainerService/managedClusters/aks-nimbus/kubernetes/pods/demo/worker",
+      "resourceType": "Nimbus.Kubernetes/pods",
+      "name": "worker",
+      "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.ContainerService/managedClusters/aks-nimbus"
     }
   ],
   "blobs": {
@@ -1199,12 +1239,12 @@
     {
       "id": "20261028T150411.000Z",
       "start": "2026-10-28T15:04:11Z",
-      "end": "2026-10-28T15:05:04Z",
-      "created": 28,
+      "end": "2026-10-28T15:05:06Z",
+      "created": 29,
       "updated": 1,
       "deleted": 0,
       "requests": 8,
-      "steps": 29,
+      "steps": 30,
       "events": [
         {
           "seq": 1,
@@ -1612,6 +1652,17 @@
           "resourceType": "Microsoft.Compute/virtualMachines",
           "name": "vm-web",
           "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app"
+        },
+        {
+          "seq": 38,
+          "time": "2026-10-28T15:05:06Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "azure",
+          "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.ContainerService/managedClusters/aks-nimbus/kubernetes/pods/demo/worker",
+          "resourceType": "Nimbus.Kubernetes/pods",
+          "name": "worker",
+          "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.ContainerService/managedClusters/aks-nimbus"
         }
       ]
     }

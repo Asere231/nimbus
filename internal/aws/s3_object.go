@@ -62,7 +62,10 @@ func (s *Server) serveObject(w http.ResponseWriter, r *http.Request, bucketName,
 }
 
 func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucketName, key string) *apiError {
-	data, err := io.ReadAll(io.LimitReader(r.Body, maxObject))
+	// readS3Body, not io.ReadAll: aws-cli v2 wraps a body in aws-chunked
+	// framing, and storing that framing as content is how a 20 MB file
+	// came back 162 bytes too long. See s3_chunked.go.
+	data, err := readS3Body(r, maxObject)
 	if err != nil {
 		return errorf(400, "IncompleteBody", "reading the body: %v", err)
 	}

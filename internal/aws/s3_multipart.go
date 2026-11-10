@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -182,7 +181,10 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request, bucket, key,
 	if err != nil || number < 1 || number > 10000 {
 		return errorf(400, "InvalidArgument", "Part number must be an integer between 1 and 10000")
 	}
-	data, rerr := io.ReadAll(io.LimitReader(r.Body, maxUploadBytes+1))
+	// A part body carries the same aws-chunked framing a whole object
+	// does, and this is where CI actually hit it: three framed parts, three
+	// lots of framing stored as content. See s3_chunked.go.
+	data, rerr := readS3Body(r, maxUploadBytes)
 	if rerr != nil {
 		return errorf(400, "IncompleteBody", "reading the part: %v", rerr)
 	}

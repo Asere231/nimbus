@@ -136,6 +136,14 @@ func registerAKSHooks(s *Server) {
 			return nil
 		},
 
+		// The node resource group is Azure's, not the user's: AKS creates
+		// it and AKS removes it. Synchronously here rather than in
+		// Deprovision, because it is bookkeeping rather than engine work --
+		// so a destroy that has returned has really taken it with it.
+		AfterDelete: func(s *Server, t target, body map[string]any) {
+			s.deleteNodeResourceGroup(t, body)
+		},
+
 		Deprovision: func(s *Server, t target) {
 			cl := s.k3s.Remove(t.ID)
 			if cl == nil {
@@ -391,4 +399,47 @@ func shortHash(s string) string { return k3s.StableHex(s, 4) }
 func stableGUID(s string) string {
 	h := k3s.StableHex(s, 16)
 	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
+}
+
+// deleteNodeResourceGroup removes the MC_* group a cluster created.
+//
+// It cannot happen by cascade, and that is structural rather than an
+// oversight: a resource group's ParentID is the SUBSCRIPTION, because that
+// is where one really lives. Store.Delete reaches descendants by ID prefix
+// or by ParentID, and the MC_ group is neither a prefix of the cluster's id
+// nor a child of it -- so no cascade can ever find it. It has to be deleted
+// by name, by the thing that made it.
+//
+// Two ways to find it, because the first can be missing. The cluster's own
+// body carries properties.nodeResourceGroup, which is exact; a body that
+// lost the field -- or a group left by an earlier run -- is found by the
+// nimbus-managed-by tag ensureNodeResourceGroup puts on it. Deleting the
+// group cascades to what is inside it, which is where AKS puts the
+// {cluster}-agentpool identity.
+func (s *Server) deleteNodeResourceGroup(t target, body map[string]any) {
+	prefix := "/subscriptions/" + t.Subscription + "/resourceGroups/"
+
+	if props, ok := body["properties"].(map[string]any); ok {
+		if name := str(props["nodeResourceGroup"]); name != "" {
+			if _, err := s.store.Delete(prefix + name); err == nil {
+				return
+			}
+		}
+	}
+
+	// No name to go on: find the group this cluster tagged as its own.
+	for _, res := range s.store.List(func(r *core.Resource) bool {
+		return r.Cloud == "azure" && r.Type == "Microsoft.Resources/resourceGroups"
+	}) {
+		var stored struct {
+			Tags map[string]string `json:"tags"`
+		}
+		if json.Unmarshal(res.Body, &stored) != nil {
+			continue
+		}
+		if strings.EqualFold(stored.Tags["nimbus-managed-by"], t.ID) {
+			_, _ = s.store.Delete(res.ID)
+			return
+		}
+	}
 }

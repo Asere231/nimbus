@@ -213,3 +213,24 @@ func TestALogGroupIsAResource(t *testing.T) {
 		t.Error("deleting a group left the resource behind")
 	}
 }
+
+// A log group OUTLIVES the function that created it, which is what real AWS
+// does: it is a separate resource holding what the function printed, and
+// deleting the function does not take it. Pinned so Milestone 12's leak
+// audit -- which went looking for exactly this shape and fixed the AKS node
+// resource group -- cannot be "completed" by deleting this one too.
+func TestALogGroupSurvivesTheFunctionThatMadeIt(t *testing.T) {
+	s := newTestServer(t)
+	s.ensureLogGroup("/aws/lambda/writer")
+
+	if _, err := s.store.Get(s.logGroupARN("/aws/lambda/writer")); err != nil {
+		t.Fatalf("the log group was not created: %v", err)
+	}
+	// Whatever happens to the function, the group and its lines stay.
+	if _, err := s.store.Delete(s.lambdaARN("writer")); err == nil {
+		t.Log("the function was there and is now gone")
+	}
+	if _, err := s.store.Get(s.logGroupARN("/aws/lambda/writer")); err != nil {
+		t.Error("the log group went with the function; real AWS keeps it")
+	}
+}

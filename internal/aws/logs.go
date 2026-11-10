@@ -135,6 +135,16 @@ func (s *Server) logGroupARN(name string) string {
 
 // ensureLogGroup creates a group if it is not there, both in the store (so
 // it draws in the visualizer) and in the log store.
+//
+// It is parented to the ACCOUNT, not to the function that caused it, and
+// that is deliberate: a log group is its own resource in real AWS and
+// OUTLIVES the function whose name it carries -- deleting a Lambda leaves
+// /aws/lambda/<name> behind, holding what it printed. So this one escaping
+// the cascade is faithful rather than a leak, unlike the AKS node resource
+// group, which real Azure really does delete with its cluster.
+//
+// The milestone 12 audit checked every store.Put of something its caller
+// did not itself create. This is the only one that is meant to survive.
 func (s *Server) ensureLogGroup(name string) {
 	if name == "" {
 		return

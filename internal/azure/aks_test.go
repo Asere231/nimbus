@@ -104,6 +104,74 @@ func TestClusterCreatesItsNodeResourceGroup(t *testing.T) {
 	}
 }
 
+// ...and it must DIE with the cluster.
+//
+// Real Azure deletes the MC_ group when the cluster goes. Nimbus did not,
+// and the reason is structural rather than an oversight in one hook: the
+// group is stored with its ParentID set to the SUBSCRIPTION, because that
+// is where a resource group really lives. Store.Delete cascades by ID
+// prefix or by ParentID descent, and the group is neither a prefix of the
+// cluster's id nor a descendant of it -- so nothing could ever reach it.
+//
+// Measured before fixing: `terraform destroy` on examples/terraform/azure-aks
+// left MC_rg-aks-dev_aks-nimbus-dev_eastus behind, with the rest of the
+// stack gone.
+func TestTheNodeResourceGroupDiesWithTheCluster(t *testing.T) {
+	srv, _, _ := newAKSTestServer(t)
+	rg := sub + "/resourceGroups/rg-aks-del"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	id := rg + "/providers/Microsoft.ContainerService/managedClusters/demo-del"
+	_, body := do(t, srv, "PUT", id, aksBody(1))
+	name := body["properties"].(map[string]any)["nodeResourceGroup"].(string)
+	mc := sub + "/resourceGroups/" + name
+
+	// The identity AKS puts inside that group goes with it, by the cascade
+	// the store already does for children.
+	identity := mc + "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/demo-del-agentpool"
+	do(t, srv, "PUT", identity, map[string]any{"location": "eastus"})
+
+	if code, _ := do(t, srv, "DELETE", id, nil); code != 200 && code != 202 && code != 204 {
+		t.Fatalf("DELETE cluster = %d", code)
+	}
+	if code, _ := do(t, srv, "GET", mc, nil); code != 404 {
+		t.Errorf("the node resource group survived the cluster: GET = %d", code)
+	}
+	if code, _ := do(t, srv, "GET", identity, nil); code != 404 {
+		t.Errorf("the identity inside it survived: GET = %d", code)
+	}
+	// The cluster's OWN resource group is the user's and must not be touched.
+	if code, _ := do(t, srv, "GET", rg, nil); code != 200 {
+		t.Errorf("the user's resource group was deleted too: GET = %d", code)
+	}
+}
+
+// A node resource group whose cluster never recorded it -- one from an
+// earlier run, or a body that lost the field -- is still collected, because
+// ensureNodeResourceGroup tags it with the cluster that owns it.
+func TestANodeResourceGroupIsFoundByItsTagWhenTheBodyIsSilent(t *testing.T) {
+	srv, _, _ := newAKSTestServer(t)
+	rg := sub + "/resourceGroups/rg-aks-tag"
+	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
+	id := rg + "/providers/Microsoft.ContainerService/managedClusters/demo-tag"
+	_, body := do(t, srv, "PUT", id, aksBody(1))
+	name := body["properties"].(map[string]any)["nodeResourceGroup"].(string)
+	mc := sub + "/resourceGroups/" + name
+
+	// Forget the name on the cluster, leaving only the tag to go on.
+	az := serverOf(t, srv)
+	if err := az.store.Update(id, func(stored map[string]any) error {
+		delete(stored["properties"].(map[string]any), "nodeResourceGroup")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	do(t, srv, "DELETE", id, nil)
+	if code, _ := do(t, srv, "GET", mc, nil); code != 404 {
+		t.Errorf("the node resource group was not found by its tag: GET = %d", code)
+	}
+}
+
 // The kubeconfig must be byte-identical every time it is asked for. azurerm
 // calls the credential actions on EVERY refresh and stores the result, so one
 // that differed between reads would make the plan never settle -- the same

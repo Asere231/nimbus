@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Asere231/nimbus/internal/azure/keyvault"
@@ -19,6 +20,7 @@ import (
 	"github.com/Asere231/nimbus/internal/core"
 	"github.com/Asere231/nimbus/internal/engines/docker"
 	"github.com/Asere231/nimbus/internal/engines/k3s"
+	"github.com/Asere231/nimbus/internal/engines/vm"
 )
 
 // Config for the Azure emulator.
@@ -77,6 +79,11 @@ type Server struct {
 	// knows nothing about either -- see internal/engines/k3s.
 	k3s        *k3s.Engine
 	registries *registries
+	// vms runs the virtual machines, on the engine every cloud's
+	// instances use. vmMu is held across check-and-act on one, so a boot
+	// cannot overtake the delete that tears it down.
+	vms  *vm.Engine
+	vmMu sync.Mutex
 }
 
 // New creates the Azure emulator.
@@ -125,6 +132,11 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		KeepRunning: cfg.KeepClusters,
 		NamePrefix:  "nimbus-aks",
 	}, s.docker, store, "azure")
+	s.vms = vm.New(vm.Config{
+		NamePrefix:   "nimbus-vm",
+		KeepRunning:  cfg.KeepClusters,
+		StartTimeout: cfg.ClusterTimeout,
+	}, s.docker)
 	// The challenge a Key Vault client gets points at our own login endpoint,
 	// and asks for a token for Azure's Key Vault audience -- which our token
 	// endpoint will happily issue, since it issues tokens for any scope.
@@ -150,6 +162,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	registerKeyVaultHooks(s)
 	registerDeploymentHooks(s)
 	registerACRHooks(s)
+	registerVMHooks(s)
 
 	// The default subscription exists from the start, rather than appearing
 	// the first time something asks for it. `az login` lists subscriptions
@@ -191,6 +204,7 @@ func (s *Server) SecretBrowser() *keyvault.Handler { return s.keyvault }
 func (s *Server) useDocker(d docker.Client) {
 	s.docker = d
 	s.k3s.SetDocker(d)
+	s.vms.SetDocker(d)
 }
 
 func (s *Server) Start() func() {

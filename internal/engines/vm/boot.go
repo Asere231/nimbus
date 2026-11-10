@@ -28,6 +28,14 @@ import "strings"
 // user-data.log was AWS's vocabulary inside a cloud-neutral engine, which
 // the GCE example found by looking for a file that was not there.
 //
+// One sharp edge, measured rather than imagined: a boot script that
+// REDIRECTS INTO /var/log/nimbus-boot.log fights the `tee` that captures
+// it. Both open the file, the script's stdout then goes to its own
+// redirect rather than through the pipe, and what is left is a
+// zero-length file -- while the console (`docker logs`) still has
+// everything. The console is the source of truth; the file is a
+// convenience. Examples echo to stdout and let the capture do the writing.
+//
 // `sleep infinity` is deliberately avoided: busybox does not accept it.
 const bootScript = `
 mkdir -p /var/lib/nimbus /var/log /root/.ssh 2>/dev/null

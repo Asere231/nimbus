@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Asere231/nimbus/internal/core"
 	"github.com/Asere231/nimbus/internal/engines/docker"
@@ -220,8 +221,22 @@ func TestEverySpecTypeRoundTrips(t *testing.T) {
 				t.Fatalf("create returned no id/name: %v", created)
 			}
 
-			read, _ := getResource(t, s, id)
-			props, _ := read["properties"].(map[string]any)
+			// Succeeded, but not necessarily at once: a type whose hook
+			// has a Provision answers the write immediately with
+			// "Creating" and finishes in the background -- virtual
+			// machines start a container. So this waits rather than
+			// reading once, which is what a client polling the
+			// async-operation header does.
+			var props map[string]any
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				read, _ := getResource(t, s, id)
+				props, _ = read["properties"].(map[string]any)
+				if props["provisioningState"] == "Succeeded" || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
 			if props["provisioningState"] != "Succeeded" {
 				t.Errorf("provisioningState = %v", props["provisioningState"])
 			}

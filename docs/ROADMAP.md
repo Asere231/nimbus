@@ -1,10 +1,11 @@
 # Roadmap
 
-**Current: Milestone 11 — compute instances
-(`docs/prompts/m11-compute-instances.md`). Phases 1 to 3 are complete.**
+**Current: Milestone 12 — the correctness pass
+(`docs/prompts/m12-correctness-pass.md`). Phases 1 to 3 are complete, and
+Milestone 11 has given all three clouds instances that really boot.**
 
 Phase 4 is what is left for the three clouds to be functional rather than
-merely broad: the primitive that still does not run, the defects that
+merely broad: the primitive that did not run (done), the defects that
 mislead, and the limitation that most undercuts the point of the project.
 
 Milestones 1 to 10 are done, on macOS 27 (arm64) with azurerm 4.81.0,
@@ -136,7 +137,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 
 | # | Milestone | Done when |
 |---|---|---|
-| 11 | **Compute instances** on a new `vm` engine, all three clouds | `ssh` into an instance Terraform created, and its user-data output is in the console log |
+| 11 | ~~**Compute instances** on a new `vm` engine, all three clouds~~ **done** | `nimbus ssh` into an instance Terraform created, and its boot-script output is in the console log |
 | 12 | **Correctness pass**: AKS node resource group, namespaces, S3 multipart, the feed after a restart | A >8 MB `aws s3 cp` works, a destroy leaves no `MC_*` group, and a pod outside `default` is drawn |
 | 13 | **Authorization core + AWS IAM**, opt-in via `--enforce-iam` | An apply fails with a legible `AccessDenied` and succeeds once the policy grants the action |
 | 14 | **Azure RBAC, GCP IAM, and explaining a decision** | The inspector says why the current principal is allowed or denied, on all three clouds |
@@ -145,6 +146,14 @@ Milestone 11 is first because it is the clearest gap and the `vm` engine
 follows a pattern that has now worked twice (`k3s`, `run`). Authorization
 comes last because it is the largest, and because refusing access is easier
 to demonstrate once there are instances to refuse it to.
+
+- `examples/terraform/aws-instance`, `gcp-instance` and `azure-vm` each boot a
+  real container: an EC2 instance on the lifecycle states the provider waits
+  for, a GCE instance whose image comes from `debian-cloud/debian-12` and
+  really runs Debian, and an Azure VM that provisions asynchronously so the
+  apply does not finish before the machine is up. All three apply, plan clean,
+  stop and start keeping their filesystem, and destroy leaving no containers.
+  `nimbus ssh NAME` gives a shell on any of them without knowing which cloud.
 
 ## Design decisions still open
 
@@ -171,7 +180,30 @@ to demonstrate once there are instances to refuse it to.
 
 ## Later
 
-- **GCP still has no Compute instances and no Cloud Functions.** Cloud
+- **An instance is a container, with everything that implies.** No kernel of
+  its own, no block device, no systemd, no cloud-init and no guest agent, so
+  anything needing one does not work. Instance types are recorded and nothing
+  limits CPU or memory to match: a `t3.micro` has whatever the machine has.
+  There are no EBS volumes, managed disks or persistent disks — the root
+  filesystem is the container's and it survives a stop/start, which is as far
+  as it goes.
+- **There is no `sshd` in an instance, on any cloud.** Nimbus is stdlib-only
+  and cannot implement an SSH server, and no vendor-official base image ships
+  one. `nimbus ssh` is `docker exec`. Key pairs round-trip and the public key
+  is written to `authorized_keys`, so a configuration is honest, but
+  `ssh -i key.pem` does not work. Running a real `sshd` would mean depending
+  on a community image for the headline feature, which was weighed and
+  declined; it is the obvious thing to revisit.
+- **The metadata service is not at 169.254.169.254.** It is reachable through
+  `AWS_EC2_METADATA_SERVICE_ENDPOINT` and `GCE_METADATA_HOST`, which the SDKs
+  read, so an SDK inside an instance can find out which instance it is. Code
+  written against the literal address cannot. Azure has no such override at
+  all, so a VM there gets `NIMBUS_VM_*` environment variables instead. No
+  cloud mints instance credentials, so the IAM-role paths answer nothing.
+- **No EC2 or GCE instance appears in the network view** — only Azure VMs do,
+  because that view is Azure-only. An AWS or GCP VPC view is still the
+  obvious next visualizer milestone.
+- **GCP still has no Cloud Functions.** Cloud
   Routers and their NAT configuration round-trip as state and nothing
   routes, and the project IAM policy is recorded but never enforced — the
   same honest limitation Azure RBAC and AWS IAM have.
@@ -207,10 +239,11 @@ to demonstrate once there are instances to refuse it to.
 - **No OAuth.** The provider is given an `access_token` directly and Nimbus
   never looks at it. There is no token exchange, no metadata server and no
   `gcloud auth login`.
-- **No EC2 instances.** EKS node groups are k3s agent containers, not
-  instances, so nothing answers `RunInstances`. NAT gateways are recorded
-  but nothing routes, and IAM is recorded but nothing is enforced — the same
-  honest limitation Azure RBAC has.
+- **EKS node groups are still k3s agent containers, not instances.** They do
+  not appear in `DescribeInstances`, so a cluster's nodes and an account's
+  instances are two separate worlds. NAT gateways are recorded but nothing
+  routes, and IAM is recorded but nothing is enforced — the same honest
+  limitation Azure RBAC has.
 - **Lambda has only `$LATEST`.** No published versions, aliases, layers,
   event source mappings, function URLs or concurrency settings: publishing a
   version would mean keeping a copy of the code and a second container per

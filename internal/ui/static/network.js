@@ -11,6 +11,14 @@
 // sync azurerm requires), and each subnet names its NSG and route table by
 // resource ID.
 //
+// Virtual machines are the one thing that takes two hops. A VM does not
+// name a subnet: it names its network interfaces, and a NIC's
+// ipConfigurations name the subnet. So the model follows
+// VM -> NIC -> subnet, and a VM whose NIC is missing is simply not drawn
+// in a subnet rather than guessed at. In the TOPOLOGY view a VM sits under
+// its resource group, which is where ARM really puts it; this view is the
+// only place the network relationship is visible.
+//
 // The model and the layout are pure; only draw() touches the DOM.
 
 import { el, fit } from "./dom.js";
@@ -22,6 +30,8 @@ export const VW = 470, TITLE_H = 46, SUB_H = 48, SUB_GAP = 8, BOX_PAD = 12;
 export const COL_GAP = 90, ROW_GAP = 30, PAD = 28, CHIP_W = 96, CHIP_H = 24;
 export const PEER_LANE = 34; // room to the left for peering arcs
 export const ORPHAN_W = 230, ORPHAN_H = 46;
+// A row of machine chips under a subnet's name and CIDR, when it has any.
+export const VM_CHIP_W = 112, VM_CHIP_H = 26, VM_ROW_H = 34, VM_CHIPS_MAX = 3;
 
 const lower = (s) => String(s || "").toLowerCase();
 const leaf = (id) => String(id || "").split("/").filter(Boolean).pop() || "";
@@ -31,6 +41,45 @@ export function networkModel(resources) {
   const all = [...resources.values()];
   const byID = new Map(all.map((r) => [lower(r.id), r]));
   const attached = new Set(); // ids drawn inside a VNet, so not orphans
+
+  // VM -> NIC -> subnet, in two hops. Built once, keyed by subnet.
+  const machinesBySubnet = new Map();
+  const nicSubnets = new Map(); // nic key -> subnet key
+  for (const r of all) {
+    if (lower(r.type) !== "microsoft.network/networkinterfaces") continue;
+    const configs = ((r.body && r.body.properties) || {}).ipConfigurations || [];
+    for (const c of configs) {
+      const subnetID = ((c.properties || {}).subnet || {}).id;
+      if (subnetID) {
+        nicSubnets.set(lower(r.id), lower(subnetID));
+        break;
+      }
+    }
+  }
+  for (const r of all) {
+    if (lower(r.type) !== "microsoft.compute/virtualmachines") continue;
+    const props = (r.body && r.body.properties) || {};
+    const nics = (props.networkProfile || {}).networkInterfaces || [];
+    for (const n of nics) {
+      const subnetKey = nicSubnets.get(lower(n.id));
+      if (!subnetKey) continue;
+      if (!machinesBySubnet.has(subnetKey)) machinesBySubnet.set(subnetKey, []);
+      machinesBySubnet.get(subnetKey).push({
+        id: r.id,
+        key: lower(r.id),
+        name: r.name,
+        // A machine a container really runs for is worth distinguishing
+        // from one that is only a record.
+        running: Boolean(r.body && r.body.nimbusContainer),
+        size: (props.hardwareProfile || {}).vmSize || "",
+      });
+      attached.add(lower(n.id));
+      break; // one subnet per machine is enough to place it
+    }
+  }
+  for (const list of machinesBySubnet.values()) {
+    list.sort((a, b) => a.name.localeCompare(b.name));
+  }
 
   const vnets = [];
   for (const r of all) {
@@ -50,6 +99,7 @@ export function networkModel(resources) {
         prefix: sp.addressPrefix || (sp.addressPrefixes || [])[0] || "",
         nsg: nsgID ? { id: nsgID, name: leaf(nsgID), known: byID.has(lower(nsgID)) } : null,
         route: rtID ? { id: rtID, name: leaf(rtID), known: byID.has(lower(rtID)) } : null,
+        machines: machinesBySubnet.get(lower(sn.id)) || [],
       });
     }
     vnets.push({
@@ -112,13 +162,18 @@ export function networkLayout(model) {
     v.x = left;
     v.y = y;
     v.w = VW;
-    v.h = TITLE_H + v.subnets.length * (SUB_H + SUB_GAP) + BOX_PAD;
-    v.subnets.forEach((sn, i) => {
+    // Subnet rows are no longer a fixed height: one with machines in it
+    // grows by a chip row, so the VNet's height has to be summed rather
+    // than multiplied.
+    let sy = v.y + TITLE_H;
+    for (const sn of v.subnets) {
       sn.x = v.x + BOX_PAD;
-      sn.y = v.y + TITLE_H + i * (SUB_H + SUB_GAP);
+      sn.y = sy;
       sn.w = VW - 2 * BOX_PAD;
-      sn.h = SUB_H;
-    });
+      sn.h = SUB_H + (sn.machines.length ? VM_ROW_H : 0);
+      sy += sn.h + SUB_GAP;
+    }
+    v.h = sy - v.y + BOX_PAD - SUB_GAP;
     y += v.h + ROW_GAP;
   }
 
@@ -175,11 +230,39 @@ export function draw(svg, model, { selected, filter, onSelect }) {
       const cidr = el("text", { class: "net-cidr", x: 12, y: 36 }, sg);
       cidr.textContent = sn.prefix || "no prefix";
 
-      // Attachments, right-aligned inside the subnet row.
+      // Machines, in a row under the name and CIDR. A subnet with more
+      // than a few is summarised rather than overflowing its box.
+      if (sn.machines.length) {
+        let mx = 12;
+        const shown = sn.machines.slice(0, VM_CHIPS_MAX);
+        for (const m of shown) {
+          const mg = el("g", {
+            class: "net-vm" + (m.running ? " running" : "") + (selected === m.key ? " selected" : ""),
+            transform: `translate(${mx},${SUB_H - 6})`,
+            tabindex: "0",
+          }, sg);
+          el("rect", { width: VM_CHIP_W, height: VM_CHIP_H, rx: 6 }, mg);
+          const mt = el("text", { x: VM_CHIP_W / 2, y: 17, "text-anchor": "middle" }, mg);
+          mt.textContent = fit(m.name, 14);
+          const mtip = el("title", {}, mg);
+          mtip.textContent = `${m.name}\n${m.size}\n` +
+            (m.running ? "a container is running for this machine" : "recorded, not running") +
+            `\n${m.id}`;
+          mg.addEventListener("click", (ev) => { ev.stopPropagation(); onSelect(m.key); });
+          mg.addEventListener("keydown", (ev) => { if (ev.key === "Enter") onSelect(m.key); });
+          mx += VM_CHIP_W + 8;
+        }
+        if (sn.machines.length > shown.length) {
+          const more = el("text", { class: "net-cidr", x: mx, y: SUB_H + 11 }, sg);
+          more.textContent = `+${sn.machines.length - shown.length} more`;
+        }
+      }
+
+      // Attachments, right-aligned on the subnet's first row.
       let cx = sn.w - 12 - CHIP_W;
       for (const [kind, att] of [["rt", sn.route], ["nsg", sn.nsg]]) {
         if (!att) continue;
-        const cg = el("g", { class: "net-chip " + kind, transform: `translate(${cx},${(sn.h - CHIP_H) / 2})` }, sg);
+        const cg = el("g", { class: "net-chip " + kind, transform: `translate(${cx},${(SUB_H - CHIP_H) / 2})` }, sg);
         el("rect", { width: CHIP_W, height: CHIP_H, rx: 6 }, cg);
         const ct = el("text", { x: CHIP_W / 2, y: 16, "text-anchor": "middle" }, cg);
         ct.textContent = fit(att.name, 12);

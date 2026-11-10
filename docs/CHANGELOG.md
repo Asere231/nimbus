@@ -1,10 +1,43 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 — 2026-11-10
 
-Four red CI jobs, three causes, none of them visible on a Mac. The two AWS
-Docker jobs had never passed since Milestone 8 and the GKE one failed on its
-first run — all of it one missing Docker flag.
+Milestone 11: compute instances. All three clouds now boot a machine — the
+primitive every cloud course opens with, and the one thing Nimbus could not
+do despite running Kubernetes, functions and container services.
+
+- **An instance really boots**, on a new cloud-neutral `internal/engines/vm`:
+  a container that runs the script it was given, keeps its filesystem across
+  a stop and a start, and serves its own metadata. `aws_instance`,
+  `google_compute_instance` and `azurerm_linux_virtual_machine` all reach the
+  same engine; the plugins supply the image, the script, the keys and the
+  metadata, and the engine knows about no cloud.
+- **The base image comes from the configuration**, so it really is the
+  distribution you asked for. GCE and Azure name theirs semantically —
+  `debian-cloud/debian-12` and `Canonical/ubuntu-24_04-lts` give you Debian
+  and Ubuntu with `apt` in them — while an AMI id is opaque, so EC2 takes a
+  `nimbus:image` tag instead.
+- **`nimbus ssh NAME`** gives a shell on an instance on any cloud, without a
+  per-cloud table: it asks the running Nimbus which resources record a
+  backing container. It is `docker exec`, and says so — Nimbus is stdlib-only
+  and cannot run an SSH server, so `ssh -i key.pem` does not work.
+- **A metadata service per instance**, reached through the overrides the SDKs
+  read (`AWS_EC2_METADATA_SERVICE_ENDPOINT`, `GCE_METADATA_HOST`), because
+  169.254.169.254 needs a route only root can add. An SDK inside an instance
+  can ask which instance it is; code written against the literal address
+  still cannot, and Azure has no such override at all.
+- **Azure VMs appear inside their subnet in the network view**, found through
+  their NIC — the only view where that relationship is visible, since ARM
+  parents a VM to its resource group.
+- **CI runs `go test -race` on Linux.** It found three real data races, all
+  the same shape and one of them shipped in 0.10.0: a long-running operation
+  finished by a background goroutine while a poll serialises it.
+
+### Also in this release: four red CI jobs, fixed
+
+Three causes, none of them visible on a Mac. The two AWS Docker jobs had
+never passed since Milestone 8 and the GKE one failed on its first run — all
+of it one missing Docker flag.
 
 - **Every container now gets `--add-host host.docker.internal:host-gateway`.**
   That name is a Docker Desktop convenience; on Docker Engine, which is what

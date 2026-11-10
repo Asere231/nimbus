@@ -243,6 +243,15 @@ button { font: inherit; color: inherit; }
 .net-cidr { fill: var(--muted); font-size: 11px; font-family: var(--mono); }
 .net-chip rect { fill: color-mix(in srgb, var(--warn) 16%, transparent); stroke: var(--warn); stroke-opacity: .5; }
 .net-chip text { fill: var(--warn); font-size: 10.5px; font-family: var(--mono); }
+
+/* Virtual machines inside a subnet. A machine a container really runs for
+   is drawn solid; one that is only a record is outlined, which is the same
+   distinction the topology view's "real" badge makes. */
+.net-vm rect { fill: color-mix(in srgb, var(--good) 10%, transparent); stroke: var(--good); stroke-opacity: .45; }
+.net-vm text { fill: var(--good); font-size: 10.5px; font-family: var(--mono); }
+.net-vm.running rect { fill: color-mix(in srgb, var(--good) 26%, transparent); stroke-opacity: .9; }
+.net-vm:hover rect { stroke: var(--accent); }
+.net-vm.selected rect { stroke: var(--accent); stroke-width: 2; }
 .net-chip.rt rect { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); stroke-opacity: .5; }
 .net-chip.rt text { fill: var(--accent); }
 .net-chip { cursor: pointer; }

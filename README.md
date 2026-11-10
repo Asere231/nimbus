@@ -65,7 +65,7 @@ eval "$(./bin/nimbus env azure)"          # PowerShell: ./bin/nimbus.exe env azu
 
 | Tier | Resource types | Behaviour |
 |---|---|---|
-| Real | Storage accounts and containers, AKS clusters and node pools, Key Vaults, container registries | Something actually runs: bytes on disk, k3s in Docker, a `registry:2` container, secrets you can read back with a client |
+| Real | Storage accounts and containers, AKS clusters and node pools, Key Vaults, container registries, Linux virtual machines | Something actually runs: bytes on disk, k3s in Docker, a `registry:2` container, secrets you can read back with a client |
 | Modelled by hand | Resource groups, virtual networks, subnets, managed identities, role assignments and definitions, Log Analytics workspaces | Validation, server-generated fields, parent/child sync, cascade delete |
 | Modelled from the specs | 53 more types across networking, compute, web, data and integration | Read-only fields and defaults taken from Microsoft's own OpenAPI specs, applied generically — no hook per type |
 | Accepted | Any other ARM type | Stored and returned with `provisioningState: Succeeded`; nothing runs behind it |
@@ -95,6 +95,7 @@ so there is nothing to trust on your machine.
 | S3 | Buckets path-style with their whole sub-configuration matrix (versioning, tagging, policy, encryption, public access block, ownership, …) and objects with real bytes on disk |
 | IAM | Roles, users, managed and inline policies, attachments, instance profiles — recorded, never enforced |
 | EKS | Clusters and node groups as **real Kubernetes** (k3s in Docker). `aws eks update-kubeconfig` then `kubectl get nodes` works, through the same token authentication webhook real EKS uses |
+| EC2 instances | Machines that **really boot**: a container per instance, running your user data, keeping its filesystem across a stop and start, and serving its own metadata. Key pairs, instance types, lifecycle states and the attribute read-backs the provider makes |
 | Lambda | Functions that **really run**, in AWS's own base images through the Runtime Interface Emulator they ship. Zip or S3 code, environment, timeout, `RequestResponse` and `Event` invocations, tags and resource policies |
 | DynamoDB | Tables and items with the expression language the SDKs send: `Query`, `Scan`, `UpdateItem` with SET/REMOVE/ADD/DELETE, conditions, batches. Attribute values keep their wire shape, so a 38-digit number survives |
 | CloudWatch Logs | Log groups and streams, `PutLogEvents`, `GetLogEvents`, `FilterLogEvents`. A function's output lands in `/aws/lambda/<name>` |
@@ -130,6 +131,7 @@ name becomes a hostname and there is nothing to trust.
 | Compute | VPC networks (auto and custom mode), subnetworks with secondary ranges, firewalls, routes, Cloud Routers, regions and zones, and operations |
 | IAM | Service accounts, with a derived email that never drifts between reads |
 | Cloud Storage | Buckets and objects with real bytes, all three upload protocols — media, multipart/related and resumable — plus `md5Hash`, `crc32c` and delimiter listings |
+| Compute instances | Machines that **really boot**, with the image chosen from the GCE image name — `debian-cloud/debian-12` runs real Debian. Startup scripts from metadata, stop/start/reset, and GCE-shaped metadata including a nested recursive query |
 | GKE | Clusters and node pools as **real Kubernetes** (k3s in Docker), scaled by node count. `nimbus gcp kubeconfig CLUSTER` — or `gcloud container clusters get-credentials` after `nimbus gcp install-auth-plugin` — then `kubectl get nodes` |
 | Pub/Sub | Topics and subscriptions, publish, pull, acknowledge, ack deadlines with redelivery, and **push delivery** that really POSTs to a local endpoint |
 | Cloud Run | Services from any image the Docker daemon can pull, **running for real** with `PORT` set and every request proxied through. Revisions, a stable URL, and IAM recorded |
@@ -167,6 +169,7 @@ expect minutes and a few gigabytes of containers.
 | Networking | VNets, subnets, NSGs, route tables | VPCs, subnets, gateways, security groups | VPC networks, subnetworks, firewalls, routes |
 | Object storage | Blob (+ Queue, Table) | S3 | Cloud Storage |
 | Managed Kubernetes | AKS | EKS | GKE |
+| Instances | Linux VMs | EC2 | Compute Engine |
 | Serverless compute | — | Lambda | Cloud Run |
 | Messaging | — | — | Pub/Sub |
 | NoSQL | Table storage | DynamoDB | — |
@@ -179,6 +182,33 @@ expect minutes and a few gigabytes of containers.
 Everything in the Identity row is **recorded and never enforced**: no request
 is refused for lacking a role, on any of the three. A local apply cannot
 prove a deployment's permissions are right.
+
+### What an instance is, and what it is not
+
+An instance on any of the three clouds is a **container**. It boots, runs the
+script you gave it — user data, a startup script or custom data, depending on
+the cloud — keeps its filesystem across a stop and a start, and answers its
+own metadata service. The base image comes from what the configuration asked
+for, so `debian-cloud/debian-12` and `Canonical/ubuntu-24_04-lts` really do
+give you Debian and Ubuntu, with `apt` in them.
+
+It is not a virtual machine. There is no kernel of its own, no block device,
+no systemd, no cloud-init and no guest agent, so anything that needs one will
+not work. Two limits are worth naming outright:
+
+- **There is no `sshd`.** Nimbus is stdlib-only and cannot implement an SSH
+  server, and no vendor-official base image ships one. `nimbus ssh NAME`
+  gives you a shell — it is `docker exec` underneath, and the help text says
+  so. Key pairs round-trip and the public key is written to the instance's
+  `authorized_keys`, so a configuration is honest, but `ssh -i key.pem` does
+  not work.
+- **The metadata service is not at `169.254.169.254`.** That address is
+  link-local and a container cannot reach it without a route only root can
+  add. Each instance gets its own metadata endpoint instead, and is told
+  where it is through `AWS_EC2_METADATA_SERVICE_ENDPOINT` or
+  `GCE_METADATA_HOST`, which the SDKs read. Code written against the literal
+  address still fails, and Azure has no such override at all — a VM there is
+  given its details as environment variables.
 
 ## The visualizer
 

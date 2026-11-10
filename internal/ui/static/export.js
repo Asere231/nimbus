@@ -40,6 +40,10 @@ const EXPORT_CSS = `
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .net-chip.rt rect { fill: #ddf4ff; stroke: #0969da; stroke-opacity: .6; }
   .net-chip.rt text { fill: #0550ae; }
+  .net-vm rect { fill: #e9f7ec; stroke: #1a7f37; stroke-opacity: .5; }
+  .net-vm text { fill: #116329; font-size: 10.5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .net-vm.running rect { fill: #c9f0d2; stroke-opacity: .95; }
   .net-orphan rect.card { stroke-dasharray: 5 3; }
   .link-peering { fill: none; stroke: #1b7c83; stroke-opacity: .7; stroke-width: 1.6; stroke-dasharray: 7 4; }
   .k8s-cluster-box { fill: #ffffff; stroke: #326ce5; stroke-opacity: .55; stroke-width: 1.4; }

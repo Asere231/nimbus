@@ -159,6 +159,17 @@ func (s *Server) serveCompute(w http.ResponseWriter, r *http.Request, parts []st
 		if r.Method == http.MethodGet && name != "" {
 			return s.getOperation(w, s.computeLink(scope, "operations", name))
 		}
+		// `POST .../operations/{name}/wait` is how GCLOUD waits: it blocks
+		// until the operation finishes rather than polling. The Terraform
+		// provider polls with GET instead -- two clients, two paths, one
+		// operation, like `gcloud run` and the Cloud Run provider. Found
+		// because `gcloud compute instances stop` failed on it with
+		// "does not implement the Compute collection operations", which
+		// named the collection it was already being served.
+		if r.Method == http.MethodPost && name != "" &&
+			indexOf(rest, "wait") == indexOf(rest, name)+1 {
+			return s.waitForOperation(w, r, s.computeLink(scope, "operations", name))
+		}
 	case "instanceGroupManagers":
 		// A GKE node pool's nodes, as the Compute API sees them. Derived
 		// from the pool rather than stored; see gke_instancegroup.go.
@@ -176,6 +187,30 @@ func (s *Server) serveCompute(w http.ResponseWriter, r *http.Request, parts []st
 			return s.describeRegion(w, name)
 		}
 		return s.describeZone(w, name)
+	}
+
+	// Public images come from a project nobody created -- debian-cloud,
+	// ubuntu-os-cloud -- so they are answered before anything looks at the
+	// store or at this project's kinds. See images.go.
+	if collection == "images" && scope == "global" {
+		return s.serveImages(w, r, parts[3], rest[indexOf(rest, "images")+1:])
+	}
+
+	// Instances are not in the kinds table. They need far more than its
+	// fill/parent hooks give -- a container, a lifecycle, and three verbs
+	// that arrive as trailing path segments -- so they are handled whole,
+	// the way GKE is. See instance.go.
+	if collection == "instances" && strings.HasPrefix(scope, "zones/") {
+		return s.serveInstances(w, r, scope, rest[indexOf(rest, "instances"):])
+	}
+	// gcloud lists instances across every zone at once, through the
+	// aggregated path, where the provider uses the zonal collection above.
+	//
+	// `aggregated/instances` has no scope, so the scope splitter reads
+	// `aggregated` as the COLLECTION and `instances` as the name -- which
+	// is why this is not spelled the way the zonal case above is.
+	if collection == "aggregated" && name == "instances" {
+		return s.serveAggregatedInstances(w, r)
 	}
 
 	kind := kindFor(collection)

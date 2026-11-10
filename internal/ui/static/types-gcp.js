@@ -10,6 +10,7 @@ export const TYPES = {
   "cloudresourcemanager.googleapis.com/project": ["PROJ", "#4285f4", "Project"],
   "compute.googleapis.com/network": ["VPC", "#34a853", "VPC network"],
   "compute.googleapis.com/subnetwork": ["SNET", "#5bb974", "Subnetwork"],
+  "compute.googleapis.com/instance": ["VM", "#fbbc04", "Compute instance"],
   "compute.googleapis.com/firewall": ["FW", "#fbbc04", "Firewall rule"],
   "compute.googleapis.com/route": ["ROUTE", "#a5d6ff", "Route"],
   "compute.googleapis.com/router": ["RTR", "#a5d6ff", "Cloud Router"],
@@ -25,7 +26,7 @@ export const TYPES = {
 
 // Siblings read the way a stack is built: the network first, then what sits
 // in it, then the things that merely belong to the project.
-export const ORDER = ["project", "network", "subnetwork", "firewall", "route",
+export const ORDER = ["project", "network", "subnetwork", "instance", "firewall", "route",
   "router", "cluster", "nodepool", "service", "revision", "topic", "subscription",
   "bucket", "serviceaccount"];
 

@@ -21,6 +21,13 @@ import "strings"
 // Real EC2 does not terminate an instance whose user data failed either, so
 // a failing script is reported and stepped over rather than fatal.
 //
+// The paths are deliberately NOT named after any cloud. EC2 calls this
+// user data, GCE calls it a startup script and Azure calls it custom data;
+// the engine calls it the boot script and writes /var/log/nimbus-boot.log,
+// so an example on any cloud points at the same file. Naming it
+// user-data.log was AWS's vocabulary inside a cloud-neutral engine, which
+// the GCE example found by looking for a file that was not there.
+//
 // `sleep infinity` is deliberately avoided: busybox does not accept it.
 const bootScript = `
 mkdir -p /var/lib/nimbus /var/log /root/.ssh 2>/dev/null
@@ -31,11 +38,11 @@ if [ -n "$NIMBUS_SSH_KEYS" ]; then
 fi
 echo "nimbus: instance booting"
 if [ -n "$NIMBUS_USER_DATA" ]; then
-  printf '%s' "$NIMBUS_USER_DATA" | base64 -d > /var/lib/nimbus/user-data 2>/dev/null
-  chmod +x /var/lib/nimbus/user-data 2>/dev/null
-  echo "nimbus: running user data"
-  sh /var/lib/nimbus/user-data 2>&1 | tee /var/log/nimbus-user-data.log
-  echo "nimbus: user data finished"
+  printf '%s' "$NIMBUS_USER_DATA" | base64 -d > /var/lib/nimbus/boot-script 2>/dev/null
+  chmod +x /var/lib/nimbus/boot-script 2>/dev/null
+  echo "nimbus: running the boot script"
+  sh /var/lib/nimbus/boot-script 2>&1 | tee /var/log/nimbus-boot.log
+  echo "nimbus: boot script finished"
 fi
 echo "nimbus: instance ready"
 while true; do sleep 3600; done

@@ -6,7 +6,7 @@
 #                                           provider mirror: see docs/OFFLINE.md)
 #   3. terraform apply                     and watch http://localhost:4700
 #   4. nimbus ssh web                      a shell on the instance
-#      nimbus ssh web -- cat /var/log/nimbus-user-data.log
+#      nimbus ssh web -- cat /var/log/nimbus-boot.log
 #   5. aws --endpoint-url http://localhost:4702 ec2 stop-instances  --instance-ids <id>
 #      aws --endpoint-url http://localhost:4702 ec2 start-instances --instance-ids <id>
 #   6. terraform destroy
@@ -179,6 +179,6 @@ output "shell" {
 }
 
 output "console" {
-  value       = "nimbus ssh web -- cat /var/log/nimbus-user-data.log"
+  value       = "nimbus ssh web -- cat /var/log/nimbus-boot.log"
   description = "What the user-data script printed."
 }

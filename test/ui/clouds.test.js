@@ -180,6 +180,7 @@ test("every GCP type the plugin stores has a badge", () => {
     "cloudresourcemanager.googleapis.com/Project",
     "compute.googleapis.com/Network",
     "compute.googleapis.com/Subnetwork",
+    "compute.googleapis.com/Instance",
     "compute.googleapis.com/Firewall",
     "compute.googleapis.com/Route",
     "compute.googleapis.com/Router",

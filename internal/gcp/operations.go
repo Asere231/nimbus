@@ -3,7 +3,9 @@ package gcp
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
+	"time"
 )
 
 // Compute's long-running operations.
@@ -72,10 +74,19 @@ func newOperations() *operations {
 	return &operations{byURL: map[string]*operation{}}
 }
 
+// put stores a COPY, so the registry owns its own memory and the caller's
+// pointer is never written to behind its back.
+//
+// That matters because newOperation hands its operation straight to
+// writeJSON: without the copy, the background goroutine's finish() writes
+// the same struct the response is being serialised from. A real data race,
+// which `go test -race` catches and plain `go test` does not -- the second
+// one found in this file in one sitting, both the same shape.
 func (o *operations) put(op *operation) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.byURL[op.SelfLink] = op
+	stored := *op
+	o.byURL[op.SelfLink] = &stored
 	o.order = append(o.order, op.SelfLink)
 	if len(o.order) > maxOperations {
 		drop := o.order[0]
@@ -84,10 +95,20 @@ func (o *operations) put(op *operation) {
 	}
 }
 
+// get returns a COPY, because an operation is no longer immutable: a
+// pending one is finished by a background goroutine, and handing a reader
+// the registry's own pointer would have it serialising a struct being
+// written to. Every other operation here answers DONE at once, which is
+// why this was safe until instances arrived.
 func (o *operations) get(selfLink string) *operation {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.byURL[selfLink]
+	op := o.byURL[selfLink]
+	if op == nil {
+		return nil
+	}
+	copied := *op
+	return &copied
 }
 
 // newOperation records a finished operation and returns it.
@@ -115,11 +136,47 @@ func (s *Server) newOperation(scope, opType, targetLink string) *operation {
 		EndTime:    timestamp(),
 		SelfLink:   s.computeLink(scope, "operations", name),
 	}
-	if scope != "global" {
+	// A zonal operation carries `zone`, a regional one `region`. They are
+	// different fields, and putting a zone in `region` is the kind of thing
+	// nothing reads until something does.
+	switch {
+	case strings.HasPrefix(scope, "zones/"):
+		op.Zone = s.base() + "/compute/v1/projects/" + s.cfg.ProjectID + "/" + scope
+	case scope != "global":
 		op.Region = s.base() + "/compute/v1/projects/" + s.cfg.ProjectID + "/" + scope
 	}
 	s.operations.put(op)
 	return op
+}
+
+// newPendingOperation is an operation that is NOT finished yet, for the one
+// kind of Compute write that really is slow: starting an instance's
+// container, which includes pulling its image.
+//
+// Everything else here answers DONE on the spot, because nothing else is
+// slow and claiming otherwise would only add a poll. An instance is the
+// exception, and the provider handles it the way real Compute expects --
+// it polls this operation until DONE and only then reads the instance.
+// Answering DONE before the container is up would hand back a RUNNING
+// instance with nothing running in it.
+func (s *Server) newPendingOperation(scope, opType, targetLink string) *operation {
+	op := s.newOperation(scope, opType, targetLink)
+	op.Status = "RUNNING"
+	op.Progress = 0
+	op.EndTime = ""
+	return op
+}
+
+// finish marks an operation DONE. The pointer is the one in the registry,
+// so a poll already in flight sees the change.
+func (o *operations) finish(selfLink string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if op := o.byURL[selfLink]; op != nil {
+		op.Status = "DONE"
+		op.Progress = 100
+		op.EndTime = timestamp()
+	}
 }
 
 // getOperation answers a poll. An id nobody issued is a 404, as it is in
@@ -140,4 +197,43 @@ func (s *Server) getOperation(w http.ResponseWriter, selfLink string) string {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
 	return ""
+}
+
+// waitOperationTimeout bounds a `wait` call. Real Compute returns after at
+// most two minutes whether the operation finished or not, and the client
+// then calls wait again -- so a bound here is the behaviour, not a
+// shortcut. Nothing Nimbus starts takes anywhere near that long; this is
+// short enough that a stuck operation does not look like a hung client.
+const waitOperationTimeout = 30 * time.Second
+
+// waitForOperation blocks until the operation is DONE, then answers it.
+//
+// This is Compute's operations.wait, which gcloud uses instead of polling.
+// It is a POST, and `wait` is a TRAILING PATH SEGMENT on the operation's
+// name -- the same spelling instances use for stop and start, and not the
+// colon verb GKE uses for setSize.
+func (s *Server) waitForOperation(w http.ResponseWriter, r *http.Request, selfLink string) string {
+	if s.operations.get(selfLink) == nil {
+		writeError(w, notFound("The resource '%s' was not found", selfLink))
+		return "no such operation"
+	}
+
+	deadline := time.Now().Add(waitOperationTimeout)
+	for {
+		op := s.operations.get(selfLink)
+		if op == nil {
+			writeError(w, notFound("The resource '%s' was not found", selfLink))
+			return "no such operation"
+		}
+		// Done, out of time, or the client gave up: answer with whatever
+		// the operation says now, which is what real Compute does when its
+		// own two minutes run out.
+		if op.Status == "DONE" || time.Now().After(deadline) || r.Context().Err() != nil {
+			return s.getOperation(w, selfLink)
+		}
+		select {
+		case <-time.After(50 * time.Millisecond):
+		case <-r.Context().Done():
+		}
+	}
 }

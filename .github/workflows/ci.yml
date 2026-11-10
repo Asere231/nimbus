@@ -56,6 +56,18 @@ jobs:
       - name: go test
         run: go test ./...
 
+      # The race detector, on Linux only: it roughly doubles the run time,
+      # and one platform is enough to catch a shared-memory bug.
+      #
+      # Added in Milestone 11, after `go test -race` found TWO real races
+      # that plain `go test` passes straight through -- both the same shape,
+      # a long-running operation finished by a background goroutine while a
+      # poll serialises it. One had shipped in Milestone 10. Neither was a
+      # flake: the detector reports them every time, and nothing else does.
+      - name: go test -race
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -race ./...
+
       - name: build
         run: go build -o bin/nimbus ./cmd/nimbus
 
@@ -483,8 +495,8 @@ jobs:
           # The instance really booted and really ran its user data. The
           # third line proves the metadata service too: the script read its
           # own instance id back out of it.
-          ../../../bin/nimbus ssh web -- cat /var/log/nimbus-user-data.log | tee /tmp/userdata.log
-          grep -q "instance-id: $id" /tmp/userdata.log || {
+          ../../../bin/nimbus ssh web -- cat /var/log/nimbus-boot.log | tee /tmp/bootlog.txt
+          grep -q "instance-id: $id" /tmp/bootlog.txt || {
             echo "::error::the instance could not read its own metadata"; exit 1; }
 
           set +e; terraform plan -detailed-exitcode -input=false; code=$?; set -e
@@ -512,7 +524,93 @@ jobs:
           done
           [ "$st" = "running" ] || { echo "::error::the instance is $st, not running"; exit 1; }
 
-          ../../../bin/nimbus ssh web -- cat /var/log/nimbus-user-data.log >/dev/null || {
+          ../../../bin/nimbus ssh web -- cat /var/log/nimbus-boot.log >/dev/null || {
+            echo "::error::the root filesystem did not survive a stop/start"; exit 1; }
+
+          terraform destroy -auto-approve -input=false
+
+      - name: No containers left behind
+        run: |
+          left=$(docker ps -aq --filter label=nimbus.role=instance)
+          if [ -n "$left" ]; then
+            echo "::error::destroy left instance containers running:"
+            docker ps -a --filter label=nimbus.role=instance
+            exit 1
+          fi
+
+  # Milestone 11's GCE example, beside the EC2 one.
+  gce-instance:
+    name: terraform gcp-instance (GCE on the vm engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Docker and the instance base image
+        run: |
+          docker version --format '{{.Server.Version}}'
+          # debian:12, because that is what debian-cloud/debian-12 maps to:
+          # a GCE image name says what it is, unlike an opaque AMI id.
+          docker pull debian:12
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus start --clouds gcp &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, shell in, stop/start, destroy
+        working-directory: examples/terraform/gcp-instance
+        run: |
+          set -euo pipefail
+          B=http://localhost:4703/compute/v1/projects/nimbus-local/zones/us-central1-a/instances/web
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          # The startup script really ran, in a real Debian.
+          ../../../bin/nimbus ssh web -- cat /var/log/nimbus-boot.log | tee /tmp/bootlog.txt
+          grep -q "apt is present: /usr/bin/apt-get" /tmp/bootlog.txt || {
+            echo "::error::the startup script did not run in a real debian"; exit 1; }
+
+          set +e; terraform plan -detailed-exitcode -input=false; code=$?; set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::plan -detailed-exitcode returned $code; expected 0"
+            exit 1
+          fi
+
+          # stop and start are TRAILING PATH SEGMENTS, not colon verbs, and
+          # GCE calls a stopped instance TERMINATED -- the same word EC2
+          # uses for one that has been destroyed.
+          curl -sf -X POST "$B/stop" >/dev/null
+          for i in $(seq 1 30); do
+            st=$(curl -sf "$B" | python3 -c 'import sys,json; print(json.load(sys.stdin)["status"])')
+            [ "$st" = "TERMINATED" ] && break
+            sleep 2
+          done
+          [ "$st" = "TERMINATED" ] || { echo "::error::the instance is $st, not TERMINATED"; exit 1; }
+
+          curl -sf -X POST "$B/start" >/dev/null
+          for i in $(seq 1 30); do
+            st=$(curl -sf "$B" | python3 -c 'import sys,json; print(json.load(sys.stdin)["status"])')
+            [ "$st" = "RUNNING" ] && break
+            sleep 2
+          done
+          [ "$st" = "RUNNING" ] || { echo "::error::the instance is $st, not RUNNING"; exit 1; }
+
+          # The root filesystem has to survive that.
+          ../../../bin/nimbus ssh web -- cat /var/log/nimbus-boot.log >/dev/null || {
             echo "::error::the root filesystem did not survive a stop/start"; exit 1; }
 
           terraform destroy -auto-approve -input=false

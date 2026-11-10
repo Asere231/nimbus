@@ -89,10 +89,24 @@ func (l *lros) put(op *lro) {
 	}
 }
 
+// get returns a COPY. A Cloud Run operation is finished by the background
+// goroutine that started the container, so handing a reader the registry's
+// own pointer has it serialising a struct being written to -- a real data
+// race, which `go test -race` reports and plain `go test` does not. Found
+// while giving Compute's operations the same treatment in Milestone 11;
+// it has been here since Milestone 10.
+//
+// A shallow copy is enough: Done and Error are the fields finish and fail
+// write, and Response is REPLACED rather than mutated in place.
 func (l *lros) get(name string) *lro {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.byID[name]
+	op := l.byID[name]
+	if op == nil {
+		return nil
+	}
+	copied := *op
+	return &copied
 }
 
 // finish marks an operation done and attaches the resource a client should

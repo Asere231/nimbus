@@ -45,6 +45,7 @@ import (
 	"github.com/Asere231/nimbus/internal/engines/docker"
 	"github.com/Asere231/nimbus/internal/engines/k3s"
 	"github.com/Asere231/nimbus/internal/engines/run"
+	"github.com/Asere231/nimbus/internal/engines/vm"
 )
 
 // DefaultProjectID is the project everything belongs to when a client does
@@ -115,9 +116,16 @@ type Server struct {
 	// engines are shared with the other clouds and know about none of them.
 	k3s      *k3s.Engine
 	services *run.Engine
+	// vms runs the Compute instances, on the engine every cloud's
+	// instances use.
+	vms *vm.Engine
 	// gkeMu serialises everything that starts or stops a cluster's
 	// containers. See rescale in gke_nodepool.go for the race it closes.
 	gkeMu sync.Mutex
+	// vmMu does the same for an instance: a boot or a stop that overtakes
+	// a delete leaves a container running after a destroy reported
+	// success.
+	vmMu sync.Mutex
 }
 
 // New builds the server and makes sure the project exists.
@@ -170,6 +178,12 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		StartTimeout: cfg.ClusterTimeout,
 	}, docker.NewCLI())
 
+	s.vms = vm.New(vm.Config{
+		NamePrefix:   "nimbus-gce",
+		KeepRunning:  cfg.KeepClusters,
+		StartTimeout: cfg.ClusterTimeout,
+	}, docker.NewCLI())
+
 	s.objects.load()
 	s.ensureProject()
 	return s
@@ -208,6 +222,7 @@ func (s *Server) Shutdown(ctx context.Context) {
 func (s *Server) UseDocker(d docker.Client) {
 	s.k3s.SetDocker(d)
 	s.services.SetDocker(d)
+	s.vms.SetDocker(d)
 }
 
 // K3s exposes the engine, which the GKE tests drive directly.
@@ -215,6 +230,9 @@ func (s *Server) K3s() *k3s.Engine { return s.k3s }
 
 // Services exposes the Cloud Run engine, likewise.
 func (s *Server) Services() *run.Engine { return s.services }
+
+// VMs exposes the instance engine, likewise.
+func (s *Server) VMs() *vm.Engine { return s.vms }
 
 // ProjectID is the project this server serves.
 func (s *Server) ProjectID() string { return s.cfg.ProjectID }

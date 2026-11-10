@@ -90,7 +90,7 @@ func TestARealInstanceBootsRunsUserDataAndStaysUp(t *testing.T) {
 	} else if !strings.Contains(string(out), "nimbus@test") {
 		t.Errorf("authorized_keys = %q", out)
 	}
-	if out, err := e.Exec(ctx, i, "cat", "/var/log/nimbus-user-data.log"); err != nil {
+	if out, err := e.Exec(ctx, i, "cat", "/var/log/nimbus-boot.log"); err != nil {
 		t.Errorf("reading the user-data log: %v", err)
 	} else if !strings.Contains(string(out), "second-line") {
 		t.Errorf("the user-data log = %q", out)

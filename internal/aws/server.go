@@ -79,6 +79,9 @@ type Server struct {
 	store   *core.Store
 	bus     *core.Bus
 	objects *objectStore
+	// uploads holds multipart uploads in flight. Beside the object store
+	// rather than in it: an upload is not an object until it completes.
+	uploads *multipartStore
 	// items holds DynamoDB's rows, beside the tables themselves in the
 	// store -- a table is a resource, its items are data.
 	items *itemStore
@@ -109,7 +112,8 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	}
 	s := &Server{cfg: cfg, store: store, bus: bus,
 		objects: newObjectStore(cfg.DataDir), items: newItemStore(cfg.DataDir),
-		logs: newLogStore()}
+		uploads: newMultipartStore(),
+		logs:    newLogStore()}
 	s.lambda = funcs.New(funcs.Config{
 		NamePrefix:   "nimbus-lambda",
 		PortBase:     orZero(cfg.FunctionPortBase, DefaultFunctionPortBase),

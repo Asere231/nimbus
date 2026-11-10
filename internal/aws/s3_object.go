@@ -2,6 +2,7 @@ package aws
 
 import (
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -21,6 +22,23 @@ func (s *Server) serveObject(w http.ResponseWriter, r *http.Request, bucketName,
 	}
 	if _, aerr := s.loadBucket(bucketName); aerr != nil {
 		return aerr
+	}
+
+	// Multipart upload: five more operations on an object's path, told
+	// apart by query parameters rather than by verb. See s3_multipart.go.
+	q := r.URL.Query()
+	uploadID := q.Get("uploadId")
+	switch {
+	case r.Method == http.MethodPost && hasFlag(r, "uploads"):
+		return s.createMultipartUpload(w, r, bucketName, key)
+	case r.Method == http.MethodPut && uploadID != "" && q.Get("partNumber") != "":
+		return s.uploadPart(w, r, bucketName, key, uploadID)
+	case r.Method == http.MethodPost && uploadID != "":
+		return s.completeMultipartUpload(w, r, bucketName, key, uploadID)
+	case r.Method == http.MethodDelete && uploadID != "":
+		return s.abortMultipartUpload(w, bucketName, key, uploadID)
+	case r.Method == http.MethodGet && uploadID != "":
+		return s.listParts(w, bucketName, key, uploadID)
 	}
 
 	switch r.Method {
@@ -48,22 +66,11 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucketName, k
 	if err != nil {
 		return errorf(400, "IncompleteBody", "reading the body: %v", err)
 	}
-	info := objectInfo{
-		ContentType: r.Header.Get("Content-Type"),
-		Metadata:    map[string]string{},
-	}
+	info := objectInfo{ContentType: r.Header.Get("Content-Type")}
 	if info.ContentType == "" {
 		info.ContentType = "binary/octet-stream"
 	}
-	// User metadata arrives as x-amz-meta-*, and the part after the prefix
-	// is the key the client will look for. Go canonicalises header names
-	// on both sides, so it is lower-cased here deliberately -- the same
-	// trap Azure's blob metadata had in Milestone 2.
-	for name, values := range r.Header {
-		if lower := strings.ToLower(name); strings.HasPrefix(lower, "x-amz-meta-") && len(values) > 0 {
-			info.Metadata[strings.TrimPrefix(lower, "x-amz-meta-")] = values[0]
-		}
-	}
+	info.Metadata = objectMetadataOf(r)
 	stored := s.objects.put(bucketName, key, data, info)
 	w.Header().Set("ETag", stored.ETag)
 	w.WriteHeader(200)
@@ -88,12 +95,106 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucketName, k
 		w.Header()["x-amz-meta-"+k] = []string{v}
 	}
 	if !withBody {
+		// A HEAD carries the whole object's size and no body, ranged or
+		// not: it answers "how big is this", which a range does not change.
 		w.WriteHeader(200)
 		return nil
 	}
+
+	// A ranged GET is how `aws s3 cp` DOWNLOADS a large object: several
+	// concurrent requests, each written at its own offset. Ignoring the
+	// header while advertising Accept-Ranges meant every one of them got
+	// the whole object and the client assembled overlapping copies --
+	// measured, a 20,000,000-byte file came back as 36,777,216 bytes, with
+	// nothing erroring. Advertising the capability is the promise; this
+	// keeps it.
+	if spec := r.Header.Get("Range"); spec != "" {
+		start, end, status := byteRange(spec, info.Size)
+		switch status {
+		case rangeUnsatisfiable:
+			// The size is in the answer, which is how a client learns what
+			// it should have asked for.
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", info.Size))
+			w.Header().Del("Content-Length")
+			return &apiError{Status: 416, Code: "InvalidRange",
+				Message:  "The requested range is not satisfiable",
+				Resource: "/" + bucketName + "/" + key}
+		case rangeOK:
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, info.Size))
+			w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
+			w.WriteHeader(206)
+			_, _ = w.Write(data[start : end+1])
+			return nil
+		}
+		// rangeIgnore: a header nothing could parse. RFC 9110 says to
+		// ignore it and send the whole object, which is also what S3 does
+		// -- refusing would fail a download over a header the client may
+		// have sent for any reason.
+	}
+
 	w.WriteHeader(200)
 	_, _ = w.Write(data)
 	return nil
+}
+
+// How a Range header was read.
+const (
+	rangeIgnore = iota // unparseable: send the whole object
+	rangeOK
+	rangeUnsatisfiable
+)
+
+// byteRange reads a single-range `bytes=` header against an object of the
+// given size, returning an inclusive start and end.
+//
+// Only one range is honoured. A multi-range request is answered with the
+// whole object rather than a multipart/byteranges body: no client Nimbus
+// serves sends one, and half-implementing it would be worse than not
+// claiming it.
+func byteRange(spec string, size int64) (start, end int64, status int) {
+	value, ok := strings.CutPrefix(strings.TrimSpace(spec), "bytes=")
+	if !ok || strings.Contains(value, ",") {
+		return 0, 0, rangeIgnore
+	}
+	first, last, ok := strings.Cut(value, "-")
+	if !ok {
+		return 0, 0, rangeIgnore
+	}
+
+	switch {
+	case first == "" && last == "":
+		return 0, 0, rangeIgnore
+	case first == "":
+		// A SUFFIX range: the last N bytes, not a range starting at -N.
+		n, err := strconv.ParseInt(last, 10, 64)
+		if err != nil || n <= 0 {
+			return 0, 0, rangeIgnore
+		}
+		if n > size {
+			n = size
+		}
+		start, end = size-n, size-1
+	default:
+		var err error
+		if start, err = strconv.ParseInt(first, 10, 64); err != nil || start < 0 {
+			return 0, 0, rangeIgnore
+		}
+		if last == "" {
+			end = size - 1
+		} else if end, err = strconv.ParseInt(last, 10, 64); err != nil {
+			return 0, 0, rangeIgnore
+		}
+		// Asking past the end is CLAMPED, not refused -- a client that does
+		// not know the size asks for more than there is on the last chunk.
+		if end > size-1 {
+			end = size - 1
+		}
+	}
+
+	if size == 0 || start > size-1 || end < start {
+		return 0, 0, rangeUnsatisfiable
+	}
+	return start, end, rangeOK
 }
 
 // --- listing --------------------------------------------------------------
@@ -207,4 +308,29 @@ func (s *Server) deleteObjects(w http.ResponseWriter, r *http.Request, b *bucket
 	}
 	writeXML(w, 200, doc)
 	return nil
+}
+
+// objectMetadataOf reads the x-amz-meta-* headers.
+//
+// The part after the prefix is the key a client will look for, and it is
+// lower-cased deliberately: Go canonicalises header names on BOTH sides,
+// so a client doing a literal lookup of "owner" would miss "Owner". The
+// same trap Azure's blob metadata had in Milestone 2.
+func objectMetadataOf(r *http.Request) map[string]string {
+	out := map[string]string{}
+	for name, values := range r.Header {
+		if lower := strings.ToLower(name); strings.HasPrefix(lower, "x-amz-meta-") && len(values) > 0 {
+			out[strings.TrimPrefix(lower, "x-amz-meta-")] = values[0]
+		}
+	}
+	return out
+}
+
+// hasFlag reports whether a valueless query parameter is present. S3's
+// sub-resources carry no value, so Query().Get returns "" for all of them
+// and the raw query has to be inspected -- the same reason subResource
+// exists.
+func hasFlag(r *http.Request, name string) bool {
+	_, ok := r.URL.Query()[name]
+	return ok
 }

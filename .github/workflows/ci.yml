@@ -1040,6 +1040,44 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: a file big enough that the CLI splits it
+        env:
+          AWS_ACCESS_KEY_ID: nimbus
+          AWS_SECRET_ACCESS_KEY: nimbus
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          set -euo pipefail
+          E="--endpoint-url http://localhost:4702"
+
+          # 20 MB, which is past the 8 MB multipart_threshold, so the CLI
+          # switches protocol on its own: CreateMultipartUpload, concurrent
+          # UploadParts, CompleteMultipartUpload. It also DOWNLOADS with
+          # concurrent ranged GETs, which is the half that silently
+          # corrupted the file before Milestone 12 -- a 20,000,000-byte
+          # upload came back as 36,777,216 bytes with nothing erroring.
+          head -c 20000000 /dev/urandom > /tmp/big.bin
+          aws $E s3 mb s3://multipart-demo
+          aws $E s3 cp /tmp/big.bin s3://multipart-demo/big.bin
+          aws $E s3 cp s3://multipart-demo/big.bin /tmp/back.bin
+
+          cmp /tmp/big.bin /tmp/back.bin || {
+            echo "::error::the file did not round-trip byte for byte"
+            ls -l /tmp/big.bin /tmp/back.bin
+            exit 1; }
+
+          # A multipart object's ETag is the digest of the PART digests with
+          # a -N suffix, never the MD5 of the bytes. A plain etag here would
+          # mean the parts were reassembled and then re-hashed as one.
+          etag=$(aws $E s3api head-object --bucket multipart-demo --key big.bin \
+            --query ETag --output text)
+          case "$etag" in
+            *-*) ;;
+            *) echo "::error::ETag $etag has no part count; this is not a multipart object"; exit 1 ;;
+          esac
+
+          aws $E s3 rm s3://multipart-demo/big.bin
+          aws $E s3 rb s3://multipart-demo
+
       - name: Nothing left behind
         run: |
           # Each cloud keeps its root container -- a subscription, an

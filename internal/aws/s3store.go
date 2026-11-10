@@ -78,6 +78,24 @@ func (s *objectStore) put(bucket, key string, data []byte, info objectInfo) obje
 	return info
 }
 
+// putWithETag stores an object whose ETag is already decided, which is the
+// multipart case: that ETag is the digest of the PART digests, not of the
+// bytes, so computing it here from the content would be wrong.
+func (s *objectStore) putWithETag(bucket, key string, data []byte, info objectInfo) objectInfo {
+	etag := info.ETag
+	stored := s.put(bucket, key, data, info)
+	if etag == "" {
+		return stored
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o := s.mem[bucket][key]
+	o.info.ETag = etag
+	s.mem[bucket][key] = o
+	s.writeThrough(bucket, key, o.data, o.info)
+	return o.info
+}
+
 func (s *objectStore) get(bucket, key string) ([]byte, objectInfo, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

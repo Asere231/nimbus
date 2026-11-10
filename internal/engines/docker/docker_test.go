@@ -285,11 +285,42 @@ func TestRealContainerLifecycle(t *testing.T) {
 		t.Errorf("list by label = %+v", found)
 	}
 
+	// Stop and start again, which is what an instance's stop/start is.
+	// Proven against the real daemon as well as the Fake, because the two
+	// agreeing about this verb is the only thing that makes the plugins'
+	// Fake-based tests mean anything. The file written before the stop has
+	// to still be there: that is the difference between Start and
+	// Remove-then-Run, and the reason this verb exists.
+	if _, err := c.Exec(ctx, name, "sh", "-c", "echo persisted > /root-disk"); err != nil {
+		t.Fatalf("writing a file before the stop: %v", err)
+	}
+	if err := c.Stop(ctx, name); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if got, err := c.Inspect(ctx, name); err != nil || got.Running {
+		t.Fatalf("after stop: inspect = %+v, err = %v", got, err)
+	}
+	if err := c.Start(ctx, name); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if got, err := c.Inspect(ctx, name); err != nil || !got.Running {
+		t.Fatalf("after start: inspect = %+v, err = %v", got, err)
+	}
+	if out, err := c.Exec(ctx, name, "cat", "/root-disk"); err != nil {
+		t.Errorf("reading the file after a restart: %v", err)
+	} else if strings.TrimSpace(string(out)) != "persisted" {
+		t.Errorf("the root disk did not survive the restart: %q", out)
+	}
+
 	if err := c.Remove(ctx, name); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	if _, err := c.Inspect(ctx, name); err == nil {
 		t.Error("container still exists after removal")
+	}
+	// And starting a container that is gone is an error, as the Fake says.
+	if err := c.Start(ctx, name); err == nil {
+		t.Error("starting a removed container succeeded")
 	}
 }
 
@@ -339,5 +370,45 @@ func TestTheImageAndItsArgumentsComeLast(t *testing.T) {
 		if tail[i] != want[i] {
 			t.Fatalf("args end %v, want them to end %v", tail, want)
 		}
+	}
+}
+
+// An instance that is stopped and started again must come back with its
+// root filesystem intact, which is what `docker start` does and what
+// Remove-then-Run would silently throw away. Nothing before Milestone 11
+// needed to resume a container -- k3s and Cloud Run only ever replace one
+// -- so this verb is new, and the Fake has to agree with the real client
+// about it or the plugins' tests prove nothing.
+func TestAStoppedContainerCanBeStartedAgain(t *testing.T) {
+	f := NewFake()
+	ctx := context.Background()
+
+	if _, err := f.Run(ctx, RunOptions{Name: "nimbus-vm-1", Image: "alpine"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Stop(ctx, "nimbus-vm-1"); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := f.Inspect(ctx, "nimbus-vm-1"); c.Running {
+		t.Fatal("the container should be stopped")
+	}
+	if err := f.Start(ctx, "nimbus-vm-1"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := f.Inspect(ctx, "nimbus-vm-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Running {
+		t.Errorf("after Start the container is %q, want it running", c.Status)
+	}
+
+	// Starting one that does not exist is an error a caller can recognise,
+	// not a silent success: unlike Stop and Remove, where "already gone" is
+	// the desired end state, there is nothing to be idempotent about.
+	err = f.Start(ctx, "nimbus-vm-missing")
+	var nf *NotFoundError
+	if !errors.As(err, &nf) {
+		t.Errorf("starting a missing container gave %v, want NotFoundError", err)
 	}
 }

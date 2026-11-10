@@ -29,6 +29,12 @@ type Client interface {
 	Run(ctx context.Context, opts RunOptions) (string, error)
 	// Stop stops a container, ignoring one that is already stopped.
 	Stop(ctx context.Context, name string) error
+	// Start runs a stopped container again, keeping its filesystem. A
+	// machine that is stopped and started is still the same machine, so
+	// Remove-then-Run is not the same thing: it would discard the root
+	// disk. Unlike Stop and Remove, a container that does not exist is an
+	// error here -- there is no desired end state to be idempotent about.
+	Start(ctx context.Context, name string) error
 	// Remove force-removes a container, ignoring one that is already gone.
 	Remove(ctx context.Context, name string) error
 	// Exec runs a command inside a container and returns its stdout.
@@ -292,6 +298,14 @@ func (c *CLI) Stop(ctx context.Context, name string) error {
 	if errors.As(err, &nf) {
 		return nil
 	}
+	return err
+}
+
+// Start runs a stopped container again. A missing container IS an error,
+// so a caller resuming an instance whose container was removed behind its
+// back finds out rather than reporting success.
+func (c *CLI) Start(ctx context.Context, name string) error {
+	_, err := c.run(ctx, "start", name)
 	return err
 }
 

@@ -122,6 +122,22 @@ func (f *Fake) Stop(ctx context.Context, name string) error {
 	return nil // already gone is not an error, as with the real client
 }
 
+// Start runs a stopped container again, keeping it the same container.
+func (f *Fake) Start(ctx context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("start %s", name)
+	if err := f.check(); err != nil {
+		return err
+	}
+	c, ok := f.containers[name]
+	if !ok {
+		return &NotFoundError{Name: name}
+	}
+	c.Running, c.Status = true, "running"
+	return nil
+}
+
 // Remove deletes a container.
 func (f *Fake) Remove(ctx context.Context, name string) error {
 	f.mu.Lock()

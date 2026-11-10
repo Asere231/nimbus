@@ -59,13 +59,23 @@ type operations struct {
 func newOperations() *operations { return &operations{m: map[string]*operation{}} }
 
 // start registers an operation that is still running.
+//
+// The registry keeps its OWN copy and the caller gets another, because an
+// operation is mutable: finish() writes to it from the background
+// goroutine that did the work, while the caller is still serialising its
+// own into a response. Sharing the pointer is a real data race -- one the
+// detector reports and plain `go test` does not. The same shape turned up
+// three times in GCP's two registries in Milestone 11; this is the fourth,
+// and the rule is now explicit: **a registry of mutable things hands out
+// copies, on the way in and on the way out.**
 func (o *operations) start(resourceID string) *operation {
 	op := &operation{
 		ID: newUUID(), ResourceID: resourceID,
 		Status: opInProgress, Started: time.Now().UTC(),
 	}
+	stored := *op
 	o.mu.Lock()
-	o.m[op.ID] = op
+	o.m[op.ID] = &stored
 	o.mu.Unlock()
 	return op
 }
@@ -75,6 +85,10 @@ func (o *operations) start(resourceID string) *operation {
 func (o *operations) done(resourceID string) *operation {
 	op := o.start(resourceID)
 	o.finish(op.ID, nil)
+	// Re-read, because start handed back a copy made before it finished.
+	if finished := o.get(op.ID); finished != nil {
+		return finished
+	}
 	return op
 }
 
@@ -94,11 +108,16 @@ func (o *operations) finish(id string, aerr *armError) {
 	op.Status = opSucceeded
 }
 
-// get returns an operation, or nil.
+// get returns a COPY of an operation, or nil. See start for why.
 func (o *operations) get(id string) *operation {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.m[id]
+	op, ok := o.m[id]
+	if !ok {
+		return nil
+	}
+	copied := *op
+	return &copied
 }
 
 // forget drops operations that finished long ago, so a long-lived Nimbus does

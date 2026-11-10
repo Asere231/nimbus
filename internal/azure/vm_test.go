@@ -177,10 +177,21 @@ func TestTheVMIdIsDerivedSoItNeverChanges(t *testing.T) {
 // after a successful apply found nothing running. Real Azure takes minutes
 // over a VM, so waiting is also the honest shape.
 func TestAVirtualMachineProvisionsAsynchronously(t *testing.T) {
-	srv, az, _ := vmTestServer(t)
+	srv, az, f := vmTestServer(t)
 	rg := sub + "/resourceGroups/rg-vm-async"
 	do(t, srv, "PUT", rg, map[string]any{"location": "eastus"})
 	id := rg + "/providers/Microsoft.Compute/virtualMachines/vm-async"
+
+	// Hold the container un-started, so "still Creating" is a state the
+	// test PUT the system in rather than one it hoped to arrive before.
+	//
+	// The first version of this test simply asserted on the create's
+	// response and passed here every time -- then failed on CI under the
+	// race detector, whose slowdown let the provisioning goroutine finish
+	// first. Exactly the lesson the AKS credentials test already taught
+	// and CLAUDE.md already records; I wrote this one anyway.
+	block := make(chan struct{})
+	f.BlockRun = block
 
 	var body map[string]any
 	if err := json.Unmarshal([]byte(vmBody("#!/bin/sh\ntrue\n")), &body); err != nil {
@@ -190,6 +201,14 @@ func TestAVirtualMachineProvisionsAsynchronously(t *testing.T) {
 	if state := created["properties"].(map[string]any)["provisioningState"]; state != "Creating" {
 		t.Errorf("the create answered provisioningState %v, want Creating", state)
 	}
+	// Still Creating for as long as the container has not started, however
+	// long the test takes to get here.
+	_, pending := do(t, srv, "GET", id, nil)
+	if state := pending["properties"].(map[string]any)["provisioningState"]; state != "Creating" {
+		t.Errorf("provisioningState = %v while the container is still starting, want Creating", state)
+	}
+
+	close(block) // let it finish
 	waitForProvisioning(t, srv, id, "Succeeded")
 
 	// And the container is recorded, which is what `nimbus ssh` reads.

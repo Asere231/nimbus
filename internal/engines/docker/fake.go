@@ -31,6 +31,16 @@ type Fake struct {
 	Unavailable bool
 	// FailRun, when set, makes Run return this error.
 	FailRun error
+	// BlockRun, when set, makes Run wait until it is closed before
+	// starting anything. It is how a test holds a resource in the state it
+	// wants to assert about -- "still provisioning" -- rather than racing
+	// the goroutine that leaves that state. Without it a Fake start is
+	// instantaneous, so a create and its completion can land in either
+	// order and the test passes or fails by timing.
+	//
+	// Read outside the lock on purpose: holding it while waiting would
+	// deadlock anything else the test does with this Fake.
+	BlockRun chan struct{}
 	// ExecOutput maps a command (joined by spaces) to its stdout, so a test
 	// can stand in for reading certificates out of a container.
 	ExecOutput map[string][]byte
@@ -82,6 +92,13 @@ func (f *Fake) Available(ctx context.Context) error {
 
 // Run records a container as started.
 func (f *Fake) Run(ctx context.Context, opts RunOptions) (string, error) {
+	if block := f.BlockRun; block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("run %s image=%s args=%v volumes=%v", opts.Name, opts.Image, opts.Args, opts.Volumes)

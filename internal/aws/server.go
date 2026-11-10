@@ -21,12 +21,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/Asere231/nimbus/internal/core"
 	"github.com/Asere231/nimbus/internal/engines/docker"
 	"github.com/Asere231/nimbus/internal/engines/funcs"
 	"github.com/Asere231/nimbus/internal/engines/k3s"
+	"github.com/Asere231/nimbus/internal/engines/vm"
 )
 
 // DefaultAccountID is the account every emulated resource belongs to. The
@@ -86,6 +88,12 @@ type Server struct {
 	// k3s runs the EKS clusters. The same engine Azure's AKS uses, which
 	// knows about neither -- see internal/engines/k3s.
 	k3s *k3s.Engine
+	// vms runs the EC2 instances, on the engine every cloud's instances
+	// use. vmMu is held across check-and-act on one: a boot or a stop that
+	// overtakes a terminate leaves a container running after a destroy
+	// reported success, which is the lost update at engine level.
+	vms  *vm.Engine
+	vmMu sync.Mutex
 }
 
 // New builds the server and makes sure the account exists.
@@ -108,6 +116,11 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		KeepRunning:  cfg.KeepClusters,
 		StartTimeout: cfg.ClusterTimeout,
 		Dir:          lambdaDir(cfg.DataDir),
+	}, docker.NewCLI())
+	s.vms = vm.New(vm.Config{
+		NamePrefix:   "nimbus-ec2",
+		KeepRunning:  cfg.KeepClusters,
+		StartTimeout: cfg.ClusterTimeout,
 	}, docker.NewCLI())
 	k3sCfg := k3s.Config{
 		Image:       cfg.K3sImage,

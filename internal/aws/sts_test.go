@@ -256,12 +256,16 @@ func TestRequestsArePublishedAsAwsEvents(t *testing.T) {
 func TestUnimplementedActionsAreNotedInTheFeed(t *testing.T) {
 	s := newTestServer(t)
 	before := len(s.bus.History())
-	query(t, s, "ec2", "Action=RunInstances&Version=2016-11-15")
+	// CreateVolume, because this test's previous example -- RunInstances --
+	// got implemented in Milestone 11. Whatever is chosen here has to be
+	// an action Nimbus really does not serve, so the assertion is about
+	// the FEED and not about which actions exist.
+	query(t, s, "ec2", "Action=CreateVolume&Version=2016-11-15")
 	events := s.bus.History()[before:]
 	if len(events) != 1 || !strings.Contains(events[0].Note, "unimplemented") {
 		t.Fatalf("event note = %q, want one mentioning unimplemented", events[0].Note)
 	}
-	if !strings.Contains(events[0].Note, "RunInstances") {
+	if !strings.Contains(events[0].Note, "CreateVolume") {
 		t.Errorf("the note should name the action: %q", events[0].Note)
 	}
 }

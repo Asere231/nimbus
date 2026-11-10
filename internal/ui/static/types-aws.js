@@ -17,6 +17,8 @@ export const TYPES = {
   "aws::ec2::securitygroup": ["SG", "#f0883e", "Security group"],
   "aws::ec2::networkacl": ["NACL", "#f0883e", "Network ACL"],
   "aws::ec2::eip": ["EIP", "#d2a8ff", "Elastic IP"],
+  "aws::ec2::instance": ["EC2", "#ff9900", "EC2 instance"],
+  "aws::ec2::keypair": ["KEY", "#8b949e", "Key pair"],
   "aws::s3::bucket": ["S3", "#3fb950", "S3 bucket"],
   "aws::iam::role": ["ROLE", "#bc8cff", "IAM role"],
   "aws::iam::user": ["USER", "#bc8cff", "IAM user"],
@@ -32,7 +34,8 @@ export const TYPES = {
 // Siblings are ordered so a stack reads the way it was built: the network
 // first, then what sits in it.
 export const ORDER = ["account", "vpc", "subnet", "internetgateway", "natgateway",
-  "routetable", "securitygroup", "cluster", "nodegroup", "table", "function", "bucket", "role", "user", "policy", "loggroup"];
+  "routetable", "securitygroup", "instance", "cluster", "nodegroup", "table", "function",
+  "bucket", "keypair", "role", "user", "policy", "instanceprofile", "loggroup"];
 
 // AWS has no addressing-only types to hide, unlike ARM's blobServices.
 export const PASSTHROUGH = null;

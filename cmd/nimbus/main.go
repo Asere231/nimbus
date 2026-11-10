@@ -55,6 +55,8 @@ func main() {
 		azCLI(os.Args[2:])
 	case "gcp":
 		gcpCLI(os.Args[2:])
+	case "ssh":
+		sshCLI(os.Args[2:])
 	case "plan-view":
 		planView(os.Args[2:])
 	case "version", "--version", "-v":
@@ -75,6 +77,7 @@ Usage:
   nimbus az register [--run]     register Nimbus as a custom cloud for the az CLI
   nimbus gcp register [--run]    point the gcloud CLI at Nimbus
   nimbus gcp kubeconfig CLUSTER  a kubeconfig for a GKE cluster, for kubectl
+  nimbus ssh INSTANCE            a shell on an instance (docker exec, not SSH)
   nimbus plan-view PLAN          show a terraform plan on the graph before applying it
   nimbus version
 `)

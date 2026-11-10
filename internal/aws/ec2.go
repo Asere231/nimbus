@@ -136,6 +136,28 @@ func (s *Server) serveEC2(w http.ResponseWriter, r *http.Request) string {
 	case "DescribeAccountAttributes":
 		aerr = s.describeAccountAttributes(w, p)
 
+	// --- instances, which really run: see ec2_instance.go.
+	case "RunInstances":
+		aerr = s.runInstances(w, p)
+	case "DescribeInstances":
+		aerr = s.describeInstances(w, p)
+	case "StopInstances", "StartInstances", "TerminateInstances", "RebootInstances":
+		aerr = s.changeInstances(w, p, action)
+	case "DescribeInstanceTypes":
+		aerr = s.describeInstanceTypes(w, p)
+	case "DescribeInstanceAttribute":
+		aerr = s.describeInstanceAttribute(w, p)
+	case "DescribeInstanceCreditSpecifications":
+		aerr = s.describeCreditSpecifications(w, p)
+
+	// --- key pairs. ImportKeyPair, not CreateKeyPair: see ec2_keypair.go.
+	case "ImportKeyPair":
+		aerr = s.importKeyPair(w, p)
+	case "DescribeKeyPairs":
+		aerr = s.describeKeyPairs(w, p)
+	case "DeleteKeyPair":
+		aerr = s.deleteKeyPair(w, p)
+
 	default:
 		writeError(w, "ec2", invalidAction("ec2", action))
 		return "unimplemented: ec2 " + action
@@ -421,6 +443,8 @@ func notFound(typ, id string) *apiError {
 		typeRouteTbl: "InvalidRouteTableID.NotFound",
 		typeSG:       "InvalidGroup.NotFound",
 		typeNAT:      "NatGatewayNotFound",
+		typeInstance: "InvalidInstanceID.NotFound",
+		typeKeyPair:  "InvalidKeyPair.NotFound",
 	}[typ]
 	if code == "" {
 		code = "InvalidParameterValue"

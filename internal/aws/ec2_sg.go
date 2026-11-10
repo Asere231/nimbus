@@ -395,10 +395,30 @@ type describeTagsResponse struct {
 	} `xml:"tagSet>item"`
 }
 
+// describeTags HONOURS its filters, and it is the exception to the rule
+// that an unknown filter is ignored.
+//
+// That rule holds because returning too much is something a client narrows
+// itself. But the provider uses a filtered DescribeTags as a question with
+// an expected cardinality -- "what is this instance's
+// aws:ec2launchtemplate:id tag?" -- and more than one answer is an error it
+// reports rather than something it filters:
+//
+//	reading EC2 Instance (i-0372...) launch template ID tag:
+//	too many results: wanted 1, got 2
+//
+// Measured against aws provider 5.100.0, and only once instances existed:
+// before that nothing asked DescribeTags a question like this, so answering
+// with every tag in the store was harmless. The two it got back were a
+// VPC's Name and an instance's Name.
 func (s *Server) describeTags(w http.ResponseWriter, p params) *apiError {
+	fs := readFilters(p)
 	doc := describeTagsResponse{Xmlns: namespaceFor("ec2"), RequestID: requestID()}
 	for _, res := range s.store.List(func(r *core.Resource) bool { return r.Cloud == "aws" }) {
 		for _, t := range decodeTags(bodyField(res.Body, "tagSet")) {
+			if !tagMatchesFilters(res.ID, ec2TypeName(res.Type), t, fs) {
+				continue
+			}
 			doc.TagSet = append(doc.TagSet, struct {
 				ResourceID   string `xml:"resourceId"`
 				ResourceType string `xml:"resourceType"`
@@ -409,6 +429,31 @@ func (s *Server) describeTags(w http.ResponseWriter, p params) *apiError {
 	}
 	writeXML(w, 200, doc)
 	return nil
+}
+
+// tagMatchesFilters applies DescribeTags's own four filter names. An
+// unknown one is still ignored -- the general rule is only wrong where a
+// count is the answer, and these are the names that carry one.
+func tagMatchesFilters(resourceID, resourceType string, t tag, fs []filter) bool {
+	for _, f := range fs {
+		var have string
+		switch f.Name {
+		case "resource-id":
+			have = resourceID
+		case "resource-type":
+			have = resourceType
+		case "key":
+			have = t.Key
+		case "value":
+			have = t.Value
+		default:
+			continue
+		}
+		if !contains(f.Values, have) {
+			return false
+		}
+	}
+	return true
 }
 
 // ec2TypeName is what DescribeTags calls a kind: lower-case and hyphenated,
@@ -427,6 +472,10 @@ func ec2TypeName(typ string) string {
 		return "security-group"
 	case typeNAT:
 		return "natgateway"
+	case typeInstance:
+		return "instance"
+	case typeKeyPair:
+		return "key-pair"
 	}
 	return "resource"
 }

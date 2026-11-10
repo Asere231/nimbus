@@ -430,6 +430,102 @@ jobs:
             fi
           done
 
+  # Milestone 11's instance example. An instance is a container, so this
+  # needs Docker and sits with the other engine-backed jobs rather than in
+  # the plain terraform matrix.
+  ec2-instance:
+    name: terraform aws-instance (EC2 on the vm engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Docker and the instance base image
+        run: |
+          docker version --format '{{.Server.Version}}'
+          # Pulled here so the apply's own timeout is not spent on a
+          # download. Alpine because it is tiny and its busybox has the
+          # base64 and tee the engine's bootstrap needs.
+          docker pull alpine:3.20
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus start --clouds aws &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, shell in, stop/start, destroy
+        working-directory: examples/terraform/aws-instance
+        env:
+          AWS_ACCESS_KEY_ID: nimbus
+          AWS_SECRET_ACCESS_KEY: nimbus
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          set -euo pipefail
+          E="--endpoint-url http://localhost:4702"
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          id=$(terraform output -raw instance_id)
+
+          # The instance really booted and really ran its user data. The
+          # third line proves the metadata service too: the script read its
+          # own instance id back out of it.
+          ../../../bin/nimbus ssh web -- cat /var/log/nimbus-user-data.log | tee /tmp/userdata.log
+          grep -q "instance-id: $id" /tmp/userdata.log || {
+            echo "::error::the instance could not read its own metadata"; exit 1; }
+
+          set +e; terraform plan -detailed-exitcode -input=false; code=$?; set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::plan -detailed-exitcode returned $code; expected 0"
+            exit 1
+          fi
+
+          # Stopping and starting must keep the root filesystem: the file
+          # the boot script wrote has to still be there afterwards. That is
+          # the difference between docker start and a fresh container.
+          aws $E ec2 stop-instances --instance-ids "$id" >/dev/null
+          for i in $(seq 1 30); do
+            st=$(aws $E ec2 describe-instances --instance-ids "$id"               --query 'Reservations[0].Instances[0].State.Name' --output text)
+            [ "$st" = "stopped" ] && break
+            sleep 2
+          done
+          [ "$st" = "stopped" ] || { echo "::error::the instance is $st, not stopped"; exit 1; }
+
+          aws $E ec2 start-instances --instance-ids "$id" >/dev/null
+          for i in $(seq 1 30); do
+            st=$(aws $E ec2 describe-instances --instance-ids "$id"               --query 'Reservations[0].Instances[0].State.Name' --output text)
+            [ "$st" = "running" ] && break
+            sleep 2
+          done
+          [ "$st" = "running" ] || { echo "::error::the instance is $st, not running"; exit 1; }
+
+          ../../../bin/nimbus ssh web -- cat /var/log/nimbus-user-data.log >/dev/null || {
+            echo "::error::the root filesystem did not survive a stop/start"; exit 1; }
+
+          terraform destroy -auto-approve -input=false
+
+      - name: No containers left behind
+        run: |
+          left=$(docker ps -aq --filter label=nimbus.role=instance)
+          if [ -n "$left" ]; then
+            echo "::error::destroy left instance containers running:"
+            docker ps -a --filter label=nimbus.role=instance
+            exit 1
+          fi
+
   # Milestone 8's two examples. Both need Docker -- a Lambda is a container
   # and an EKS cluster is k3s -- so they sit beside the AKS job rather than
   # in the plain terraform matrix.

@@ -200,3 +200,36 @@ test("every GCP type the plugin stores has a badge", () => {
     assert.ok(gcpTable.ORDER.includes(last), type + " is missing from ORDER");
   }
 });
+
+// The same gate for AWS, which did not have one until Milestone 11 added a
+// type and nothing failed. An unbadged resource still draws -- as a card
+// with no abbreviation and the default colour -- so there is no error to
+// notice, only a graph that looks half-finished.
+test("every AWS type Nimbus stores has a badge and a place in the order", () => {
+  const stored = [
+    "AWS::Account",
+    "AWS::EC2::VPC",
+    "AWS::EC2::Subnet",
+    "AWS::EC2::InternetGateway",
+    "AWS::EC2::NatGateway",
+    "AWS::EC2::RouteTable",
+    "AWS::EC2::SecurityGroup",
+    "AWS::EC2::Instance",
+    "AWS::EC2::KeyPair",
+    "AWS::S3::Bucket",
+    "AWS::IAM::Role",
+    "AWS::IAM::User",
+    "AWS::IAM::Policy",
+    "AWS::IAM::InstanceProfile",
+    "AWS::EKS::Cluster",
+    "AWS::EKS::Nodegroup",
+    "AWS::DynamoDB::Table",
+    "AWS::Lambda::Function",
+    "AWS::Logs::LogGroup",
+  ];
+  for (const type of stored) {
+    assert.ok(awsTable.TYPES[type.toLowerCase()], type + " has no badge");
+    const last = type.toLowerCase().split("::").pop();
+    assert.ok(awsTable.ORDER.includes(last), type + " is missing from ORDER");
+  }
+});

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Asere231/nimbus/internal/core"
+	"github.com/Asere231/nimbus/internal/engines/docker"
 )
 
 // CloudWatch Logs is JSON 1.1 and spells its fields in lowerCamelCase,
@@ -21,7 +22,13 @@ func newLogsTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(Config{PublicURL: "http://localhost:4702"}, store, bus)
+	s := New(Config{PublicURL: "http://localhost:4702"}, store, bus)
+	// No unit test may reach the real Docker daemon: a handler that
+	// starts a container would leave it running after the package passed.
+	f := docker.NewFake()
+	f.Unavailable = true
+	s.UseDocker(f)
+	return s
 }
 
 func logs(t *testing.T, s *Server, action, body string) (*httptest.ResponseRecorder, map[string]any) {

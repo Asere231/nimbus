@@ -36,6 +36,17 @@ teaches a reader something false. A short milestone on purpose.
    entries on connect would stop the feed looking like nothing happened.
    Snapshots must stay out of it — a restart is not an event.
 
+Fixed ahead of this milestone, kept here because the second half is still
+unproven: **a unit test must never hold a real Docker client.**
+`newTestServer` in every cloud package handed the server `docker.NewCLI()`,
+so `TestRoleAssignmentLifecycle` — which PUTs an ACR only because a role
+assignment needs a resource-level scope to hang off — started a real
+`registry:2` and left it running after `go test ./...` passed. All three
+packages' test helpers now install a `docker.Fake` by default; the tests
+that exercise an engine install their own over it. What is still untested is
+the same claim for a real apply: that a `terraform destroy` leaves no
+container behind.
+
 ## Ask the owner
 
 - **How much namespace to show.** A namespace level in the Kubernetes view
@@ -60,4 +71,6 @@ that is worth its own session. Leave it under "Later" and say so.
       back byte-for-byte with `aws s3 cp` in the other direction.
 - [ ] The activity feed is populated immediately after a restart with
       `--persist`, and contains no entry for the restart itself.
+- [ ] After `go test ./...` and after a `terraform destroy` of every
+      example, `docker ps -a --filter label=nimbus.resource-id -q` is empty.
 - [ ] Full test suite and CI green on macOS, Windows and Linux.

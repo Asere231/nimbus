@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Asere231/nimbus/internal/core"
+	"github.com/Asere231/nimbus/internal/engines/docker"
 )
 
 // Every body here was captured from aws-cli 1.40.33 against a logging
@@ -20,7 +21,13 @@ func newDynamoTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(Config{PublicURL: "http://localhost:4702", DataDir: t.TempDir()}, store, bus)
+	s := New(Config{PublicURL: "http://localhost:4702", DataDir: t.TempDir()}, store, bus)
+	// No unit test may reach the real Docker daemon: a handler that
+	// starts a container would leave it running after the package passed.
+	f := docker.NewFake()
+	f.Unavailable = true
+	s.UseDocker(f)
+	return s
 }
 
 // dynamo replays a JSON 1.0 call: the action is in X-Amz-Target, the body is

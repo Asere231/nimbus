@@ -16,6 +16,7 @@ import (
 
 	"github.com/Asere231/nimbus/internal/azure/storage"
 	"github.com/Asere231/nimbus/internal/core"
+	"github.com/Asere231/nimbus/internal/engines/docker"
 )
 
 // These tests replay the HTTP calls the Terraform azurerm provider (via
@@ -36,6 +37,13 @@ func newTestServerWithBus(t *testing.T) (*httptest.Server, *core.Store, *core.Bu
 	var az *Server
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { az.ServeHTTP(w, r) }))
 	az = New(Config{PublicURL: srv.URL}, store, bus)
+	// A unit test must never reach the real Docker daemon. Several hooks
+	// (ACR, AKS) start containers in AfterPut, and a test that puts one of
+	// those types only to have an ARM path to work with -- a role
+	// assignment's scope, say -- would leave a registry running after the
+	// package passed. Tests that care about the engine install their own
+	// Fake over this one.
+	az.useDocker(docker.NewFake())
 	testServers[srv] = az
 	t.Cleanup(func() { delete(testServers, srv); srv.Close() })
 	return srv, store, bus

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Asere231/nimbus/internal/core"
+	"github.com/Asere231/nimbus/internal/engines/docker"
 )
 
 // Every path and body replayed here was captured from the google provider
@@ -27,7 +28,13 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(Config{PublicURL: base}, store, bus)
+	s := New(Config{PublicURL: base}, store, bus)
+	// No unit test may reach the real Docker daemon: a handler that
+	// starts a container would leave it running after the package passed.
+	f := docker.NewFake()
+	f.Unavailable = true
+	s.UseDocker(f)
+	return s
 }
 
 // call replays one request. The `alt=json&prettyPrint=false` the clients

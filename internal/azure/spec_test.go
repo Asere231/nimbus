@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Asere231/nimbus/internal/core"
+	"github.com/Asere231/nimbus/internal/engines/docker"
 )
 
 // The spec table covers types nobody wrote a hook for. These tests drive it
@@ -25,6 +26,9 @@ func newTestServerWithGroup(t *testing.T) (*Server, string) {
 		t.Fatal(err)
 	}
 	s := New(Config{PublicURL: "https://localhost:4701"}, store, bus)
+	// No unit test may reach the real Docker daemon: a template deployed
+	// here may well carry a type whose hook starts a container.
+	s.useDocker(docker.NewFake())
 	const rg = "rg-spec"
 	putResource(t, s, "/subscriptions/"+DefaultSubscriptionID+"/resourceGroups/"+rg, `{"location":"eastus"}`)
 	return s, rg

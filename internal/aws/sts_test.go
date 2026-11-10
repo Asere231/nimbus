@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Asere231/nimbus/internal/core"
+	"github.com/Asere231/nimbus/internal/engines/docker"
 )
 
 func newTestServer(t *testing.T) *Server {
@@ -17,7 +18,13 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(Config{PublicURL: "http://localhost:4702"}, store, bus)
+	s := New(Config{PublicURL: "http://localhost:4702"}, store, bus)
+	// No unit test may reach the real Docker daemon: a handler that
+	// starts a container would leave it running after the package passed.
+	f := docker.NewFake()
+	f.Unavailable = true
+	s.UseDocker(f)
+	return s
 }
 
 // query replays what aws-cli sends: a POST to "/" with the form body and a

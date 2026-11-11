@@ -243,8 +243,11 @@ func TestADenialIsOnTheBus(t *testing.T) {
 	}
 	// The action, the principal and the reason. There is no rule to name
 	// here, because nothing matched: this is the implicit deny, and
-	// saying "no policy allows it" is the accurate thing to report.
-	for _, want := range []string{"s3:PutObject", "role/reader", "no policy"} {
+	// "nothing grants it" is the accurate thing to report. The wording is
+	// deliberately cloud-neutral -- the same sentence is appended to
+	// Azure's AuthorizationFailed, where the thing that would have
+	// granted it is a role assignment rather than a policy.
+	for _, want := range []string{"s3:PutObject", "role/reader", "nothing grants"} {
 		if !strings.Contains(found.Note, want) {
 			t.Errorf("the feed note does not mention %q: %s", want, found.Note)
 		}

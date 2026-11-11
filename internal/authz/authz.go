@@ -177,8 +177,12 @@ func Evaluate(req Request, rules []Rule) Decision {
 		return *allow
 	}
 	return Decision{
-		Reason: fmt.Sprintf("no policy attached to %s allows %s on %s",
-			describe(req.Principal), req.Action, req.Resource),
+		// Deliberately neutral wording: "no policy" is AWS's vocabulary,
+		// and this sentence is appended to Azure's AuthorizationFailed and
+		// Google's PERMISSION_DENIED as well, where the thing that would
+		// have granted it is a role assignment or a binding.
+		Reason: fmt.Sprintf("nothing grants %s on %s to %s",
+			req.Action, req.Resource, describe(req.Principal)),
 	}
 }
 

@@ -26,8 +26,16 @@ const (
 // reference: they end up in Terraform state and inside role assignments, so a
 // made-up GUID would make Nimbus state and Azure state disagree in a way
 // nobody would notice until a config was pointed at the real thing. The
-// permission lists are indicative rather than complete -- the full documented
-// sets run to dozens of actions each, and nothing here enforces them.
+// The action lists USED TO BE "indicative rather than complete", which was
+// fine while nothing read them. Since Milestone 14 they decide whether a
+// request is refused, so the ones an example relies on are exact and the
+// rest are a documented curation: a role not in this table refuses and
+// names itself rather than silently granting too much or too little.
+//
+// DataActions are recorded and NOT enforced. Azure storage's Shared Key
+// carries no principal at all, so there is nothing to evaluate a data
+// action against -- which means a "Key Vault Secrets User" assignment
+// still governs nothing. docs/ROADMAP.md says so under "Later".
 type builtInRole struct {
 	GUID        string
 	Name        string
@@ -109,6 +117,36 @@ var builtInRoles = []builtInRole{
 	{"4d97b98b-1d4f-4787-a291-c67834d212e7", "Network Contributor",
 		"Lets you manage networks, but not access to them.",
 		[]string{"Microsoft.Network/*"}, nil},
+}
+
+// roleNotActions holds the exclusions, for the roles that have any.
+//
+// A sixth column on builtInRole would have been nil for twenty-two of the
+// twenty-three entries and would have broken every positional literal in
+// the table above. Kept separate instead, which also makes the point: the
+// difference between Owner and Contributor is ENTIRELY this.
+//
+// notActions are SUBTRACTED from actions, not denied -- an action one
+// assignment excludes is still allowed if another assignment grants it,
+// which is not what an explicit Deny does. authz.go's rule shape follows
+// from that.
+var roleNotActions = map[string][]string{
+	// Contributor: everything except handing out access.
+	"b24988ac-6180-42a0-ab88-20f7382dd24c": {
+		"Microsoft.Authorization/*/Delete",
+		"Microsoft.Authorization/*/Write",
+		"Microsoft.Authorization/elevateAccess/Action",
+	},
+}
+
+// notActionsFor is the exclusion list for a role, empty for most.
+func notActionsFor(guid string) []string {
+	for known, list := range roleNotActions {
+		if eq(known, guid) {
+			return list
+		}
+	}
+	return nil
 }
 
 func registerAuthorizationHooks(s *Server) {
@@ -239,6 +277,14 @@ func roleDefinitionJSON(role builtInRole, scope string) map[string]any {
 	if dataActions == nil {
 		dataActions = []string{}
 	}
+	// The SERVED definition has to agree with what is ENFORCED. A client
+	// that reads a role's permissions here and then has a request refused
+	// on a different basis has no way to work out why -- the same family
+	// of bug as a value that differs between reads.
+	notActions := notActionsFor(role.GUID)
+	if notActions == nil {
+		notActions = []string{}
+	}
 	return map[string]any{
 		"id":   scope + "/" + role.GUID,
 		"name": role.GUID,
@@ -252,7 +298,7 @@ func roleDefinitionJSON(role builtInRole, scope string) map[string]any {
 			"assignableScopes": []string{"/"},
 			"permissions": []any{map[string]any{
 				"actions":        actions,
-				"notActions":     []string{},
+				"notActions":     notActions,
 				"dataActions":    dataActions,
 				"notDataActions": []string{},
 			}},

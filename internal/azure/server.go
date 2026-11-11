@@ -53,6 +53,15 @@ type Config struct {
 	// restart reattaches instead of waiting for a fresh boot. Set with
 	// --persist; without it clusters are torn down on exit.
 	KeepClusters bool
+
+	// EnforceIAM turns RBAC evaluation on. With it off nothing is ever
+	// refused, which is how this cloud behaved before Milestone 14 and is
+	// still the default: existing examples must apply unchanged.
+	EnforceIAM bool
+	// Principal is the object id a request with no bearer token is taken
+	// to be. Empty means the default identity, which holds no assignments
+	// and is treated as unrestricted -- see principal.go.
+	Principal string
 }
 
 // Defaults for the AKS engine.
@@ -292,6 +301,21 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) (note string) {
 	// The same trick for Key Vault: {vault}.vault.nimbus.localhost.
 	if name, ok := keyvault.ParseHost(r.Host, s.keyVaultSuffix()); ok {
 		return s.keyvault.Serve(w, r, name)
+	}
+
+	// Authorization, in one place in front of ARM.
+	//
+	// It sits AFTER the data-plane Host checks above, because a Shared Key
+	// request carries no principal at all and there is nothing to evaluate
+	// it against -- see authorization.go on dataActions. It sits BEFORE
+	// the identity paths below, because asking for a token is the
+	// bootstrap: there is no principal yet, and refusing it would make
+	// the flag unusable. Same shape as AWS's token-webhook exemption.
+	if s.cfg.EnforceIAM {
+		if denial, note := s.authorize(r); denial != nil {
+			writeError(w, denial.Status, denial.Code, "%s", denial.Message)
+			return note
+		}
 	}
 
 	p := r.URL.Path

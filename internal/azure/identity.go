@@ -96,13 +96,17 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	exp := now + 3600
 	claims := map[string]any{
-		"aud":   aud,
-		"iss":   fmt.Sprintf("%s/%s/v2.0", s.cfg.PublicURL, tenant),
-		"iat":   now,
-		"nbf":   now,
-		"exp":   exp,
-		"oid":   DefaultObjectID,
-		"sub":   DefaultObjectID,
+		"aud": aud,
+		"iss": fmt.Sprintf("%s/%s/v2.0", s.cfg.PublicURL, tenant),
+		"iat": now,
+		"nbf": now,
+		"exp": exp,
+		// Derived from the client_id this token was asked for, which is
+		// what lets a later request be attributed to a principal -- see
+		// principal.go. Without a client_id it is the default identity,
+		// which holds no assignments and is unrestricted.
+		"oid":   principalFromClientID(r.Form.Get("client_id")),
+		"sub":   principalFromClientID(r.Form.Get("client_id")),
 		"tid":   tenant,
 		"appid": clientID,
 		"azp":   clientID,

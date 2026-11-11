@@ -191,7 +191,8 @@ func start(args []string) {
 
 	if running["azure"] {
 		azURL := fmt.Sprintf("https://%s:%d", *host, *azPort)
-		azCfg := azure.Config{PublicURL: azURL, KeepClusters: *persist}
+		azCfg := azure.Config{PublicURL: azURL, KeepClusters: *persist,
+			EnforceIAM: *enforceIAM, Principal: *principal}
 		if dataDir != "" {
 			azCfg.DataDir = dataDir
 		}

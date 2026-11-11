@@ -167,6 +167,18 @@ func (s *Server) authzTarget(r *http.Request, service string) (target, bool) {
 		return s.s3Target(r)
 	case "sts":
 		return s.stsTarget(r)
+	case "ec2":
+		return s.ec2Target(r)
+	case "iam":
+		return s.iamTarget(r)
+	case "dynamodb":
+		return s.dynamoTarget(r)
+	case "logs":
+		return s.logsTarget(r)
+	case "lambda":
+		return s.lambdaTarget(r)
+	case "eks":
+		return s.eksTarget(r)
 	}
 	return target{}, false
 }
@@ -188,13 +200,26 @@ func (s *Server) stsTarget(r *http.Request) (target, bool) {
 	case "GetCallerIdentity":
 		return target{Action: alwaysAllowed, Resource: "*"}, true
 	case "AssumeRole":
-		return target{Action: "sts:AssumeRole", Resource: p.str("RoleArn")}, true
+		// A request with no RoleArn is malformed, and the handler says so
+		// precisely ("Value null at 'roleArn'"). Authorization must not
+		// pre-empt that with a denial naming an empty resource: a
+		// confusing refusal in place of a clear validation error is a
+		// worse answer, so an absent one widens to "*" and lets the
+		// handler do its job.
+		return target{Action: "sts:AssumeRole", Resource: p.strOr("RoleArn", "*")}, true
 	}
 	return target{}, false
 }
 
 // alwaysAllowed marks an action that needs no permission at all.
 const alwaysAllowed = "(no permission required)"
+
+// deniedReasonHeader carries a refusal's explanation where a body cannot.
+// Nimbus's own, not an AWS header: no client reads it, and it exists
+// because an HTTP HEAD response has no body to put the reason in. `curl
+// -I` shows it, which is the difference between a debuggable refusal and
+// "Forbidden: Forbidden".
+const deniedReasonHeader = "X-Nimbus-Denied"
 
 // bufferBody reads the request body into memory and returns it, so that
 // the authorization check and the handler can both read it.

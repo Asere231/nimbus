@@ -326,3 +326,27 @@ func TestS3TargetNamesTheActionAndResource(t *testing.T) {
 		}
 	}
 }
+
+// A HEAD response carries no body, by HTTP's own rule, so the error
+// document is discarded and a client reports only "Forbidden". Measured
+// against aws provider 5.100.0: a denied HeadObject during a refresh says
+// `api error Forbidden: Forbidden` and nothing about which permission was
+// missing. Real S3 is no better, so the reason has to travel somewhere
+// else -- the activity feed, and this header for anyone reading the
+// response itself.
+func TestADeniedHeadStillCarriesItsReason(t *testing.T) {
+	s := newEnforcingServer(t, "")
+	makeRole(t, s, "blind", `{"Statement":[
+	  {"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`)
+	asKey(t, s, "nimbus", "s3", http.MethodPut, "/demo", "")
+	asKey(t, s, "nimbus", "s3", http.MethodPut, "/demo/a.txt", "hi")
+
+	rec := asKey(t, s, "blind", "s3", http.MethodHead, "/demo/a.txt", "")
+	if rec.Code != 403 {
+		t.Fatalf("a denied HEAD = %d, want 403", rec.Code)
+	}
+	reason := rec.Header().Get("X-Nimbus-Denied")
+	if !strings.Contains(reason, "s3:GetObject") {
+		t.Errorf("the header does not carry the reason: %q", reason)
+	}
+}

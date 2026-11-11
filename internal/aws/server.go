@@ -278,6 +278,15 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 		// the request needs reads it to EOF.
 		restoreBody(r, buffered)
 		if denial != nil {
+			// A HEAD response carries NO BODY, by HTTP's own rule, so the
+			// error document is discarded and the SDK reports only
+			// "Forbidden: Forbidden" -- measured against aws provider
+			// 5.100.0, where a denied HeadObject during a refresh says
+			// exactly that and nothing about which permission was
+			// missing. Real S3 is no better. The reason is in the
+			// activity feed, and this header is the only way it can
+			// reach a person reading the response itself.
+			w.Header().Set(deniedReasonHeader, denial.Message)
 			s.writeServiceError(w, service, denial)
 			return note
 		}

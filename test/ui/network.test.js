@@ -434,3 +434,31 @@ test("the fixture exercises the network view on all three clouds", () => {
   assert.equal(networkModel(all, "gcp").vnets.length, 1);
   assert.equal(networkModel(all, "azure").vnets.length, 2);
 });
+
+// An exported SVG carries its OWN <style>, because a detached SVG gets
+// none of style.css -- a lesson this project paid for once, when an
+// exported graph came out as unstyled black text on nothing. So every
+// class the view draws has to have a rule in export.js too, or the
+// picture in the file is not the picture on the screen.
+//
+// Asserted rather than assumed, because the three clouds share these
+// classes: a GCP subnet with no chips and an AWS one with a route table
+// both render through the same rules, and a new class added for one
+// cloud would be invisible in the export for all of them.
+test("every class the network view draws is styled in the export", () => {
+  const dir = new URL("../../internal/ui/static/", import.meta.url);
+  const view = readFileSync(new URL("network.js", dir), "utf8");
+  const exporter = readFileSync(new URL("export.js", dir), "utf8");
+
+  const classes = new Set();
+  for (const m of view.matchAll(/class:\s*"([a-z0-9 .-]+)"/g)) {
+    for (const c of m[1].split(/\s+/)) if (c) classes.add(c);
+  }
+  // The ones the topology view shares and export.js styles generically.
+  for (const shared of ["badge", "card", "nm", "ty"]) classes.delete(shared);
+  assert.ok(classes.size >= 8, "expected the network view's own classes");
+
+  const missing = [...classes].filter((c) => !exporter.includes("." + c));
+  assert.deepEqual(missing, [],
+    "these classes draw on screen but have no rule in the exported SVG");
+});

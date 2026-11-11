@@ -127,17 +127,26 @@ test("every cloud table exports the same shape", () => {
 test("only the per-cloud tables mention a cloud's own type names", () => {
   const dir = new URL("../../internal/ui/static/", import.meta.url);
   // A module whose NAME says which cloud it is may name that cloud's types
-  // -- types-azure.js, inspector-azure.js. So may a view render.js declares
-  // as one cloud's only. Everything else has to ask types.js.
+  // -- types-azure.js, inspector-azure.js. Everything else has to ask
+  // types.js.
+  //
+  // network.js used to be exempt, because render.js declared it as Azure's
+  // only view. Milestone 16 made it serve all three, so the exemption is
+  // gone and this test is what proves the generalisation is real: a single
+  // "microsoft." or "aws::" left in the shared drawing fails the build.
   const named = /-(azure|aws|gcp)\.js$/;
-  const declaredAzureViews = new Set(["network.js"]);
   const offenders = [];
   for (const file of readdirSync(dir)) {
-    if (!file.endsWith(".js") || named.test(file) || declaredAzureViews.has(file)) continue;
+    if (!file.endsWith(".js") || named.test(file)) continue;
     const src = readFileSync(new URL(file, dir), "utf8");
     // Comments explain Azure freely; code must not key on its type names.
     const code = src.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
-    if (/["'`](microsoft\.|aws::)/i.test(code)) offenders.push(file);
+    // All THREE clouds' spellings. The GCP one was missing: a shared
+    // module could have hard-coded `compute.googleapis.com/Network` and
+    // nothing would have noticed, which matters now that GCP has a
+    // networking model in its table. Verified by injecting one of each
+    // and watching this fail.
+    if (/["'`](microsoft\.|aws::|[a-z]+\.googleapis\.com\/)/i.test(code)) offenders.push(file);
   }
   assert.deepEqual(offenders, [],
     "these modules hard-code cloud type names and should ask types.js instead");

@@ -1,21 +1,19 @@
 # Roadmap
 
-**Phase 4 is COMPLETE. Milestone 11 gave all three clouds instances that
+**Current: Milestone 15 — finishing Azure
+(`docs/prompts/m15-azure-complete.md`).** Phase 5 starts with the cloud
+this project began with, because Azure is the only one of the three that
+cannot run your code and the only one with nowhere to keep what it prints.
+
+**Phase 4 is complete.** Milestone 11 gave all three clouds instances that
 really boot, Milestone 12 cleared the defects that made Nimbus quietly
 wrong, Milestone 13 built the decision engine, and Milestone 14 finished
 it: Azure RBAC, GCP IAM and AWS IAM are all enforced behind
 `--enforce-iam`, the inspector explains why, and `nimbus can` answers the
 question directly. "Permissions are recorded but never enforced" is no
-longer true of any cloud.**
+longer true of any cloud.
 
-**There is no Current milestone.** The next one is unwritten; see
-"Where next" below.
-
-Phase 4 is what is left for the three clouds to be functional rather than
-merely broad: the primitive that did not run (done), the defects that
-mislead, and the limitation that most undercuts the point of the project.
-
-Milestones 1 to 10 are done, on macOS 27 (arm64) with azurerm 4.81.0,
+Milestones 1 to 14 are done, on macOS 27 (arm64) with azurerm 4.81.0,
 aws 5.100.0, google 6.50.0, az 2.90.0, aws-cli 1.40.33, gcloud 592.0.0 and
 Terraform 1.16.4.
 
@@ -200,22 +198,27 @@ to demonstrate once there are instances to refuse it to.
   clouds enforce in ONE process, verified against `examples/multicloud`
   with the flag on.
 
-## Where next
+## Phase 5 — finishing what is started
 
-Phase 4's four milestones are done and there is no Phase 5 written. The
-largest gaps now, in rough order of what they would teach:
+| # | Milestone | Done when |
+|---|---|---|
+| 15 | **Finishing Azure**: Container Apps on the `run` engine, Log Analytics that ingests and queries | `curl` reaches a container Terraform created, and its stdout comes back out of a Log Analytics query |
+| 16 | **A network view for AWS and GCP** | An EC2 and a GCE instance each appear in the subnet they belong to |
+| 17 | **Resource-level policies** | A principal reads a bucket ONLY because of the bucket policy, and an explicit deny in it wins |
 
-- **A VPC view for AWS and GCP.** The network view is Azure-only; an EC2
-  or GCE instance appears in no network drawing at all. `render.js`'s
-  `VIEWS` registry is where it would go, and the Kubernetes view is the
-  precedent for one view serving three clouds.
+Milestone 15 is first because Azure is the one cloud that cannot run code:
+AWS has Lambda and GCP has Cloud Run, and Azure has a Kubernetes cluster, a
+VM, and nothing in between. It should also be the cheapest of the three —
+`internal/engines/run` already does the work and Azure simply does not use
+it, and `microsoft.app/containerapps` is already in the spec table.
+
+**Still unscheduled, and the gap to trust least:**
+
 - **Windows, properly.** Still only DNS-tested; no Windows machine has run
   Terraform, `az` or `kubectl` against Nimbus. Three platform bugs have
-  reached `main` by only ever being proven on a Mac.
-- **Resource-level policies.** Bucket policies, Pub/Sub topic bindings and
-  Azure `dataActions` are all recorded and not evaluated, which is the
-  biggest remaining gap in the authorization story now that the
-  identity-based half works.
+  reached `main` by only ever being proven on a Mac, which is the whole
+  argument for doing it — and it wants a session on a Windows machine
+  rather than a milestone prompt.
 
 ## Design decisions still open
 

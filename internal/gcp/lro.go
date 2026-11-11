@@ -75,13 +75,23 @@ const maxLROs = 512
 
 func newLROs() *lros { return &lros{byID: map[string]*lro{}} }
 
+// put stores a COPY, so the caller keeps a pointer nothing else writes to.
+//
+// Copying on the way OUT was not enough, and this is the fifth operation
+// registry in this project to learn it. `newLRO` hands its caller the
+// operation to serialise into the response; the background goroutine that
+// does the work then calls finish or fail on the same name. With the
+// registry holding the caller's pointer, those two touch one struct and
+// `go test -race` reports it -- from inside encoding/json, which names
+// neither function. The rule is copies on the way in AND on the way out.
 func (l *lros) put(op *lro) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if _, seen := l.byID[op.Name]; !seen {
 		l.order = append(l.order, op.Name)
 	}
-	l.byID[op.Name] = op
+	stored := *op
+	l.byID[op.Name] = &stored
 	if len(l.order) > maxLROs {
 		drop := l.order[0]
 		l.order = l.order[1:]

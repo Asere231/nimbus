@@ -495,7 +495,19 @@ jobs:
           # The instance really booted and really ran its user data. The
           # third line proves the metadata service too: the script read its
           # own instance id back out of it.
-          ../../../bin/nimbus ssh web -- cat /var/log/nimbus-boot.log | tee /tmp/bootlog.txt
+          # "The apply returned" does not mean the boot script has FINISHED
+          # -- no cloud promises that. Wait for the line being asserted on,
+          # which is a definite signal rather than a timing guess. The
+          # azure-vm job read this log 40ms after an apply and found no
+          # file at all, which is how the distinction got noticed; these
+          # two had the same race and had only been winning it.
+          for i in $(seq 1 60); do
+            ../../../bin/nimbus ssh web -- cat /var/log/nimbus-boot.log \
+              > /tmp/bootlog.txt 2>/dev/null || true
+            if grep -q "instance-id: $id" /tmp/bootlog.txt; then break; fi
+            sleep 1
+          done
+          cat /tmp/bootlog.txt
           grep -q "instance-id: $id" /tmp/bootlog.txt || {
             echo "::error::the instance could not read its own metadata"; exit 1; }
 
@@ -588,7 +600,20 @@ jobs:
           # provisions asynchronously and azurerm waits for it. With the
           # work in AfterPut instead, the apply finished while the image
           # was still being pulled.
-          ../../../bin/nimbus ssh vm-nimbus -- cat /var/log/nimbus-boot.log | tee /tmp/bootlog.txt
+          #
+          # But "up" does not mean its boot script has FINISHED -- no cloud
+          # promises that, and blocking an apply on someone's apt-get would
+          # be its own bug. So wait for the console marker, which is a
+          # definite signal, before asserting on what the script printed.
+          # This step read the log 40ms after an apply and found no file at
+          # all, which is how that distinction got noticed.
+          for i in $(seq 1 60); do
+            ../../../bin/nimbus ssh vm-nimbus -- cat /var/log/nimbus-boot.log \
+              > /tmp/bootlog.txt 2>/dev/null || true
+            if grep -q "size from the environment" /tmp/bootlog.txt; then break; fi
+            sleep 1
+          done
+          cat /tmp/bootlog.txt
           grep -q "apt is present: /usr/bin/apt-get" /tmp/bootlog.txt || {
             echo "::error::the custom data did not run in a real ubuntu"; exit 1; }
           grep -q "size from the environment: Standard_B1s" /tmp/bootlog.txt || {
@@ -653,7 +678,19 @@ jobs:
           terraform apply -auto-approve -input=false
 
           # The startup script really ran, in a real Debian.
-          ../../../bin/nimbus ssh web -- cat /var/log/nimbus-boot.log | tee /tmp/bootlog.txt
+          # "The apply returned" does not mean the boot script has FINISHED
+          # -- no cloud promises that. Wait for the line being asserted on,
+          # which is a definite signal rather than a timing guess. The
+          # azure-vm job read this log 40ms after an apply and found no
+          # file at all, which is how the distinction got noticed; these
+          # two had the same race and had only been winning it.
+          for i in $(seq 1 60); do
+            ../../../bin/nimbus ssh web -- cat /var/log/nimbus-boot.log \
+              > /tmp/bootlog.txt 2>/dev/null || true
+            if grep -q "apt is present" /tmp/bootlog.txt; then break; fi
+            sleep 1
+          done
+          cat /tmp/bootlog.txt
           grep -q "apt is present: /usr/bin/apt-get" /tmp/bootlog.txt || {
             echo "::error::the startup script did not run in a real debian"; exit 1; }
 

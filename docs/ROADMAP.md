@@ -1,11 +1,15 @@
 # Roadmap
 
-**Current: Milestone 14 — Azure RBAC, GCP IAM, and explaining a decision
-(`docs/prompts/m14-rbac-and-explain.md`). Phases 1 to 3 are complete;
-Milestone 11 gave all three clouds instances that really boot, Milestone 12
-cleared the defects that made Nimbus quietly wrong, and Milestone 13 built
-the decision engine and wired it to AWS IAM, so a request can now be
-refused for lacking a permission.**
+**Phase 4 is COMPLETE. Milestone 11 gave all three clouds instances that
+really boot, Milestone 12 cleared the defects that made Nimbus quietly
+wrong, Milestone 13 built the decision engine, and Milestone 14 finished
+it: Azure RBAC, GCP IAM and AWS IAM are all enforced behind
+`--enforce-iam`, the inspector explains why, and `nimbus can` answers the
+question directly. "Permissions are recorded but never enforced" is no
+longer true of any cloud.**
+
+**There is no Current milestone.** The next one is unwritten; see
+"Where next" below.
 
 Phase 4 is what is left for the three clouds to be functional rather than
 merely broad: the primitive that did not run (done), the defects that
@@ -143,7 +147,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 | 11 | ~~**Compute instances** on a new `vm` engine, all three clouds~~ **done** | `nimbus ssh` into an instance Terraform created, and its boot-script output is in the console log |
 | 12 | ~~**Correctness pass**: AKS node resource group, namespaces, S3 multipart, the feed after a restart~~ **done** | A >8 MB `aws s3 cp` round-trips byte for byte, a destroy leaves no `MC_*` group, and a pod outside `default` is drawn |
 | 13 | ~~**Authorization core + AWS IAM**, opt-in via `--enforce-iam`~~ **done** | An apply fails with a legible `AccessDenied` and succeeds once the policy grants the action |
-| 14 | **Azure RBAC, GCP IAM, and explaining a decision** | The inspector says why the current principal is allowed or denied, on all three clouds |
+| 14 | ~~**Azure RBAC, GCP IAM, and explaining a decision**~~ **done** | The inspector says why the current principal is allowed or denied, on all three clouds |
 
 Milestone 11 is first because it is the clearest gap and the `vm` engine
 follows a pattern that has now worked twice (`k3s`, `run`). Authorization
@@ -181,6 +185,37 @@ to demonstrate once there are instances to refuse it to.
   enforcing server unchanged. Measured along the way: a denied read fails a
   plan rather than being mistaken for a missing object, which is what made
   enforcement safe to build at all.
+
+- Milestone 14 finished authorization. Azure RBAC and GCP IAM now run on
+  the engine Milestone 13 built — which needed **no change** for either,
+  the question M13 left open. `examples/terraform/azure-rbac-enforced`
+  proves scope inheritance: a role assignment made at a resource group
+  governs a VNet created inside it, and the app module's second apply
+  succeeds with no change to its own configuration, because what changed
+  was the permission. `examples/terraform/gcp-iam-enforced` does the same
+  for a bucket through a project-level binding. The inspector explains, for
+  any selected resource, which of that type's actions the principal may
+  perform and which rule decided; `nimbus can ACTION RESOURCE` asks the
+  same endpoint, so the answer cannot drift from the behaviour. All three
+  clouds enforce in ONE process, verified against `examples/multicloud`
+  with the flag on.
+
+## Where next
+
+Phase 4's four milestones are done and there is no Phase 5 written. The
+largest gaps now, in rough order of what they would teach:
+
+- **A VPC view for AWS and GCP.** The network view is Azure-only; an EC2
+  or GCE instance appears in no network drawing at all. `render.js`'s
+  `VIEWS` registry is where it would go, and the Kubernetes view is the
+  precedent for one view serving three clouds.
+- **Windows, properly.** Still only DNS-tested; no Windows machine has run
+  Terraform, `az` or `kubectl` against Nimbus. Three platform bugs have
+  reached `main` by only ever being proven on a Mac.
+- **Resource-level policies.** Bucket policies, Pub/Sub topic bindings and
+  Azure `dataActions` are all recorded and not evaluated, which is the
+  biggest remaining gap in the authorization story now that the
+  identity-based half works.
 
 ## Design decisions still open
 
@@ -220,14 +255,28 @@ to demonstrate once there are instances to refuse it to.
 
 ## Later
 
-- **Authorization is IDENTITY-based only, and AWS-only.** No resource
-  policies (an S3 bucket policy round-trips and decides nothing), no
-  permission boundaries, no SCPs, no session policies, and the trust
-  policy on a role is not evaluated when it is assumed — `sts:AssumeRole`
-  hands back credentials for any role that exists. Azure RBAC and GCP IAM
-  are Milestone 14. Nothing authenticates either: the access key id IS the
-  claim of identity, so enforcement answers "would these permissions
-  work", never "is this caller genuine".
+- **Authorization is IDENTITY-based only, on all three clouds.** No
+  resource policies (an S3 bucket policy, a Pub/Sub topic's own bindings
+  and a Cloud Run service's all round-trip and decide nothing), no
+  permission boundaries, no SCPs, no session policies, no Azure deny
+  assignments (Terraform cannot create one — only Blueprints and managed
+  applications can, so there is nothing to drive them with), and a role's
+  trust policy is not evaluated when it is assumed. Azure `dataActions`
+  are recorded and unenforced, because Shared Key carries no principal.
+  Nothing authenticates either: the credential IS the claim of identity,
+  so enforcement answers "would these permissions work", never "is this
+  caller genuine".
+- **The role catalogues are curations and the basic roles are
+  approximations.** Azure's 23 built-ins carry the real GUIDs but only the
+  actions an example needs are exact; GCP's `roles/viewer`, `editor` and
+  `owner` are expressed as the wildcard patterns they amount to, where the
+  real documents are enormous explicit lists. Any role not in a catalogue
+  REFUSES and names itself. They are transcriptions rather than fetched,
+  so they drift as the clouds revise a role, and nothing detects that.
+- **An approximation written with `.*` grants more than the real role.**
+  `roles/compute.networkAdmin` was granting `*.setIamPolicy` until a test
+  caught it. The exclusions are added case by case as they are noticed,
+  which means the ones nobody has noticed are still there.
 - **Only four condition keys and eight operators are supported**
   (`aws:PrincipalArn`, `aws:username`, `aws:RequestedRegion`,
   `aws:PrincipalAccount`; the String/Arn equality and wildcard pairs, and
@@ -283,8 +332,9 @@ to demonstrate once there are instances to refuse it to.
   obvious next visualizer milestone.
 - **GCP still has no Cloud Functions.** Cloud
   Routers and their NAT configuration round-trip as state and nothing
-  routes, and the project IAM policy is recorded but never enforced — the
-  limitation Azure RBAC still has and AWS IAM no longer does.
+  routes. The project IAM policy IS enforced now, behind
+  `--enforce-iam`; resource-level policies (a bucket's or a topic's own
+  bindings) are recorded and not evaluated.
 - **GKE is k3s, so most of its surface is not modelled.** No Autopilot, no
   workload identity, no private clusters, no release channels, no
   autoscaling: those fields round-trip and nothing acts on them. Every
@@ -402,10 +452,11 @@ to demonstrate once there are instances to refuse it to.
 - **The registry has no authentication.** `registry:2` runs open, and
   `listCredentials` returns decorative values; an imagePullSecret built from
   them works because nothing checks it.
-- **AZURE role assignments are never enforced.** They round-trip and are
-  drawn, but no request is refused for lacking a role. AWS IAM is enforced
-  behind `--enforce-iam` since Milestone 13; Azure and GCP are Milestone 14,
-  and until then an Azure apply still cannot prove its permissions.
+- **Azure role assignments ARE enforced** since Milestone 14, behind
+  `--enforce-iam`, including scope inheritance from a subscription or
+  resource group. What is not enforced is `dataActions`: Azure storage's
+  Shared Key carries no principal at all, so a "Key Vault Secrets User"
+  or "Storage Blob Data Reader" assignment still governs nothing.
 
 - **A mid-apply restart fails the apply.** Terraform polls while the port is
   closed and azurerm reports `unimplemented polling status "Unknown"`. Nothing

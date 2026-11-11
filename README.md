@@ -117,8 +117,13 @@ genuinely refused and then granted. All plan clean and destroy.
 
 ### Permissions that are actually checked
 
+All three clouds, one engine. `internal/authz` holds the decision and the
+order rules settle in and knows no cloud's policy language; each cloud
+compiles its own documents down to it — IAM policies, Azure role
+assignments, GCP bindings.
+
 ```bash
-nimbus start --clouds aws --enforce-iam
+nimbus start --clouds azure,aws,gcp --enforce-iam
 ```
 
 Nimbus verifies no signatures, so identity is whatever the client claims —
@@ -132,16 +137,45 @@ So turning the flag on breaks nothing that was working.
 ```
 Error: uploading S3 Object (reports/today.txt) to Bucket (nimbus-enforced):
 api error AccessDenied: role arn:aws:iam::000000000000:role/nimbus-app is not
-authorized to perform s3:PutObject: no policy attached to role
-arn:aws:iam::000000000000:role/nimbus-app allows s3:PutObject on
-arn:aws:s3:::nimbus-enforced/reports/today.txt
+authorized to perform s3:PutObject: nothing grants s3:PutObject on
+arn:aws:s3:::nimbus-enforced/reports/today.txt to role
+arn:aws:iam::000000000000:role/nimbus-app
 ```
 
-Every refusal also appears in the activity feed with the statement that
-decided it, which matters more than it sounds: a denied `HeadObject` reaches
-the provider as nothing but `Forbidden: Forbidden`, because an HTTP HEAD
-reply has no body to carry a reason. Azure RBAC and GCP IAM are still
-recorded and not enforced.
+Every refusal also appears in the activity feed with the rule that decided
+it, which matters more than it sounds: a denied `HeadObject` reaches the
+provider as nothing but `Forbidden: Forbidden`, because an HTTP HEAD reply
+has no body to carry a reason.
+
+**The same on the other two clouds.** Azure's identity is the bearer
+token's `oid`, which the token endpoint derives from the `client_id` a
+token was requested for — so a provider sets `client_id` to the principal's
+GUID. A role assignment made at a subscription or a resource group governs
+everything beneath it, which `examples/terraform/azure-rbac-enforced` is
+built to show. GCP's identity is simpler still: there is no OAuth and the
+`access_token` was never checked, and GCP writes policy members as
+`serviceAccount:…` — so the token can simply *be* the member string.
+
+**And you can ask instead of finding out.** Select a resource in the
+visualizer and the inspector says which of that type's actions the
+principal may perform and which rule decided. The same question from a
+shell:
+
+```bash
+nimbus can --principal serviceAccount:app@nimbus-local.iam.gserviceaccount.com \
+    storage.objects.create http://localhost:4703/storage/v1/b/nimbus-data
+```
+
+```
+ALLOWED  storage.objects.create
+  principal  serviceAccount:app@nimbus-local.iam.gserviceaccount.com
+  rule       project IAM binding #1 (roles/storage.objectAdmin)
+```
+
+Both read one endpoint backed by each cloud's own evaluator — the thing
+that answers is the thing that decides, so a yes here cannot disagree with
+what a request gets. The exit status is the answer, so it works in a
+script: 0 allowed, 1 denied, 2 cannot tell.
 
 A request is routed to a service by its **SigV4 credential scope**, not by its
 path — every Query service posts to `/` — except DynamoDB and CloudWatch Logs,
@@ -156,7 +190,7 @@ name becomes a hostname and there is nothing to trust.
 
 | API | What works |
 |---|---|
-| Resource Manager | Projects over v1 and v3, project IAM policy get/set — recorded, never enforced |
+| Resource Manager | Projects over v1 and v3, project IAM policy get/set — and **enforced** with `--enforce-iam`: bindings decide, and `testIamPermissions` answers truthfully |
 | Compute | VPC networks (auto and custom mode), subnetworks with secondary ranges, firewalls, routes, Cloud Routers, regions and zones, and operations |
 | IAM | Service accounts, with a derived email that never drifts between reads |
 | Cloud Storage | Buckets and objects with real bytes, all three upload protocols — media, multipart/related and resumable — plus `md5Hash`, `crc32c` and delimiter listings |
@@ -208,9 +242,18 @@ expect minutes and a few gigabytes of containers.
 | Identity | Managed identities, RBAC | IAM | Service accounts, IAM |
 | CLI | `nimbus az register` | `aws --endpoint-url` | `nimbus gcp register` |
 
-Everything in the Identity row is **recorded and never enforced**: no request
-is refused for lacking a role, on any of the three. A local apply cannot
-prove a deployment's permissions are right.
+Everything in the Identity row is **enforced**, on all three clouds, behind
+`--enforce-iam`. A request the caller's policies, role assignments or
+bindings do not allow is refused with that cloud's own code and a message
+naming the action, the principal and the rule that decided — so a local
+apply can show that a deployment's permissions are wrong, which is most of
+what the Identity row is for.
+
+What is still only recorded: resource policies (an S3 bucket policy, a
+Pub/Sub topic's own bindings), Azure `dataActions`, permission boundaries
+and a role's trust policy. And nothing is *authenticated* — the credential
+is the claim of identity, so this answers "would these permissions work",
+never "is this caller genuine". See `docs/ROADMAP.md` for the full list.
 
 ### What an instance is, and what it is not
 

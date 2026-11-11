@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.14.0 — 2026-11-11
+
+Milestone 14: Azure RBAC, GCP IAM, and showing why. "Permissions are
+recorded but never enforced" is no longer true of any cloud, and Phase 4
+is complete.
+
+- **The decision engine needed no change for any of the three policy
+  languages**, which was Milestone 13's open question — it had served
+  exactly one. The strongest evidence is not that Azure and GCP fitted but
+  how: both are pure grants with no Deny, and each has exactly one role
+  needing an exclusion rather than an allow-list (Azure's Contributor,
+  GCP's `roles/editor`), so both compile a grant to one rule and the
+  deny-wins ordering never fires. Two clouds arriving at the same shape
+  independently is what says the interface is right.
+- **Azure RBAC**, including the scope inheritance that makes it make
+  sense: an assignment at a subscription or resource group governs
+  everything beneath it. Action names are derived from the ARM type rather
+  than tabulated; `notActions` are subtracted, not denied; and matching is
+  segment-aligned, because `strings.HasPrefix` would make an assignment at
+  `.../rg` silently govern `.../rg-two`.
+- **GCP IAM**: project bindings through the curated role catalogue, with
+  permissions derived by walking a path's structure. `testIamPermissions`
+  now answers truthfully and needs no permission itself, like
+  `sts:GetCallerIdentity`.
+- **Identity costs no new state on either cloud, because the credential is
+  the claim.** Azure derives the token's `oid` from the `client_id` it was
+  asked for; GCP takes the `access_token` as the policy member verbatim.
+- **The inspector explains a decision** — which of a resource type's
+  actions the principal may perform, and which rule decided — from one
+  `/api/authz` endpoint backed by each cloud's own evaluator. **`nimbus
+  can ACTION RESOURCE`** asks that same endpoint, so the answer cannot
+  drift from the behaviour; one table per cloud drives both the request
+  path and the CLI and asserts they never disagree.
+- **Two examples**: `azure-rbac-enforced`, two root modules where the
+  app's second apply succeeds with no change to its own configuration
+  because what changed was the permission; and `gcp-iam-enforced`, one
+  module, because the google provider makes no startup calls.
+
+Measured, and three of these reshaped the work:
+
+- **azurerm populates a Resource Provider cache when the provider
+  configures**, and `resource_provider_registrations = "none"` does not
+  skip it — so a principal with no roles fails before reaching the
+  resource under test. **And a provider is configured before any resource
+  exists**, even with `count = 0` on its only resource, so an Azure
+  principal cannot be granted in one apply the access its own provider
+  needs to start. That is why that example is two modules.
+- **Every Azure example sets `client_id` to the default**, so the derived
+  `oid` is not the default object id — and checking only the latter
+  refused all of `azure-basic` the moment the flag was on.
+- **A path cannot be read by guessing which segments are plural.** A Cloud
+  Run service named `s` came out as `run.s.list`.
+
+Verified with all three clouds enforcing in one process, against
+`examples/multicloud`: twelve resources, three k3s clusters, clean plan,
+clean destroy, no containers left.
+
 ## 0.13.0 — 2026-11-10
 
 Milestone 13: authorization that can say no. The project's most-repeated

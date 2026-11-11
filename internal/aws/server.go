@@ -64,6 +64,15 @@ type Config struct {
 	// FunctionPortBase is the first host port tried for a Lambda
 	// container's runtime emulator.
 	FunctionPortBase int
+
+	// EnforceIAM turns authorization on. With it off nothing is ever
+	// refused, which is how every cloud here behaved before Milestone 13
+	// and is still the default: existing examples must apply unchanged.
+	EnforceIAM bool
+	// Principal is who an unsigned or unmapped request is taken to be.
+	// Empty means the account root, which is allowed everything -- see
+	// principal.go for why that is the faithful answer and not a fudge.
+	Principal string
 }
 
 // DefaultClusterPortBase starts above the range AKS uses.
@@ -97,6 +106,10 @@ type Server struct {
 	// reported success, which is the lost update at engine level.
 	vms  *vm.Engine
 	vmMu sync.Mutex
+	// policies compiles IAM documents once per distinct document set.
+	// Keyed by the documents themselves, so there is no invalidation to
+	// get wrong -- see authz_iam.go.
+	policies *policyCache
 }
 
 // New builds the server and makes sure the account exists.
@@ -113,7 +126,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	s := &Server{cfg: cfg, store: store, bus: bus,
 		objects: newObjectStore(cfg.DataDir), items: newItemStore(cfg.DataDir),
 		uploads: newMultipartStore(),
-		logs:    newLogStore()}
+		logs:    newLogStore(), policies: newPolicyCache()}
 	s.lambda = funcs.New(funcs.Config{
 		NamePrefix:   "nimbus-lambda",
 		PortBase:     orZero(cfg.FunctionPortBase, DefaultFunctionPortBase),
@@ -241,6 +254,35 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 		return s.serveTokenReview(w, r)
 	}
 	service := serviceOf(r)
+
+	// Authorization, in one place in front of every service rather than
+	// as a call each handler has to remember -- a handler that forgets to
+	// ask would be a silent grant. With --enforce-iam off this returns
+	// immediately and nothing below can tell the difference.
+	//
+	// The body is buffered first for everything except S3, because
+	// readParams and readJSON consume it and the check needs to see it
+	// too; S3's bodies are the large ones and it needs none of it to know
+	// what is being asked. See authz_request.go.
+	if s.cfg.EnforceIAM {
+		var buffered []byte
+		if service != "s3" {
+			var err error
+			if buffered, err = bufferBody(r); err != nil {
+				writeError(w, service, errorf(400, "MalformedInput", "reading the request: %v", err))
+				return "unreadable request body"
+			}
+		}
+		denial, note := s.authorize(r, service)
+		// Put the body back for the handler: working out which permission
+		// the request needs reads it to EOF.
+		restoreBody(r, buffered)
+		if denial != nil {
+			s.writeServiceError(w, service, denial)
+			return note
+		}
+	}
+
 	switch service {
 	case "sts":
 		return s.serveSTS(w, r)

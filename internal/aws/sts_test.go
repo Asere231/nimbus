@@ -73,7 +73,11 @@ func TestGetCallerIdentity(t *testing.T) {
 	if got.Result.Account != DefaultAccountID {
 		t.Errorf("account = %q, want %s", got.Result.Account, DefaultAccountID)
 	}
-	if got.Result.Arn != "arn:aws:iam::"+DefaultAccountID+":user/nimbus" {
+	// An unmapped caller is the account root, and this call says so
+	// rather than naming a fixed user: its whole job is to report who you
+	// are, and since Milestone 13 that can differ per request. See
+	// principal.go.
+	if got.Result.Arn != "arn:aws:iam::"+DefaultAccountID+":root" {
 		t.Errorf("arn = %q", got.Result.Arn)
 	}
 	if !strings.HasPrefix(got.Result.UserID, "AIDA") {

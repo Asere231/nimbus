@@ -28,7 +28,7 @@ export function addToFeed(e, animate, onSelect) {
   // paints a clean plan red and teaches people to ignore the colour.
   const expected = /^expected:/.test(e.note || "");
   const flagged = e.kind === "request" && !expected &&
-    (e.status >= 400 || /unimplemented|unrecognised/.test(e.note || ""));
+    (e.status >= 400 || /unimplemented|unrecognised|denied/.test(e.note || ""));
   const quiet = e.kind === "request" && !flagged;
   if (quiet) li.dataset.quiet = "1";
   if (quiet && !$("#show-reads").checked) li.hidden = true;
@@ -46,7 +46,11 @@ export function addToFeed(e, animate, onSelect) {
     const ok = e.status < 400;
     what.innerHTML = `<span class="${ok ? "code-ok" : "code-err"}">${e.status}</span> <span class="path"></span>`;
     what.querySelector(".path").textContent = shortPath(e.path);
-    if (e.note && /unimplemented|unrecognised|accepted|expected/.test(e.note)) {
+    // "denied:" is an authorization refusal, and it carries the only
+    // explanation there is -- the principal, the action and the rule that
+    // decided. A denial nobody can see is worse than no enforcement,
+    // because then an apply just fails with nothing to look at.
+    if (e.note && /unimplemented|unrecognised|accepted|expected|denied/.test(e.note)) {
       const n = document.createElement("span");
       n.className = /accepted|expected/.test(e.note) ? "note quiet" : "note";
       n.textContent = e.note;

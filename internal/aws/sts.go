@@ -26,7 +26,7 @@ func (s *Server) serveSTS(w http.ResponseWriter, r *http.Request) string {
 	action := p.str("Action")
 	switch action {
 	case "GetCallerIdentity":
-		s.getCallerIdentity(w, p)
+		s.getCallerIdentity(w, r)
 	case "AssumeRole":
 		s.assumeRole(w, p)
 	default:
@@ -47,14 +47,28 @@ type getCallerIdentityResponse struct {
 	Metadata responseMetadata `xml:"ResponseMetadata"`
 }
 
-func (s *Server) getCallerIdentity(w http.ResponseWriter, p params) {
+// getCallerIdentity answers with the principal the request RESOLVES to,
+// not a fixed name. It is the one call whose whole job is to say who you
+// are, so once a request can be attributed to a role it has to say so --
+// otherwise there is no way to check which identity a tool is using before
+// finding out the hard way, through a denial.
+func (s *Server) getCallerIdentity(w http.ResponseWriter, r *http.Request) {
+	c := s.resolveCaller(r)
+
 	doc := getCallerIdentityResponse{Xmlns: namespaceFor("sts")}
 	doc.Result.Account = s.cfg.AccountID
-	doc.Result.Arn = "arn:aws:iam::" + s.cfg.AccountID + ":user/nimbus"
-	// A user id is an AIDA-prefixed opaque string. It is derived from the
-	// account rather than random so that two calls agree, which is the same
+	doc.Result.Arn = c.Principal.ID
+	if doc.Result.Arn == "" {
+		doc.Result.Arn = s.accountARN()
+	}
+	// An opaque, stable id: AIDA for a user, AROA for a role. Derived from
+	// the ARN rather than random so that two calls agree, which is the
 	// rule every other id in Nimbus follows.
-	doc.Result.UserID = "AIDA" + strings.ToUpper(stableID(s.cfg.AccountID+"/user/nimbus", 17))
+	prefix := "AIDA"
+	if c.Principal.Kind == "role" {
+		prefix = "AROA"
+	}
+	doc.Result.UserID = prefix + strings.ToUpper(stableID(doc.Result.Arn, 17))
 	doc.Metadata.RequestID = requestID()
 	writeXML(w, 200, doc)
 }
@@ -101,7 +115,11 @@ func (s *Server) assumeRole(w http.ResponseWriter, p params) {
 
 	doc := assumeRoleResponse{Xmlns: namespaceFor("sts")}
 	c := &doc.Result.Credentials
-	c.AccessKeyID = "ASIA" + strings.ToUpper(stableID(roleARN, 16))
+	// Derived from the role, which is what lets a later request carrying
+	// this key be mapped BACK to the role -- see principal.go. The one
+	// definition lives there, because two copies would drift and the
+	// symptom would be a principal silently becoming root.
+	c.AccessKeyID = sessionKeyFor(roleARN)
 	c.SecretAccessKey = stableID(roleARN+"/secret", 40)
 	c.SessionToken = "nimbus/" + stableID(roleARN+"/"+sessionName, 32)
 	c.Expiration = time.Now().UTC().Add(duration).Format(time.RFC3339)

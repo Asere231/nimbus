@@ -145,6 +145,11 @@ func start(args []string) {
 	clouds := fs.String("clouds", "azure", "which clouds to run, comma separated: "+strings.Join(knownClouds, ", "))
 	persist := fs.Bool("persist", false, "save state to disk so it survives restarts")
 	host := fs.String("host", "localhost", "hostname clients use to reach Nimbus")
+	enforceIAM := fs.Bool("enforce-iam", false,
+		"refuse requests the caller's policies do not allow (AWS only so far)")
+	principal := fs.String("principal", "",
+		"who an unmapped caller is: a role or user name, or empty for the account root, "+
+			"which is allowed everything. A name that does not exist is allowed nothing")
 	_ = fs.Parse(args)
 
 	running, err := parseClouds(*clouds)
@@ -212,7 +217,8 @@ func start(args []string) {
 		// `aws --endpoint-url http://localhost:4702` then works with
 		// nothing trusted on the machine.
 		awsURL := fmt.Sprintf("http://%s:%d", *host, *awsPort)
-		awsCfg := aws.Config{PublicURL: awsURL, KeepClusters: *persist}
+		awsCfg := aws.Config{PublicURL: awsURL, KeepClusters: *persist,
+			EnforceIAM: *enforceIAM, Principal: *principal}
 		if dataDir != "" {
 			awsCfg.DataDir = dataDir
 		}

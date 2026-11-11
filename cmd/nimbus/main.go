@@ -37,7 +37,7 @@ import (
 	"github.com/Asere231/nimbus/internal/ui"
 )
 
-const version = "0.15.0"
+const version = "0.16.0"
 
 func main() {
 	if len(os.Args) < 2 {

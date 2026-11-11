@@ -321,12 +321,15 @@ not work. Two limits are worth naming outright:
 `http://localhost:4700`, served from inside the binary: no build step, no CDN,
 works with the network off.
 
-- **Three views.** *Topology* is the containment tree. *Network* draws VNets as
-  containers with their subnets, address ranges, the NSG and route table on
-  each subnet, peerings between them, and anything attached to nothing.
-  *Kubernetes* draws a cluster as namespaces holding deployments, replica sets
-  and pods, with each service joined to the pods its selector matches — for
-  AKS and EKS alike, since both are the same engine underneath.
+- **Three views.** *Topology* is the containment tree. *Network* draws a VNet,
+  a VPC or a GCP network as a container holding its subnets with their address
+  ranges, the instances running in each one, whatever that cloud attaches to a
+  subnet — an NSG and route table on Azure, the associated route table on AWS,
+  nothing on GCP, where firewalls attach to the network and match on tags —
+  and anything attached to nothing. *Kubernetes* draws a cluster as namespaces
+  holding deployments, replica sets and pods, with each service joined to the
+  pods its selector matches — for AKS, EKS and GKE alike, since all three are
+  the same engine underneath.
 - **Replay an apply.** Events are grouped into runs; the bar under the canvas
   steps through one, resources appearing in the order the provider created
   them, with the API call behind each step. With `--persist`, runs survive a

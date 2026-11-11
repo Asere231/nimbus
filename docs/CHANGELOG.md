@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.16.0 — 2026-11-11
+
+Milestone 16: one network view, three clouds. It drew a VNet, its
+subnets, their security groups and route tables — and it was Azure-only,
+declared that way in `render.js`. An EC2 or GCE instance appeared in no
+network picture anywhere.
+
+- **The network view serves AWS and GCP**, with the layout and the
+  drawing untouched. Only the MODEL became per-cloud: each cloud's table
+  exports a `NETWORK` descriptor naming its network and subnet types, how
+  a subnet names its network, what hangs off a subnet and how to reach an
+  instance's subnet. `networkShape(cloud)` dispatches it the way
+  `identityLinks` already did.
+- **An instance is drawn inside the subnet it belongs to**, on all three
+  clouds — the thing the milestone existed for. Azure goes VM → NIC →
+  subnet, AWS reads `subnetId`, GCP reads `networkInterfaces[].subnetwork`.
+- **Each cloud's differences are expressed, not flattened.** A GCP
+  custom-mode network has no CIDR and its subnets have no chips, because
+  a firewall attaches to the network and matches on tags; an AWS subnet's
+  route table is found through the route tables' own `associationSet`.
+  There is no "public subnet" badge: it means something only on AWS, and
+  Nimbus routes nothing.
+- **`network.js` is off the Azure exemption list** in
+  `test/ui/clouds.test.js`, so a single cloud's type name left in the
+  shared drawing fails the build. That guard had never covered GCP at
+  all; it does now, verified by injecting a `compute.googleapis.com/`
+  type and watching it fail.
+- **An export test that passed for the wrong reason, fixed.** It asserted
+  a class is styled in the exported SVG by searching the whole of
+  `export.js` — which matches a `querySelectorAll` argument. It was green
+  while two classes had no rule at all.
+- Verified against real applies rather than the fixture: `aws-basic`,
+  `gcp-basic` and `aws-instance` each draw, and the instance one shows the
+  EC2 instance running inside its subnet.
+
 ## 0.15.0 — 2026-11-11
 
 Milestone 15: finishing Azure. It was the only one of the three clouds

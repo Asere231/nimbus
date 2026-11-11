@@ -1,9 +1,10 @@
 # Roadmap
 
-**Current: Milestone 16 — a network view for AWS and GCP
-(`docs/prompts/m16-vpc-view.md`).** Milestone 15 finished Azure: it runs
-your code now, on the same engine behind Cloud Run, and a Log Analytics
-workspace holds what that code prints.
+**Current: Milestone 17 — resource-level policies
+(`docs/prompts/m17-resource-policies.md`).** Milestone 16 made the network
+view serve all three clouds: an EC2 and a GCE instance now appear in the
+subnet they belong to, and the drawing no longer knows any cloud's type
+names.
 
 **Phase 4 is complete.** Milestone 11 gave all three clouds instances that
 really boot, Milestone 12 cleared the defects that made Nimbus quietly
@@ -203,7 +204,7 @@ to demonstrate once there are instances to refuse it to.
 | # | Milestone | Done when |
 |---|---|---|
 | 15 | ~~**Finishing Azure**: Container Apps on the `run` engine, Log Analytics that ingests and queries~~ **done** | `curl` reaches a container Terraform created, and its stdout comes back out of a Log Analytics query |
-| 16 | **A network view for AWS and GCP** | An EC2 and a GCE instance each appear in the subnet they belong to |
+| 16 | ~~**A network view for AWS and GCP**~~ **done** | An EC2 and a GCE instance each appear in the subnet they belong to |
 | 17 | **Resource-level policies** | A principal reads a bucket ONLY because of the bucket policy, and an explicit deny in it wins |
 
 Milestone 15 was first because Azure was the one cloud that could not run
@@ -222,6 +223,21 @@ the work and Azure simply was not using it, and
   Measured along the way: azurerm polls the RESOURCE for a container app
   rather than an operation, which is GKE's behaviour and the opposite of
   Cloud Run's.
+
+- The network view draws all three clouds. One drawing, one layout, and a
+  `NETWORK` descriptor per cloud saying which type is a network, which is
+  a subnet, how a subnet names its network, what hangs off it and how to
+  reach an instance's subnet — the same dispatch `identityLinks` already
+  used. Verified against real applies rather than the fixture:
+  `aws-basic` draws a VPC with its CIDR and region, both subnets and the
+  route table associated with the public one; `gcp-basic` draws a
+  custom-mode network with no CIDR and no per-subnet chips, because a GCP
+  firewall attaches to the network and matches on tags; `aws-instance`
+  draws the EC2 instance inside `nimbus-instance-a`, which is the thing
+  the milestone existed for. `network.js` is off the Azure exemption list
+  in `test/ui/clouds.test.js`, so a single cloud's type name left in the
+  shared drawing now fails the build — and that guard grew a GCP arm,
+  which it had never had.
 
 **Still unscheduled, and the gap to trust least:**
 
@@ -374,9 +390,6 @@ the work and Azure simply was not using it, and
   written against the literal address cannot. Azure has no such override at
   all, so a VM there gets `NIMBUS_VM_*` environment variables instead. No
   cloud mints instance credentials, so the IAM-role paths answer nothing.
-- **No EC2 or GCE instance appears in the network view** — only Azure VMs do,
-  because that view is Azure-only. An AWS or GCP VPC view is still the
-  obvious next visualizer milestone.
 - **GCP still has no Cloud Functions.** Cloud
   Routers and their NAT configuration round-trip as state and nothing
   routes. The project IAM policy IS enforced now, behind
@@ -451,11 +464,6 @@ the work and Azure simply was not using it, and
 - **No presigned-URL verification.** A presigned request is routed by its
   `X-Amz-Credential` and then served like any other; the signature and the
   expiry are not checked, like every other signature here.
-- **The AWS tab has only the topology view.** A VPC view -- subnets, route
-  tables, security groups drawn the way the Azure network view draws a VNet
-  -- would be the obvious next thing, and `render.js`'s VIEWS registry is
-  where it would go.
-
 - **Runs are inferred from gaps, not announced.** `core.RunGap` is 30 s,
   measured against azurerm's silent ~20 s resource-group wait. Two things
   done within half a minute of each other merge into one run, and a pause

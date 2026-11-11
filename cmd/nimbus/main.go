@@ -59,6 +59,8 @@ func main() {
 		sshCLI(os.Args[2:])
 	case "plan-view":
 		planView(os.Args[2:])
+	case "can":
+		canCLI(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("nimbus", version)
 	default:
@@ -79,6 +81,7 @@ Usage:
   nimbus gcp kubeconfig CLUSTER  a kubeconfig for a GKE cluster, for kubectl
   nimbus ssh INSTANCE            a shell on an instance (docker exec, not SSH)
   nimbus plan-view PLAN          show a terraform plan on the graph before applying it
+  nimbus can ACTION RESOURCE     ask whether a principal may do something, and why
   nimbus version
 `)
 }

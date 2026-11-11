@@ -353,3 +353,43 @@ func TestADeniedHeadStillCarriesItsReason(t *testing.T) {
 		t.Errorf("the header does not carry the reason: %q", reason)
 	}
 }
+
+// `nimbus can` must agree with what a request actually gets.
+//
+// The done-criterion the milestone asks for, and the only thing that stops
+// the answer drifting from the behaviour: one table, driven BOTH ways --
+// an actual request through ServeHTTP, and the question the CLI asks.
+//
+// The action and resource below are written by hand on purpose. They are
+// what a person would type into `nimbus can`, so if the request
+// classifier disagrees with that, the disagreement is the finding --
+// deriving them from the classifier would only test it against itself.
+func TestNimbusCanAgreesWithTheRequestPath(t *testing.T) {
+	s := newEnforcingServer(t, "")
+	makeRole(t, s, "reader", `{"Statement":[
+	  {"Sid":"ReadOnly","Effect":"Allow","Action":["s3:GetObject","s3:ListBucket"],
+	   "Resource":["arn:aws:s3:::demo","arn:aws:s3:::demo/*"]}]}`)
+
+	asKey(t, s, "nimbus", "s3", http.MethodPut, "/demo", "")
+	asKey(t, s, "nimbus", "s3", http.MethodPut, "/demo/a.txt", "hello")
+
+	cases := []struct {
+		method, path     string
+		action, resource string
+	}{
+		{http.MethodGet, "/demo/a.txt", "s3:GetObject", "arn:aws:s3:::demo/a.txt"},
+		{http.MethodPut, "/demo/b.txt", "s3:PutObject", "arn:aws:s3:::demo/b.txt"},
+		{http.MethodDelete, "/demo/a.txt", "s3:DeleteObject", "arn:aws:s3:::demo/a.txt"},
+		{http.MethodGet, "/demo", "s3:ListBucket", "arn:aws:s3:::demo"},
+	}
+	for _, c := range cases {
+		rec := asKey(t, s, "reader", "s3", c.method, c.path, "x")
+		requestAllowed := rec.Code != http.StatusForbidden
+
+		check := s.ExplainOne("reader", c.action, c.resource)
+		if check.Allowed != requestAllowed {
+			t.Errorf("%s %s: the request says allowed=%v but `nimbus can %s %s` says %v (%s)",
+				c.method, c.path, requestAllowed, c.action, c.resource, check.Allowed, check.Reason)
+		}
+	}
+}

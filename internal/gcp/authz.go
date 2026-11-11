@@ -336,6 +336,16 @@ func (s *Server) ExplainAccess(principal, resourceID, resourceType string) authz
 		prefix + "." + collection + ".delete",
 		prefix + "." + collection + ".setIamPolicy",
 	}
+	// A bucket's CONTENTS are what people actually ask about, and they are
+	// a different permission family from the bucket itself -- so a member
+	// holding roles/storage.objectAdmin showed four denials on a bucket it
+	// could write every object in. The same distinction S3 needs between
+	// s3:ListBucket on the bucket and s3:GetObject on `bucket/*`.
+	if collection == "buckets" {
+		actions = append(actions,
+			"storage.objects.list", "storage.objects.get",
+			"storage.objects.create", "storage.objects.delete")
+	}
 	report.Checks = authz.Explain(p, resourceID, actions, s.rulesFor(p.ID))
 	return report
 }

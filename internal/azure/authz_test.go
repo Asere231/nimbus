@@ -408,3 +408,35 @@ func TestTheDefaultClientIDIsUnrestricted(t *testing.T) {
 		t.Fatalf("the default client_id was refused: %d %v", code, out)
 	}
 }
+
+// The same agreement criterion, on Azure. See the AWS version for why the
+// action and scope are written by hand.
+func TestNimbusCanAgreesWithTheRequestPath(t *testing.T) {
+	srv, _ := newEnforcingTestServer(t, "")
+	do(t, srv, http.MethodPut, rgPath("rg"), map[string]any{"location": "eastus"})
+	assign(t, srv, rgPath("rg"), roleNetwork, appPrincipal)
+	s := serverOf(t, srv)
+
+	vnet := rgPath("rg") + "/providers/Microsoft.Network/virtualNetworks/vnet"
+	cases := []struct {
+		method, path  string
+		action, scope string
+		body          map[string]any
+	}{
+		{http.MethodPut, vnet, "Microsoft.Network/virtualNetworks/write", vnet, vnetBody()},
+		{http.MethodGet, vnet, "Microsoft.Network/virtualNetworks/read", vnet, nil},
+		{http.MethodPut, rgPath("other"),
+			"Microsoft.Resources/subscriptions/resourceGroups/write", rgPath("other"),
+			map[string]any{"location": "eastus"}},
+	}
+	for _, c := range cases {
+		code, _ := asPrincipal(t, srv, appPrincipal, c.method, c.path, c.body)
+		requestAllowed := code != http.StatusForbidden
+
+		check := s.ExplainOne(appPrincipal, c.action, c.scope)
+		if check.Allowed != requestAllowed {
+			t.Errorf("%s %s: the request says allowed=%v but `nimbus can %s` says %v (%s)",
+				c.method, c.path, requestAllowed, c.action, check.Allowed, check.Reason)
+		}
+	}
+}

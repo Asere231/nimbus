@@ -361,3 +361,35 @@ func TestExplainSaysWhenAPrincipalIsUnrestricted(t *testing.T) {
 		}
 	}
 }
+
+// The same agreement criterion, on GCP. See the AWS version for why the
+// action and resource are written by hand.
+func TestNimbusCanAgreesWithTheRequestPath(t *testing.T) {
+	s := newEnforcingServer(t, "")
+	setBinding(t, s, "roles/compute.networkAdmin", appMember)
+	project := s.cfg.ProjectID
+
+	cases := []struct {
+		method, path     string
+		action, resource string
+	}{
+		{http.MethodGet, "/compute/v1/projects/" + project + "/global/networks",
+			"compute.networks.list", "the project"},
+		{http.MethodPost, "/compute/v1/projects/" + project + "/global/networks",
+			"compute.networks.create", "the project"},
+		{http.MethodGet, "/compute/v1/projects/" + project + "/zones/us-central1-a/instances",
+			"compute.instances.list", "the project"},
+		{http.MethodPost, "/v1/projects/" + project + "/serviceAccounts",
+			"iam.serviceAccounts.create", "the project"},
+	}
+	for _, c := range cases {
+		rec := asMember(t, s, appMember, c.method, c.path, `{"name":"agree"}`)
+		requestAllowed := rec.Code != http.StatusForbidden
+
+		check := s.ExplainOne(appMember, c.action, c.resource)
+		if check.Allowed != requestAllowed {
+			t.Errorf("%s %s: the request says allowed=%v but `nimbus can %s` says %v (%s)",
+				c.method, c.path, requestAllowed, c.action, check.Allowed, check.Reason)
+		}
+	}
+}

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -115,15 +114,7 @@ func (d *deletedVaults) all() []*deletedVault {
 // keyVaultSuffix is the DNS suffix vault hostnames are built on, including our
 // port. See the comment on the metadata suffixes: a bare hostname would send
 // clients to port 443.
-func (s *Server) keyVaultSuffix() string {
-	suffix := KeyVaultSuffix
-	if u, err := url.Parse(s.cfg.PublicURL); err == nil {
-		if p := u.Port(); p != "" {
-			suffix += ":" + p
-		}
-	}
-	return suffix
-}
+func (s *Server) keyVaultSuffix() string { return withPort(KeyVaultSuffix, s.cfg.PublicURL) }
 
 func (s *Server) vaultURI(name string) string {
 	return "https://" + strings.ToLower(name) + "." + s.keyVaultSuffix() + "/"

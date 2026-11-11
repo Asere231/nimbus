@@ -133,14 +133,19 @@ func TestSpecDefaultsDoNotInventNestedObjects(t *testing.T) {
 	id := "/subscriptions/" + DefaultSubscriptionID + "/resourceGroups/" + rg +
 		"/providers/Microsoft.App/containerApps/app1"
 
-	got := putResource(t, s, id, `{"location":"eastus","properties":{}}`)
+	// An image, because the hook requires one -- real Azure does too. The
+	// point of this test is the CONFIGURATION object, which is still
+	// absent from what is sent.
+	got := putResource(t, s, id, `{"location":"eastus","properties":{"template":{"containers":[`+
+		`{"name":"main","image":"nginx:alpine"}]}}}`)
 	props, _ := got["properties"].(map[string]any)
 	if _, invented := props["configuration"]; invented {
 		t.Error("properties.configuration was invented from defaults the client never asked for")
 	}
 
 	// ...but when the client DOES send the object, its defaults get filled.
-	got = putResource(t, s, id, `{"location":"eastus","properties":{"configuration":{"ingress":{}}}}`)
+	got = putResource(t, s, id, `{"location":"eastus","properties":{"configuration":{"ingress":{}},`+
+		`"template":{"containers":[{"name":"main","image":"nginx:alpine"}]}}}`)
 	props, _ = got["properties"].(map[string]any)
 	cfg, _ := props["configuration"].(map[string]any)
 	if cfg["activeRevisionsMode"] != "Single" {
@@ -195,6 +200,39 @@ func TestBackingTiers(t *testing.T) {
 	}
 }
 
+// sampleBody is the body a round-trip uses for a type.
+//
+// Almost every type takes the generic one: the spec table exists so that a
+// type nobody wrote a hook for still fills its read-only fields, and such a
+// type validates nothing. A type with a HOOK can have genuinely required
+// fields, though, and refusing a body without them is faithful rather than
+// awkward -- real Azure refuses a container app with no container too. So
+// those supply their own body here instead of the validation being
+// weakened to suit the test.
+func sampleBody(typ string) string {
+	switch strings.ToLower(typ) {
+	case "microsoft.app/containerapps":
+		return `{"location":"eastus","properties":{"template":{"containers":[` +
+			`{"name":"main","image":"nginx:alpine"}]}}}`
+	}
+	return `{"location":"eastus","properties":{}}`
+}
+
+// needsLiveContainer reports a type whose Provision cannot finish against
+// the Docker Fake.
+//
+// Most engines are satisfied by "the container was started", which the Fake
+// reports happily -- a VM reaches Succeeded in this test for that reason.
+// The `run` engine is different on purpose: its readiness probe is an HTTP
+// GET against the published port, because Cloud Run must not report a
+// service ready before anything is listening, and a Fake container has no
+// port to answer on. So a container app stays "Creating" here, and the rest
+// of the lifecycle -- PUT, GET, list, DELETE, the read-only fields -- is
+// still asserted. The example proves the real thing.
+func needsLiveContainer(typ string) bool {
+	return strings.EqualFold(typ, typeContainerApp)
+}
+
 // Every type in the generated table must survive the full client lifecycle.
 // This is the matrix the milestone asks for: 50+ types through PUT, GET, list
 // and DELETE, with the spec's read-only fields present afterwards.
@@ -216,7 +254,7 @@ func TestEverySpecTypeRoundTrips(t *testing.T) {
 				putResource(t, s, parent,
 					`{"location":"eastus","properties":{"addressSpace":{"addressPrefixes":["10.0.0.0/16"]}}}`)
 			}
-			created := putResource(t, s, id, `{"location":"eastus","properties":{}}`)
+			created := putResource(t, s, id, sampleBody(typ))
 			if created["id"] == nil || created["name"] == nil {
 				t.Fatalf("create returned no id/name: %v", created)
 			}
@@ -229,6 +267,12 @@ func TestEverySpecTypeRoundTrips(t *testing.T) {
 			// async-operation header does.
 			var props map[string]any
 			deadline := time.Now().Add(5 * time.Second)
+			if needsLiveContainer(typ) {
+				// No point waiting out the deadline for a state that
+				// cannot be reached against the Fake: it is five seconds
+				// on every run of the package.
+				deadline = time.Now()
+			}
 			for {
 				read, _ := getResource(t, s, id)
 				props, _ = read["properties"].(map[string]any)
@@ -237,7 +281,7 @@ func TestEverySpecTypeRoundTrips(t *testing.T) {
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
-			if props["provisioningState"] != "Succeeded" {
+			if props["provisioningState"] != "Succeeded" && !needsLiveContainer(typ) {
 				t.Errorf("provisioningState = %v", props["provisioningState"])
 			}
 

@@ -32,5 +32,7 @@ func DNSNames() []string {
 		"*.dfs." + StorageSuffix,
 		KeyVaultSuffix,
 		"*." + KeyVaultSuffix,
+		ContainerAppsSuffix,
+		"*." + ContainerAppsSuffix,
 	}
 }

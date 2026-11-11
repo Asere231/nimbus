@@ -20,6 +20,7 @@ import (
 	"github.com/Asere231/nimbus/internal/core"
 	"github.com/Asere231/nimbus/internal/engines/docker"
 	"github.com/Asere231/nimbus/internal/engines/k3s"
+	"github.com/Asere231/nimbus/internal/engines/run"
 	"github.com/Asere231/nimbus/internal/engines/vm"
 )
 
@@ -93,6 +94,9 @@ type Server struct {
 	// cannot overtake the delete that tears it down.
 	vms  *vm.Engine
 	vmMu sync.Mutex
+	// apps runs the Container Apps, on the same engine Cloud Run uses --
+	// see internal/engines/run, which knows about neither cloud.
+	apps *run.Engine
 }
 
 // New creates the Azure emulator.
@@ -146,6 +150,14 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		KeepRunning:  cfg.KeepClusters,
 		StartTimeout: cfg.ClusterTimeout,
 	}, s.docker)
+	// Container Apps, on the engine Cloud Run uses. Its port base sits
+	// above GCP's so two clouds' service containers never race for one.
+	s.apps = run.New(run.Config{
+		NamePrefix:   "nimbus-aca",
+		PortBase:     DefaultContainerAppPortBase,
+		StartTimeout: cfg.ClusterTimeout,
+		KeepRunning:  cfg.KeepClusters,
+	}, s.docker)
 	// The challenge a Key Vault client gets points at our own login endpoint,
 	// and asks for a token for Azure's Key Vault audience -- which our token
 	// endpoint will happily issue, since it issues tokens for any scope.
@@ -168,6 +180,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	registerIdentityHooks(s)
 	registerAuthorizationHooks(s)
 	registerLogAnalyticsHooks(s)
+	registerContainerAppHooks(s)
 	registerKeyVaultHooks(s)
 	registerDeploymentHooks(s)
 	registerACRHooks(s)
@@ -214,6 +227,7 @@ func (s *Server) useDocker(d docker.Client) {
 	s.docker = d
 	s.k3s.SetDocker(d)
 	s.vms.SetDocker(d)
+	s.apps.SetDocker(d)
 }
 
 func (s *Server) Start() func() {
@@ -251,6 +265,12 @@ func (s *Server) Shutdown(ctx context.Context) {
 	for _, cl := range s.k3s.All() {
 		s.k3s.Stop(ctx, cl)
 	}
+	// Container apps too: a container holding a published port outlives
+	// the process that started it, and the next run would either collide
+	// with it or pick a different port.
+	for _, svc := range s.apps.All() {
+		s.apps.Stop(ctx, svc)
+	}
 	// Registries too. A registry container that outlives Nimbus is worse than
 	// an orphaned cluster: it holds the port its login server names, so the
 	// next run either collides with it or picks a different port and leaves
@@ -264,11 +284,18 @@ func (s *Server) Shutdown(ctx context.Context) {
 // storageSuffix is the DNS suffix for the storage data plane, including our
 // port. Clients join it as {account}.{service}.{suffix}; see the comment in
 // handleMetadata for why the port belongs in it.
-func (s *Server) storageSuffix() string {
-	suffix := StorageSuffix
-	if u, err := url.Parse(s.cfg.PublicURL); err == nil {
+func (s *Server) storageSuffix() string { return withPort(StorageSuffix, s.cfg.PublicURL) }
+
+// withPort puts our port on a data-plane suffix.
+//
+// Every one of Azure's data planes needs this and real Azure needs none of
+// them: a client builds `{name}.{suffix}` and connects, and 443 needs root
+// to bind. Three suffixes now do it -- storage, Key Vault and Container
+// Apps -- which is two more than a copy of the same five lines deserves.
+func withPort(suffix, publicURL string) string {
+	if u, err := url.Parse(publicURL); err == nil {
 		if p := u.Port(); p != "" {
-			suffix += ":" + p
+			return suffix + ":" + p
 		}
 	}
 	return suffix
@@ -301,6 +328,11 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) (note string) {
 	// The same trick for Key Vault: {vault}.vault.nimbus.localhost.
 	if name, ok := keyvault.ParseHost(r.Host, s.keyVaultSuffix()); ok {
 		return s.keyvault.Serve(w, r, name)
+	}
+	// And for a container app: {app}.containerapps.nimbus.localhost. One
+	// label, because that is all a wildcard certificate covers.
+	if name, ok := parseAppHost(r.Host, s.containerAppsSuffix()); ok {
+		return s.serveContainerApp(w, r, name)
 	}
 
 	// Authorization, in one place in front of ARM.

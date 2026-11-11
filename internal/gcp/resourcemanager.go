@@ -127,14 +127,20 @@ func (s *Server) projectIAM(w http.ResponseWriter, r *http.Request, id, verb str
 		writeJSON(w, http.StatusOK, policy)
 		return ""
 	case "testIamPermissions":
-		// Everything is permitted, because nothing is enforced. Answering
-		// with the permissions that were asked about is what a client
-		// expects; an empty list reads as "you may do nothing".
+		// This answers "which of these may I do", and it has to tell the
+		// TRUTH once there is a truth to tell. It used to echo back
+		// whatever was asked about, because nothing was enforced -- which
+		// was honest then and would be a lie now: a client that trusts it
+		// and then gets a 403 has been misled by the one call whose job is
+		// to prevent that.
+		//
+		// With enforcement off it still echoes, because then everything
+		// really is permitted.
 		var req struct {
 			Permissions []string `json:"permissions"`
 		}
 		_ = readJSON(r, &req)
-		writeJSON(w, http.StatusOK, map[string]any{"permissions": req.Permissions})
+		writeJSON(w, http.StatusOK, map[string]any{"permissions": s.heldPermissions(r, req.Permissions)})
 		return ""
 	}
 	e := notFound("Nimbus does not implement the %q verb yet", verb)

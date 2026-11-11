@@ -146,7 +146,7 @@ func start(args []string) {
 	persist := fs.Bool("persist", false, "save state to disk so it survives restarts")
 	host := fs.String("host", "localhost", "hostname clients use to reach Nimbus")
 	enforceIAM := fs.Bool("enforce-iam", false,
-		"refuse requests the caller's policies do not allow (AWS only so far)")
+		"refuse requests the caller's policies, roles or bindings do not allow")
 	principal := fs.String("principal", "",
 		"who an unmapped caller is: a role or user name, or empty for the account root, "+
 			"which is allowed everything. A name that does not exist is allowed nothing")
@@ -241,7 +241,8 @@ func start(args []string) {
 		// api_endpoint_overrides take any URL, and Cloud Storage is
 		// addressed by path so no bucket name becomes a hostname.
 		gcpURL := fmt.Sprintf("http://%s:%d", *host, *gcpPort)
-		gcpCfg := gcp.Config{PublicURL: gcpURL, KeepClusters: *persist}
+		gcpCfg := gcp.Config{PublicURL: gcpURL, KeepClusters: *persist,
+			EnforceIAM: *enforceIAM, Principal: *principal}
 		if dataDir != "" {
 			gcpCfg.DataDir = dataDir
 		}

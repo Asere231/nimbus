@@ -91,6 +91,15 @@ type Config struct {
 	ClusterTimeout time.Duration
 	// KeepClusters leaves containers running when Nimbus stops.
 	KeepClusters bool
+
+	// EnforceIAM turns IAM evaluation on. With it off nothing is ever
+	// refused, which is how this cloud behaved before Milestone 14 and is
+	// still the default.
+	EnforceIAM bool
+	// Principal is the member a request with no member-shaped token is
+	// taken to be. Empty means the default identity, which holds no
+	// bindings and is unrestricted -- see principal.go.
+	Principal string
 }
 
 // Port bases, each above the cloud before it.
@@ -271,6 +280,18 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 	if len(parts) == 0 {
 		writeError(w, notFound("the request path is empty"))
 		return "empty path"
+	}
+
+	// Authorization, in one place in front of every API.
+	//
+	// After routeNimbusOwn above, because the GKE token-review webhook and
+	// the Cloud Run proxy are not Google APIs and carry no principal --
+	// the same exemption AWS's webhook has.
+	if s.cfg.EnforceIAM {
+		if denial, note := s.authorize(r, parts); denial != nil {
+			writeError(w, denial)
+			return note
+		}
 	}
 
 	switch apiFor(parts) {

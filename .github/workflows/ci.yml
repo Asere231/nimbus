@@ -1349,13 +1349,31 @@ jobs:
             echo "::error::the apply succeeded; nothing was refused"
             exit 1
           fi
-          for want in PERMISSION_DENIED storage.objects.create \
+          # What the PROVIDER actually prints. Measured here, by this
+          # assertion failing: the google provider surfaces `error.message`
+          # and `error.errors[].reason` ("forbidden") but NOT
+          # `error.status`, so PERMISSION_DENIED never reaches the
+          # terraform output. The status enum is for a client to match on,
+          # not for a person to read -- so it is checked below, against
+          # the response body, where it is actually true.
+          for want in "Error 403" storage.objects.create \
                       "serviceAccount:app@nimbus-local.iam.gserviceaccount.com"; do
             case "$out" in
               *"$want"*) ;;
               *) echo "::error::the failure does not mention $want"; exit 1 ;;
             esac
           done
+
+          # PERMISSION_DENIED is in the BODY, which is what an SDK reads to
+          # tell a refusal from anything else.
+          body=$(curl -s -o - -w '' \
+            -H "Authorization: Bearer serviceAccount:app@nimbus-local.iam.gserviceaccount.com" \
+            -X DELETE "http://localhost:4703/storage/v1/b/nimbus-iam-enforced")
+          echo "$body"
+          case "$body" in
+            *PERMISSION_DENIED*) ;;
+            *) echo "::error::the refusal body does not carry PERMISSION_DENIED"; exit 1 ;;
+          esac
 
           terraform apply -auto-approve -input=false -var grant=true
 

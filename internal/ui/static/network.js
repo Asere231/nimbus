@@ -107,14 +107,20 @@ export function networkModel(resources, cloud) {
   for (const r of all) {
     if (!isType(r, shape.subnetType)) continue;
     const netKey = shape.networkOf(r);
-    const chips = (shape.chipsOf ? shape.chipsOf(r) : []).map((c) => {
+    const chips = (shape.chipsOf ? shape.chipsOf(r, all) : []).map((c) => {
       attached.add(lower(c.id));
+      const target = byID.get(lower(c.id));
       return {
         kind: c.kind,
         id: c.id,
         label: c.label,
-        name: leaf(c.id),
-        known: byID.has(lower(c.id)),
+        // The resource's own NAME when it is here. Falling back to the
+        // last id segment is an Azure-shaped assumption -- its ids end in
+        // the name, and an AWS route table's does not: `rtb-0a1b2c3d` is
+        // the id and `public-rt` is the name. The fallback still matters,
+        // because a chip may point at something this Nimbus never saw.
+        name: target ? target.name : leaf(c.id),
+        known: Boolean(target),
       };
     });
     if (!subnetsByNetwork.has(netKey)) subnetsByNetwork.set(netKey, []);

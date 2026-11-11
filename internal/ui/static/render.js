@@ -83,12 +83,16 @@ export function render() {
 export const VIEWS = [
   { id: "topology", label: "Topology" },
   {
-    id: "network", label: "Network", clouds: ["azure"],
+    id: "network", label: "Network", clouds: ["azure", "aws", "gcp"],
     model: networkModel, layout: networkLayout, draw: drawNetwork,
     empty: (m) => !m.vnets.length && !m.orphans.length,
     emptyTitle: "No networks here",
-    emptyBody: "This stack has no virtual networks. Create an <code>azurerm_virtual_network</code> " +
-      "and its subnets, their security groups and route tables, and any peering appear here.",
+    // Named per cloud, like the Kubernetes view's: telling somebody on the
+    // AWS tab to create an azurerm_virtual_network is worse than saying
+    // nothing.
+    emptyBody: "This stack has no networks. Create an <code>azurerm_virtual_network</code>, " +
+      "an <code>aws_vpc</code> or a <code>google_compute_network</code> and its subnets — with " +
+      "whatever each cloud attaches to them, and any instance that sits inside one — appear here.",
   },
   {
     id: "kubernetes", label: "Kubernetes", clouds: ["azure", "aws", "gcp"],

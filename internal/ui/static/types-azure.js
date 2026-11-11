@@ -238,7 +238,10 @@ export const NETWORK = {
   networkOf: (r) => String(r.parentId || "").toLowerCase(),
 
   // A security group and a route table, each by resource id. The order is
-  // the order they are drawn in, right to left.
+  // the order they are drawn in, right to left. The second argument --
+  // every resource -- is what AWS needs to find a route table that names
+  // the subnet rather than the other way round; Azure's subnet points at
+  // both of its attachments and ignores it.
   chipsOf: (r) => {
     const p = (r.body || {}).properties || {};
     const out = [];

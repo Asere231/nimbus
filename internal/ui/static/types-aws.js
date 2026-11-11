@@ -57,3 +57,63 @@ export const K8S_CLUSTER_TYPE = "aws::eks::cluster";
 export function displayName(r) {
   return r.name;
 }
+
+// --- the network view's model ----------------------------------------------
+//
+// What the shared network view needs to know about AWS networking. The rule
+// it shares with the other two clouds: a subnet is a stored resource that
+// NAMES its network -- here by `vpcId`, where Azure uses a parent id and
+// GCP a self link.
+//
+// Two differences from Azure are worth stating rather than papering over:
+//
+//   - **A security group is not a subnet attachment.** It belongs to the
+//     VPC and attaches to an instance's interfaces, so a subnet carries
+//     only its route table. Drawing a security group on a subnet would be
+//     Azure's model wearing AWS's names.
+//   - **A route table names the subnet, not the other way round.** The
+//     association lives on the table's `associationSet`, so the chip has
+//     to be found by searching the tables, which is what `chipsOf`'s second argument is
+//     for -- Azure's subnet points AT its route table and needs no search.
+export const NETWORK = {
+  networkType: "aws::ec2::vpc",
+  subnetType: "aws::ec2::subnet",
+  instanceType: "aws::ec2::instance",
+
+  prefixesOf: (r) => {
+    const cidr = (r.body || {}).cidrBlock;
+    return cidr ? [cidr] : [];
+  },
+  cidrOf: (r) => (r.body || {}).cidrBlock || "",
+  networkOf: (r) => String((r.body || {}).vpcId || "").toLowerCase(),
+
+  // A route table associated with this subnet, found by searching the
+  // tables -- the association is recorded on the TABLE.
+  chipsOf: (subnet, all) => {
+    const key = String(subnet.id).toLowerCase();
+    for (const r of all) {
+      if ((r.type || "").toLowerCase() !== "aws::ec2::routetable") continue;
+      const assocs = (r.body || {}).associationSet || [];
+      if (assocs.some((a) => String(a.subnetId || "").toLowerCase() === key)) {
+        return [{ kind: "rt", id: r.id, label: "Route table" }];
+      }
+    }
+    return [];
+  },
+
+  // One hop: an instance names its subnet directly.
+  instanceSubnet: (r) => String((r.body || {}).subnetId || "").toLowerCase(),
+  instanceLabel: (r) => (r.body || {}).instanceType || "",
+
+  // No cross-VPC relationship is modelled: peering connections round-trip
+  // as state and nothing here reads them.
+
+  // Everything EC2 that is networking and is not a VPC or a subnet: an
+  // internet gateway, a NAT gateway, a security group, a route table
+  // nothing is associated with.
+  isNetworkResource: (type) => {
+    const t = (type || "").toLowerCase();
+    return t === "aws::ec2::internetgateway" || t === "aws::ec2::natgateway" ||
+      t === "aws::ec2::securitygroup" || t === "aws::ec2::routetable";
+  },
+};

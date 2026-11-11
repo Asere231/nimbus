@@ -179,9 +179,21 @@ test("fixture.json is a complete, well-parented topology", () => {
       assert.ok(byID.has(r.parentId.toLowerCase()), r.id + " points at a parent that is not in the fixture");
     }
   }
-  const roots = buildForest(new Map(doc.resources.map((r) => [r.id.toLowerCase(), r])));
-  assert.equal(roots.length, 1, "the fixture should draw as one tree under the subscription");
-  assert.ok(layout(roots).length > 15);
+  // One tree PER CLOUD, which is what the app draws: the topology view
+  // filters to the selected cloud before building the forest, so a forest
+  // built across all of them would have a root each and say nothing. This
+  // used to assert a single root, back when the fixture was Azure only.
+  const clouds = [...new Set(doc.resources.map((r) => r.cloud))];
+  assert.ok(clouds.length >= 3, "the fixture should cover all three clouds");
+  let drawn = 0;
+  for (const cloud of clouds) {
+    const mine = doc.resources.filter((r) => r.cloud === cloud);
+    const roots = buildForest(new Map(mine.map((r) => [r.id.toLowerCase(), r])));
+    assert.equal(roots.length, 1,
+      cloud + " should draw as one tree under its own root container");
+    drawn += layout(roots).length;
+  }
+  assert.ok(drawn > 15);
 
   // Every fixture event must predate the page, or the app would treat it as
   // live and try to fetch resources that only exist in the fixture.

@@ -2,7 +2,9 @@
   "info": {
     "version": "fixture",
     "clouds": {
-      "azure": "https://localhost:4701"
+      "azure": "https://localhost:4701",
+      "aws": "http://localhost:4702",
+      "gcp": "http://localhost:4703"
     },
     "dataDir": ""
   },
@@ -864,6 +866,241 @@
           }
         }
       }
+    },
+    {
+      "cloud": "aws",
+      "id": "arn:aws:iam::000000000000:root",
+      "type": "AWS::Account",
+      "name": "000000000000",
+      "parentId": "",
+      "location": "us-east-1",
+      "backing": "state",
+      "createdAt": "2026-10-28T15:05:20Z",
+      "updatedAt": "2026-10-28T15:05:20Z",
+      "body": {
+        "accountId": "000000000000",
+        "name": "Nimbus Local"
+      }
+    },
+    {
+      "cloud": "aws",
+      "id": "vpc-0a1b2c3d4e5f6071",
+      "type": "AWS::EC2::VPC",
+      "name": "nimbus-vpc",
+      "parentId": "arn:aws:iam::000000000000:root",
+      "location": "us-east-1",
+      "backing": "modelled",
+      "createdAt": "2026-10-28T15:05:20Z",
+      "updatedAt": "2026-10-28T15:05:20Z",
+      "body": {
+        "vpcId": "vpc-0a1b2c3d4e5f6071",
+        "cidrBlock": "10.0.0.0/16",
+        "state": "available"
+      }
+    },
+    {
+      "cloud": "aws",
+      "id": "subnet-0a1b2c3d4e5f6072",
+      "type": "AWS::EC2::Subnet",
+      "name": "public",
+      "parentId": "vpc-0a1b2c3d4e5f6071",
+      "location": "us-east-1",
+      "backing": "modelled",
+      "createdAt": "2026-10-28T15:05:20Z",
+      "updatedAt": "2026-10-28T15:05:20Z",
+      "body": {
+        "subnetId": "subnet-0a1b2c3d4e5f6072",
+        "vpcId": "vpc-0a1b2c3d4e5f6071",
+        "cidrBlock": "10.0.1.0/24",
+        "availabilityZone": "us-east-1a"
+      }
+    },
+    {
+      "cloud": "aws",
+      "id": "subnet-0a1b2c3d4e5f6073",
+      "type": "AWS::EC2::Subnet",
+      "name": "private",
+      "parentId": "vpc-0a1b2c3d4e5f6071",
+      "location": "us-east-1",
+      "backing": "modelled",
+      "createdAt": "2026-10-28T15:05:20Z",
+      "updatedAt": "2026-10-28T15:05:20Z",
+      "body": {
+        "subnetId": "subnet-0a1b2c3d4e5f6073",
+        "vpcId": "vpc-0a1b2c3d4e5f6071",
+        "cidrBlock": "10.0.2.0/24",
+        "availabilityZone": "us-east-1b"
+      }
+    },
+    {
+      "cloud": "aws",
+      "id": "rtb-0a1b2c3d4e5f6074",
+      "type": "AWS::EC2::RouteTable",
+      "name": "public-rt",
+      "parentId": "vpc-0a1b2c3d4e5f6071",
+      "location": "us-east-1",
+      "backing": "modelled",
+      "createdAt": "2026-10-28T15:05:20Z",
+      "updatedAt": "2026-10-28T15:05:20Z",
+      "body": {
+        "routeTableId": "rtb-0a1b2c3d4e5f6074",
+        "vpcId": "vpc-0a1b2c3d4e5f6071",
+        "routeSet": [
+          {
+            "destinationCidrBlock": "10.0.0.0/16",
+            "gatewayId": "local",
+            "state": "active"
+          }
+        ],
+        "associationSet": [
+          {
+            "routeTableAssociationId": "rtbassoc-1",
+            "routeTableId": "rtb-0a1b2c3d4e5f6074",
+            "subnetId": "subnet-0a1b2c3d4e5f6072",
+            "main": false
+          }
+        ]
+      }
+    },
+    {
+      "cloud": "aws",
+      "id": "sg-0a1b2c3d4e5f6075",
+      "type": "AWS::EC2::SecurityGroup",
+      "name": "web",
+      "parentId": "vpc-0a1b2c3d4e5f6071",
+      "location": "us-east-1",
+      "backing": "modelled",
+      "createdAt": "2026-10-28T15:05:20Z",
+      "updatedAt": "2026-10-28T15:05:20Z",
+      "body": {
+        "groupId": "sg-0a1b2c3d4e5f6075",
+        "groupName": "web",
+        "vpcId": "vpc-0a1b2c3d4e5f6071"
+      }
+    },
+    {
+      "cloud": "aws",
+      "id": "i-0a1b2c3d4e5f6076",
+      "type": "AWS::EC2::Instance",
+      "name": "web",
+      "parentId": "subnet-0a1b2c3d4e5f6072",
+      "location": "us-east-1",
+      "backing": "real",
+      "createdAt": "2026-10-28T15:05:20Z",
+      "updatedAt": "2026-10-28T15:05:20Z",
+      "body": {
+        "instanceId": "i-0a1b2c3d4e5f6076",
+        "subnetId": "subnet-0a1b2c3d4e5f6072",
+        "vpcId": "vpc-0a1b2c3d4e5f6071",
+        "instanceType": "t3.micro",
+        "instanceState": {
+          "name": "running"
+        },
+        "nimbusContainer": "nimbus-ec2-web"
+      }
+    },
+    {
+      "cloud": "gcp",
+      "id": "http://localhost:4703/v1/projects/nimbus-local",
+      "type": "cloudresourcemanager.googleapis.com/Project",
+      "name": "nimbus-local",
+      "parentId": "",
+      "location": "",
+      "backing": "state",
+      "createdAt": "2026-10-28T15:05:20Z",
+      "updatedAt": "2026-10-28T15:05:20Z",
+      "body": {
+        "projectId": "nimbus-local",
+        "name": "nimbus-local"
+      }
+    },
+    {
+      "cloud": "gcp",
+      "id": "http://localhost:4703/compute/v1/projects/nimbus-local/global/networks/vpc-nimbus",
+      "type": "compute.googleapis.com/Network",
+      "name": "vpc-nimbus",
+      "parentId": "http://localhost:4703/v1/projects/nimbus-local",
+      "location": "",
+      "backing": "modelled",
+      "createdAt": "2026-10-28T15:05:20Z",
+      "updatedAt": "2026-10-28T15:05:20Z",
+      "body": {
+        "name": "vpc-nimbus",
+        "autoCreateSubnetworks": false,
+        "subnetworks": [
+          "http://localhost:4703/compute/v1/projects/nimbus-local/regions/us-central1/subnetworks/snet-nodes"
+        ]
+      }
+    },
+    {
+      "cloud": "gcp",
+      "id": "http://localhost:4703/compute/v1/projects/nimbus-local/regions/us-central1/subnetworks/snet-nodes",
+      "type": "compute.googleapis.com/Subnetwork",
+      "name": "snet-nodes",
+      "parentId": "http://localhost:4703/compute/v1/projects/nimbus-local/global/networks/vpc-nimbus",
+      "location": "us-central1",
+      "backing": "modelled",
+      "createdAt": "2026-10-28T15:05:20Z",
+      "updatedAt": "2026-10-28T15:05:20Z",
+      "body": {
+        "name": "snet-nodes",
+        "network": "http://localhost:4703/compute/v1/projects/nimbus-local/global/networks/vpc-nimbus",
+        "ipCidrRange": "10.20.0.0/24",
+        "region": "http://localhost:4703/compute/v1/projects/nimbus-local/regions/us-central1"
+      }
+    },
+    {
+      "cloud": "gcp",
+      "id": "http://localhost:4703/compute/v1/projects/nimbus-local/global/firewalls/allow-ssh",
+      "type": "compute.googleapis.com/Firewall",
+      "name": "allow-ssh",
+      "parentId": "http://localhost:4703/compute/v1/projects/nimbus-local/global/networks/vpc-nimbus",
+      "location": "",
+      "backing": "modelled",
+      "createdAt": "2026-10-28T15:05:20Z",
+      "updatedAt": "2026-10-28T15:05:20Z",
+      "body": {
+        "name": "allow-ssh",
+        "network": "http://localhost:4703/compute/v1/projects/nimbus-local/global/networks/vpc-nimbus",
+        "allowed": [
+          {
+            "IPProtocol": "tcp",
+            "ports": [
+              "22"
+            ]
+          }
+        ],
+        "sourceRanges": [
+          "0.0.0.0/0"
+        ],
+        "targetTags": [
+          "ssh"
+        ]
+      }
+    },
+    {
+      "cloud": "gcp",
+      "id": "http://localhost:4703/compute/v1/projects/nimbus-local/zones/us-central1-a/instances/web",
+      "type": "compute.googleapis.com/Instance",
+      "name": "web",
+      "parentId": "http://localhost:4703/compute/v1/projects/nimbus-local/regions/us-central1/subnetworks/snet-nodes",
+      "location": "us-central1-a",
+      "backing": "real",
+      "createdAt": "2026-10-28T15:05:20Z",
+      "updatedAt": "2026-10-28T15:05:20Z",
+      "body": {
+        "name": "web",
+        "machineType": "http://localhost:4703/compute/v1/projects/nimbus-local/zones/us-central1-a/machineTypes/e2-micro",
+        "status": "RUNNING",
+        "networkInterfaces": [
+          {
+            "subnetwork": "http://localhost:4703/compute/v1/projects/nimbus-local/regions/us-central1/subnetworks/snet-nodes",
+            "network": "http://localhost:4703/compute/v1/projects/nimbus-local/global/networks/vpc-nimbus",
+            "networkIP": "10.20.0.2"
+          }
+        ],
+        "nimbusContainer": "nimbus-gce-web"
+      }
     }
   ],
   "events": [
@@ -1317,6 +1554,138 @@
       "resourceType": "Microsoft.App/containerApps",
       "name": "web",
       "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app"
+    },
+    {
+      "seq": 42,
+      "time": "2026-10-28T15:05:13Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "aws",
+      "resourceId": "arn:aws:iam::000000000000:root",
+      "resourceType": "AWS::Account",
+      "name": "000000000000",
+      "parentId": ""
+    },
+    {
+      "seq": 43,
+      "time": "2026-10-28T15:05:14Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "aws",
+      "resourceId": "vpc-0a1b2c3d4e5f6071",
+      "resourceType": "AWS::EC2::VPC",
+      "name": "nimbus-vpc",
+      "parentId": "arn:aws:iam::000000000000:root"
+    },
+    {
+      "seq": 44,
+      "time": "2026-10-28T15:05:15Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "aws",
+      "resourceId": "subnet-0a1b2c3d4e5f6072",
+      "resourceType": "AWS::EC2::Subnet",
+      "name": "public",
+      "parentId": "vpc-0a1b2c3d4e5f6071"
+    },
+    {
+      "seq": 45,
+      "time": "2026-10-28T15:05:16Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "aws",
+      "resourceId": "subnet-0a1b2c3d4e5f6073",
+      "resourceType": "AWS::EC2::Subnet",
+      "name": "private",
+      "parentId": "vpc-0a1b2c3d4e5f6071"
+    },
+    {
+      "seq": 46,
+      "time": "2026-10-28T15:05:17Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "aws",
+      "resourceId": "rtb-0a1b2c3d4e5f6074",
+      "resourceType": "AWS::EC2::RouteTable",
+      "name": "public-rt",
+      "parentId": "vpc-0a1b2c3d4e5f6071"
+    },
+    {
+      "seq": 47,
+      "time": "2026-10-28T15:05:18Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "aws",
+      "resourceId": "sg-0a1b2c3d4e5f6075",
+      "resourceType": "AWS::EC2::SecurityGroup",
+      "name": "web",
+      "parentId": "vpc-0a1b2c3d4e5f6071"
+    },
+    {
+      "seq": 48,
+      "time": "2026-10-28T15:05:19Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "aws",
+      "resourceId": "i-0a1b2c3d4e5f6076",
+      "resourceType": "AWS::EC2::Instance",
+      "name": "web",
+      "parentId": "subnet-0a1b2c3d4e5f6072"
+    },
+    {
+      "seq": 49,
+      "time": "2026-10-28T15:05:20Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "gcp",
+      "resourceId": "http://localhost:4703/v1/projects/nimbus-local",
+      "resourceType": "cloudresourcemanager.googleapis.com/Project",
+      "name": "nimbus-local",
+      "parentId": ""
+    },
+    {
+      "seq": 50,
+      "time": "2026-10-28T15:05:21Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "gcp",
+      "resourceId": "http://localhost:4703/compute/v1/projects/nimbus-local/global/networks/vpc-nimbus",
+      "resourceType": "compute.googleapis.com/Network",
+      "name": "vpc-nimbus",
+      "parentId": "http://localhost:4703/v1/projects/nimbus-local"
+    },
+    {
+      "seq": 51,
+      "time": "2026-10-28T15:05:22Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "gcp",
+      "resourceId": "http://localhost:4703/compute/v1/projects/nimbus-local/regions/us-central1/subnetworks/snet-nodes",
+      "resourceType": "compute.googleapis.com/Subnetwork",
+      "name": "snet-nodes",
+      "parentId": "http://localhost:4703/compute/v1/projects/nimbus-local/global/networks/vpc-nimbus"
+    },
+    {
+      "seq": 52,
+      "time": "2026-10-28T15:05:23Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "gcp",
+      "resourceId": "http://localhost:4703/compute/v1/projects/nimbus-local/global/firewalls/allow-ssh",
+      "resourceType": "compute.googleapis.com/Firewall",
+      "name": "allow-ssh",
+      "parentId": "http://localhost:4703/compute/v1/projects/nimbus-local/global/networks/vpc-nimbus"
+    },
+    {
+      "seq": 53,
+      "time": "2026-10-28T15:05:24Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "gcp",
+      "resourceId": "http://localhost:4703/compute/v1/projects/nimbus-local/zones/us-central1-a/instances/web",
+      "resourceType": "compute.googleapis.com/Instance",
+      "name": "web",
+      "parentId": "http://localhost:4703/compute/v1/projects/nimbus-local/regions/us-central1/subnetworks/snet-nodes"
     }
   ],
   "blobs": {
@@ -1349,12 +1718,12 @@
     {
       "id": "20261028T150411.000Z",
       "start": "2026-10-28T15:04:11Z",
-      "end": "2026-10-28T15:05:12Z",
-      "created": 32,
+      "end": "2026-10-28T15:05:24Z",
+      "created": 44,
       "updated": 1,
       "deleted": 0,
       "requests": 8,
-      "steps": 33,
+      "steps": 45,
       "events": [
         {
           "seq": 1,
@@ -1806,6 +2175,138 @@
           "resourceType": "Microsoft.App/containerApps",
           "name": "web",
           "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app"
+        },
+        {
+          "seq": 42,
+          "time": "2026-10-28T15:05:13Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "aws",
+          "resourceId": "arn:aws:iam::000000000000:root",
+          "resourceType": "AWS::Account",
+          "name": "000000000000",
+          "parentId": ""
+        },
+        {
+          "seq": 43,
+          "time": "2026-10-28T15:05:14Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "aws",
+          "resourceId": "vpc-0a1b2c3d4e5f6071",
+          "resourceType": "AWS::EC2::VPC",
+          "name": "nimbus-vpc",
+          "parentId": "arn:aws:iam::000000000000:root"
+        },
+        {
+          "seq": 44,
+          "time": "2026-10-28T15:05:15Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "aws",
+          "resourceId": "subnet-0a1b2c3d4e5f6072",
+          "resourceType": "AWS::EC2::Subnet",
+          "name": "public",
+          "parentId": "vpc-0a1b2c3d4e5f6071"
+        },
+        {
+          "seq": 45,
+          "time": "2026-10-28T15:05:16Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "aws",
+          "resourceId": "subnet-0a1b2c3d4e5f6073",
+          "resourceType": "AWS::EC2::Subnet",
+          "name": "private",
+          "parentId": "vpc-0a1b2c3d4e5f6071"
+        },
+        {
+          "seq": 46,
+          "time": "2026-10-28T15:05:17Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "aws",
+          "resourceId": "rtb-0a1b2c3d4e5f6074",
+          "resourceType": "AWS::EC2::RouteTable",
+          "name": "public-rt",
+          "parentId": "vpc-0a1b2c3d4e5f6071"
+        },
+        {
+          "seq": 47,
+          "time": "2026-10-28T15:05:18Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "aws",
+          "resourceId": "sg-0a1b2c3d4e5f6075",
+          "resourceType": "AWS::EC2::SecurityGroup",
+          "name": "web",
+          "parentId": "vpc-0a1b2c3d4e5f6071"
+        },
+        {
+          "seq": 48,
+          "time": "2026-10-28T15:05:19Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "aws",
+          "resourceId": "i-0a1b2c3d4e5f6076",
+          "resourceType": "AWS::EC2::Instance",
+          "name": "web",
+          "parentId": "subnet-0a1b2c3d4e5f6072"
+        },
+        {
+          "seq": 49,
+          "time": "2026-10-28T15:05:20Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "gcp",
+          "resourceId": "http://localhost:4703/v1/projects/nimbus-local",
+          "resourceType": "cloudresourcemanager.googleapis.com/Project",
+          "name": "nimbus-local",
+          "parentId": ""
+        },
+        {
+          "seq": 50,
+          "time": "2026-10-28T15:05:21Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "gcp",
+          "resourceId": "http://localhost:4703/compute/v1/projects/nimbus-local/global/networks/vpc-nimbus",
+          "resourceType": "compute.googleapis.com/Network",
+          "name": "vpc-nimbus",
+          "parentId": "http://localhost:4703/v1/projects/nimbus-local"
+        },
+        {
+          "seq": 51,
+          "time": "2026-10-28T15:05:22Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "gcp",
+          "resourceId": "http://localhost:4703/compute/v1/projects/nimbus-local/regions/us-central1/subnetworks/snet-nodes",
+          "resourceType": "compute.googleapis.com/Subnetwork",
+          "name": "snet-nodes",
+          "parentId": "http://localhost:4703/compute/v1/projects/nimbus-local/global/networks/vpc-nimbus"
+        },
+        {
+          "seq": 52,
+          "time": "2026-10-28T15:05:23Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "gcp",
+          "resourceId": "http://localhost:4703/compute/v1/projects/nimbus-local/global/firewalls/allow-ssh",
+          "resourceType": "compute.googleapis.com/Firewall",
+          "name": "allow-ssh",
+          "parentId": "http://localhost:4703/compute/v1/projects/nimbus-local/global/networks/vpc-nimbus"
+        },
+        {
+          "seq": 53,
+          "time": "2026-10-28T15:05:24Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "gcp",
+          "resourceId": "http://localhost:4703/compute/v1/projects/nimbus-local/zones/us-central1-a/instances/web",
+          "resourceType": "compute.googleapis.com/Instance",
+          "name": "web",
+          "parentId": "http://localhost:4703/compute/v1/projects/nimbus-local/regions/us-central1/subnetworks/snet-nodes"
         }
       ]
     }

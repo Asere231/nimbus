@@ -267,3 +267,170 @@ test("a subnet holding machines is taller than one that does not", () => {
   const v = m.vnets[0];
   assert.ok(b.y + b.h <= v.y + v.h, "the last subnet pokes out of its VNet");
 });
+
+// --- AWS and GCP ------------------------------------------------------------
+//
+// One view, three clouds. What is worth asserting is not the drawing --
+// the layout is shared and already tested above -- but that each cloud's
+// descriptor finds the SAME things through a different route: which subnet
+// belongs to which network, what hangs off a subnet, and where an instance
+// sits. The bodies below are the shapes Nimbus really stores.
+
+const awsRes = (id, type, name, body) =>
+  ({ cloud: "aws", id, type, name, parentId: "", location: "us-east-1", backing: "modelled", body });
+
+const VPC = "vpc-0a1b2c3d";
+const SUBNET_A = "subnet-11111111";
+const SUBNET_B = "subnet-22222222";
+
+function awsStack(...extra) {
+  return map(
+    awsRes(VPC, "AWS::EC2::VPC", "nimbus-vpc", { vpcId: VPC, cidrBlock: "10.0.0.0/16" }),
+    awsRes(SUBNET_A, "AWS::EC2::Subnet", "public", {
+      subnetId: SUBNET_A, vpcId: VPC, cidrBlock: "10.0.1.0/24", availabilityZone: "us-east-1a",
+    }),
+    awsRes(SUBNET_B, "AWS::EC2::Subnet", "private", {
+      subnetId: SUBNET_B, vpcId: VPC, cidrBlock: "10.0.2.0/24", availabilityZone: "us-east-1b",
+    }),
+    ...extra,
+  );
+}
+
+test("an AWS VPC holds the subnets that name it", () => {
+  const m = networkModel(awsStack(), "aws");
+  assert.equal(m.vnets.length, 1);
+  assert.deepEqual(m.vnets[0].prefixes, ["10.0.0.0/16"]);
+  assert.deepEqual(m.vnets[0].subnets.map((s) => [s.name, s.prefix]),
+    [["private", "10.0.2.0/24"], ["public", "10.0.1.0/24"]]);
+});
+
+// AWS records the association on the TABLE, where Azure's subnet points at
+// its route table. Same chip, found from the other end.
+test("an AWS route table attaches to the subnet it is associated with", () => {
+  const m = networkModel(awsStack(
+    awsRes("rtb-999", "AWS::EC2::RouteTable", "public-rt", {
+      routeTableId: "rtb-999", vpcId: VPC,
+      associationSet: [{ routeTableAssociationId: "rtbassoc-1", routeTableId: "rtb-999", subnetId: SUBNET_A }],
+    }),
+  ), "aws");
+  const pub = m.vnets[0].subnets.find((s) => s.name === "public");
+  const priv = m.vnets[0].subnets.find((s) => s.name === "private");
+  assert.deepEqual(pub.chips.map((c) => [c.kind, c.name, c.label]), [["rt", "public-rt", "Route table"]]);
+  assert.equal(priv.chips.length, 0, "the unassociated subnet has no chip");
+  assert.equal(m.orphans.length, 0, "an associated route table is not unattached");
+});
+
+// A security group is NOT a subnet attachment on AWS: it belongs to the
+// VPC and attaches to an instance. Drawing it on a subnet would be Azure's
+// model wearing AWS's names.
+test("an AWS security group is unattached, not a subnet chip", () => {
+  const m = networkModel(awsStack(
+    awsRes("sg-123", "AWS::EC2::SecurityGroup", "web", { groupId: "sg-123", vpcId: VPC }),
+  ), "aws");
+  for (const sn of m.vnets[0].subnets) assert.equal(sn.chips.length, 0);
+  assert.deepEqual(m.orphans.map((o) => o.name), ["web"]);
+});
+
+test("an EC2 instance is drawn in the subnet it names", () => {
+  const m = networkModel(awsStack(
+    awsRes("i-abc", "AWS::EC2::Instance", "web", {
+      instanceId: "i-abc", subnetId: SUBNET_A, instanceType: "t3.micro",
+      nimbusContainer: "nimbus-ec2-web",
+    }),
+  ), "aws");
+  const pub = m.vnets[0].subnets.find((s) => s.name === "public");
+  assert.deepEqual(pub.machines.map((x) => [x.name, x.size, x.running]), [["web", "t3.micro", true]]);
+  const priv = m.vnets[0].subnets.find((s) => s.name === "private");
+  assert.equal(priv.machines.length, 0);
+});
+
+const gcpRes = (id, type, name, body) =>
+  ({ cloud: "gcp", id, type, name, parentId: "", location: "us-central1", backing: "modelled", body });
+
+const NET = "http://localhost:4703/compute/v1/projects/p/global/networks/vpc";
+const SUBNET = "http://localhost:4703/compute/v1/projects/p/regions/us-central1/subnetworks/nodes";
+
+function gcpStack(...extra) {
+  return map(
+    gcpRes(NET, "compute.googleapis.com/Network", "vpc", { autoCreateSubnetworks: false }),
+    gcpRes(SUBNET, "compute.googleapis.com/Subnetwork", "nodes", {
+      network: NET, ipCidrRange: "10.20.0.0/24",
+    }),
+    ...extra,
+  );
+}
+
+// A GCP id IS the URL it answers on, so a subnetwork's `network` field
+// matches the network's id directly -- no parent, no separate field.
+test("a GCP network holds the subnetworks whose self link names it", () => {
+  const m = networkModel(gcpStack(), "gcp");
+  assert.equal(m.vnets.length, 1);
+  assert.deepEqual(m.vnets[0].subnets.map((s) => [s.name, s.prefix]), [["nodes", "10.20.0.0/24"]]);
+});
+
+// A custom-mode network has no address range of its own: the ranges are on
+// the subnetworks. An empty list is the truth, not a gap.
+test("a GCP network shows no CIDR of its own", () => {
+  const m = networkModel(gcpStack(), "gcp");
+  assert.deepEqual(m.vnets[0].prefixes, []);
+});
+
+// A firewall attaches to the NETWORK and matches on tags, so there is
+// nothing to draw on a subnetwork -- and saying so by drawing it as
+// unattached is more honest than inventing a subnet attachment.
+test("a GCP firewall is unattached, because it belongs to the network", () => {
+  const m = networkModel(gcpStack(
+    gcpRes(NET + "-fw", "compute.googleapis.com/Firewall", "allow-ssh", { network: NET }),
+  ), "gcp");
+  assert.equal(m.vnets[0].subnets[0].chips.length, 0, "a subnetwork has no attachments at all");
+  assert.deepEqual(m.orphans.map((o) => o.name), ["allow-ssh"]);
+});
+
+test("a GCE instance is drawn in the subnetwork its interface names", () => {
+  const m = networkModel(gcpStack(
+    gcpRes(NET + "/i/web", "compute.googleapis.com/Instance", "web", {
+      networkInterfaces: [{ subnetwork: SUBNET, network: NET }],
+      machineType: "http://localhost:4703/compute/v1/projects/p/zones/us-central1-a/machineTypes/e2-micro",
+    }),
+  ), "gcp");
+  assert.deepEqual(m.vnets[0].subnets[0].machines.map((x) => [x.name, x.size]), [["web", "e2-micro"]]);
+});
+
+// The shared rule, stated once per cloud: a subnet whose network is not
+// here is simply not drawn, rather than inventing a box to put it in.
+test("a subnet whose network is missing is not drawn anywhere", () => {
+  const orphanSubnet = awsRes("subnet-999", "AWS::EC2::Subnet", "stray", {
+    subnetId: "subnet-999", vpcId: "vpc-gone", cidrBlock: "10.9.0.0/24",
+  });
+  const m = networkModel(map(orphanSubnet), "aws");
+  assert.equal(m.vnets.length, 0);
+  assert.equal(m.orphans.length, 0, "a subnet is not an unattached network resource either");
+});
+
+// The fixture is what the view is eyeballed against, so every cloud's
+// network has to be in it -- otherwise ?fixture shows one cloud working
+// and says nothing about the other two.
+test("the fixture exercises the network view on all three clouds", () => {
+  const doc = JSON.parse(readFileSync(new URL("../../internal/ui/static/fixture.json", import.meta.url)));
+  const all = new Map(doc.resources.map((r) => [r.id.toLowerCase(), r]));
+
+  for (const cloud of ["azure", "aws", "gcp"]) {
+    const m = networkModel(all, cloud);
+    assert.ok(m.vnets.length >= 1, cloud + " has no network in the fixture");
+    assert.ok(m.vnets.some((v) => v.subnets.length), cloud + " has a network with no subnets");
+    assert.ok(m.vnets.some((v) => v.subnets.some((s) => s.machines.length)),
+      cloud + " has no instance drawn in a subnet, which is the point of this milestone");
+    // Something unattached, which is the one thing this view shows that
+    // the tree cannot.
+    assert.ok(m.orphans.length >= 1, cloud + " has nothing unattached to show");
+    const size = networkLayout(m);
+    assert.ok(size.width > 0 && size.height > 0, cloud + " does not lay out");
+  }
+
+  // And each cloud sees ONLY its own: a GCP network must not appear on the
+  // AWS tab, which is what a shared model gets wrong if it forgets to key
+  // on type.
+  assert.equal(networkModel(all, "aws").vnets.length, 1);
+  assert.equal(networkModel(all, "gcp").vnets.length, 1);
+  assert.equal(networkModel(all, "azure").vnets.length, 2);
+});

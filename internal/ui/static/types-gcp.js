@@ -50,3 +50,51 @@ export const K8S_CLUSTER_TYPE = "container.googleapis.com/cluster";
 export function displayName(r) {
   return r.name;
 }
+
+// --- the network view's model ----------------------------------------------
+//
+// What the shared network view needs to know about Google's networking.
+// The rule all three clouds share: a subnet is a stored resource that
+// NAMES its network -- here by a `network` self link, which IS the
+// network's store id, since every GCP id here is the URL it answers on.
+//
+// Two things are genuinely different and the descriptor says so by what it
+// leaves out:
+//
+//   - **A subnetwork has NO attachments.** A firewall rule attaches to the
+//     NETWORK and matches on network tags, so there is nothing to draw on
+//     a subnetwork and `chipsOf` is absent rather than returning something
+//     invented.
+//   - **A custom-mode network has no address range of its own.** The
+//     ranges live on the subnetworks, so `prefixesOf` returns nothing and
+//     the network's box carries a name and no CIDR -- which is the truth.
+export const NETWORK = {
+  networkType: "compute.googleapis.com/network",
+  subnetType: "compute.googleapis.com/subnetwork",
+  instanceType: "compute.googleapis.com/instance",
+
+  prefixesOf: () => [],
+  cidrOf: (r) => (r.body || {}).ipCidrRange || "",
+  networkOf: (r) => String((r.body || {}).network || "").toLowerCase(),
+
+  // One hop, through the first interface that names a subnetwork. The
+  // subnetwork arrives as a partial URL and is stored as a full self link,
+  // so it matches the subnetwork's id directly.
+  instanceSubnet: (r) => {
+    for (const nic of (r.body || {}).networkInterfaces || []) {
+      if (nic.subnetwork) return String(nic.subnetwork).toLowerCase();
+    }
+    return "";
+  },
+  // A machine type arrives as a URL; the last segment is the name.
+  instanceLabel: (r) => String((r.body || {}).machineType || "").split("/").filter(Boolean).pop() || "",
+
+  // Firewalls, routes and routers all hang off the network rather than a
+  // subnetwork, so they appear in the unattached column -- which is
+  // accurate: this view does not draw what they match on.
+  isNetworkResource: (type) => {
+    const t = (type || "").toLowerCase();
+    return t === "compute.googleapis.com/firewall" || t === "compute.googleapis.com/route" ||
+      t === "compute.googleapis.com/router";
+  },
+};

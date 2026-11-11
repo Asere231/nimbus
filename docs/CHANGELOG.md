@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.13.0 — 2026-11-10
+
+Milestone 13: authorization that can say no. The project's most-repeated
+honest limitation — "recorded, never enforced" — becomes a feature for
+AWS, behind an opt-in `--enforce-iam`.
+
+- **A cloud-neutral decision engine** in `internal/authz`: a principal, an
+  action, a resource, a context, and the order rules settle in. Explicit
+  deny wins, nothing is allowed unless something says so, and a rule that
+  *cannot be evaluated* refuses rather than reading as "no". It knows no
+  cloud's policy syntax; each cloud compiles its own documents down to a
+  `Rule`, which is what Milestone 14 will do for Azure and GCP.
+- **AWS IAM evaluation**: real documents, with `Statement`, `Action` and
+  `Resource` each a string or a list, `NotAction`/`NotResource`,
+  case-insensitive action matching against case-sensitive ARNs, and a
+  stated set of condition operators and keys with everything outside it
+  refused by name. Six managed policies ship — only those whose real
+  document is short enough to transcribe exactly — and any other managed
+  ARN refuses and names itself.
+- **Identity with no new state**: the SigV4 access key id. `AssumeRole`
+  already derives its key from the role's ARN, so a key maps back by
+  deriving each role's and comparing; a key that is a role or user *name*
+  maps to that entity. Anything unmapped is the account root, which is
+  what real root is — no policies, full access — so turning the flag on
+  costs nothing: `aws-basic` applies, plans clean and destroys against an
+  enforcing server unchanged. `GetCallerIdentity` now reports whoever the
+  request resolves to.
+- **Refusals that look right**: 403 with each service's own code and
+  envelope, the message naming the action, the principal and the statement
+  that decided. Every denial reaches the activity feed.
+- **`examples/terraform/aws-iam-enforced`**, proving both directions: an
+  apply that fails with a legible `AccessDenied`, and the same apply
+  succeeding once the policy grants the action. In CI, along with the
+  assertion that the flag changes nothing when off.
+
+Measured against aws provider 5.100.0, and the reason the rest of it was
+safe to build:
+
+- A denial fails the operation at once and the whole message survives into
+  the terraform error. No retry storm.
+- **A denied read fails a plan rather than being mistaken for a missing
+  object.** The other answer would have made Terraform plan to recreate
+  resources that exist, which would be worse than no enforcement. CI pins
+  it on `1 to add` specifically.
+- A denied HEAD loses its reason entirely — HTTP gives a HEAD reply no
+  body, so the provider reports only `Forbidden: Forbidden`. Real S3 is no
+  better, which is what makes the feed load-bearing; `X-Nimbus-Denied`
+  carries it for anyone reading the response.
+- Revoking a permission Terraform needs to *read* its own resources leaves
+  a state no plan can escape, because the apply that would restore it
+  refreshes first. `-refresh=false` is the way out. Kept as a documented
+  trap, since real AWS does the same.
+
+Two bugs found by tests rather than by use: root was being refused for an
+unmapped action (whether an action is mapped is a policy question, and
+root has none), and buffering the request body once was not enough — the
+classifier reads it to EOF, so it has to be put back after the check as
+well as before.
+
 ## 0.12.0 — 2026-11-10
 
 Milestone 12: the correctness pass. Defects that made Nimbus quietly

@@ -93,7 +93,7 @@ so there is nothing to trust on your machine.
 | STS | `GetCallerIdentity`, `AssumeRole` |
 | EC2 | VPCs, subnets, internet and NAT gateways, route tables and routes, security groups and rules, tags, availability zones, account attributes, with the describe filters the provider sends |
 | S3 | Buckets path-style with their whole sub-configuration matrix (versioning, tagging, policy, encryption, public access block, ownership, …) and objects with real bytes on disk. Large files work both ways: multipart upload above the CLI's 8 MB threshold, with the `-N` part-count ETag, and ranged GETs so a parallel download reassembles correctly |
-| IAM | Roles, users, managed and inline policies, attachments, instance profiles — recorded, never enforced |
+| IAM | Roles, users, managed and inline policies, attachments, instance profiles — and **enforced**, with `--enforce-iam`: a request the caller's policies do not allow is refused with a legible `AccessDenied`. Identity-based policies, wildcards, explicit deny, a stated subset of conditions |
 | EKS | Clusters and node groups as **real Kubernetes** (k3s in Docker). `aws eks update-kubeconfig` then `kubectl get nodes` works, through the same token authentication webhook real EKS uses |
 | EC2 instances | Machines that **really boot**: a container per instance, running your user data, keeping its filesystem across a stop and start, and serving its own metadata. Key pairs, instance types, lifecycle states and the attribute read-backs the provider makes |
 | Lambda | Functions that **really run**, in AWS's own base images through the Runtime Interface Emulator they ship. Zip or S3 code, environment, timeout, `RequestResponse` and `Event` invocations, tags and resource policies |
@@ -109,10 +109,39 @@ aws --endpoint-url http://localhost:4702 s3 cp README.md s3://demo/
 aws --endpoint-url http://localhost:4702 lambda invoke --function-name writer /dev/stdout
 ```
 
-Three examples: `aws-basic` applies 14 resources across STS, EC2, S3 and IAM;
+Four examples: `aws-basic` applies 14 resources across STS, EC2, S3 and IAM;
 `aws-serverless` deploys a Python handler that writes to DynamoDB, with
 nothing but `AWS_ENDPOINT_URL` telling it where Nimbus is; `aws-eks` brings up
-a cluster `kubectl` can reach. All three plan clean and destroy.
+a cluster `kubectl` can reach; and `aws-iam-enforced` proves a permission is
+genuinely refused and then granted. All plan clean and destroy.
+
+### Permissions that are actually checked
+
+```bash
+nimbus start --clouds aws --enforce-iam
+```
+
+Nimbus verifies no signatures, so identity is whatever the client claims —
+which is the right trade for the question being asked: *would these
+permissions work?*, not *is this caller genuine?* The access key id is the
+claim. A session key from `sts:AssumeRole` maps back to its role, a key that
+is a role or user **name** maps to that entity, and anything else is the
+account root, which — as in real AWS — has no policies and can do anything.
+So turning the flag on breaks nothing that was working.
+
+```
+Error: uploading S3 Object (reports/today.txt) to Bucket (nimbus-enforced):
+api error AccessDenied: role arn:aws:iam::000000000000:role/nimbus-app is not
+authorized to perform s3:PutObject: no policy attached to role
+arn:aws:iam::000000000000:role/nimbus-app allows s3:PutObject on
+arn:aws:s3:::nimbus-enforced/reports/today.txt
+```
+
+Every refusal also appears in the activity feed with the statement that
+decided it, which matters more than it sounds: a denied `HeadObject` reaches
+the provider as nothing but `Forbidden: Forbidden`, because an HTTP HEAD
+reply has no body to carry a reason. Azure RBAC and GCP IAM are still
+recorded and not enforced.
 
 A request is routed to a service by its **SigV4 credential scope**, not by its
 path — every Query service posts to `/` — except DynamoDB and CloudWatch Logs,

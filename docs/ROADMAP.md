@@ -1,9 +1,11 @@
 # Roadmap
 
-**Current: Milestone 13 — authorization that can say no
-(`docs/prompts/m13-authorization-core.md`). Phases 1 to 3 are complete,
-Milestone 11 gave all three clouds instances that really boot, and
-Milestone 12 cleared the defects that made Nimbus quietly wrong.**
+**Current: Milestone 14 — Azure RBAC, GCP IAM, and explaining a decision
+(`docs/prompts/m14-rbac-and-explain.md`). Phases 1 to 3 are complete;
+Milestone 11 gave all three clouds instances that really boot, Milestone 12
+cleared the defects that made Nimbus quietly wrong, and Milestone 13 built
+the decision engine and wired it to AWS IAM, so a request can now be
+refused for lacking a permission.**
 
 Phase 4 is what is left for the three clouds to be functional rather than
 merely broad: the primitive that did not run (done), the defects that
@@ -140,7 +142,7 @@ Each milestone ends with a Terraform config that applies and destroys cleanly ag
 |---|---|---|
 | 11 | ~~**Compute instances** on a new `vm` engine, all three clouds~~ **done** | `nimbus ssh` into an instance Terraform created, and its boot-script output is in the console log |
 | 12 | ~~**Correctness pass**: AKS node resource group, namespaces, S3 multipart, the feed after a restart~~ **done** | A >8 MB `aws s3 cp` round-trips byte for byte, a destroy leaves no `MC_*` group, and a pod outside `default` is drawn |
-| 13 | **Authorization core + AWS IAM**, opt-in via `--enforce-iam` | An apply fails with a legible `AccessDenied` and succeeds once the policy grants the action |
+| 13 | ~~**Authorization core + AWS IAM**, opt-in via `--enforce-iam`~~ **done** | An apply fails with a legible `AccessDenied` and succeeds once the policy grants the action |
 | 14 | **Azure RBAC, GCP IAM, and explaining a decision** | The inspector says why the current principal is allowed or denied, on all three clouds |
 
 Milestone 11 is first because it is the clearest gap and the `vm` engine
@@ -166,6 +168,19 @@ to demonstrate once there are instances to refuse it to.
   `Accept-Ranges` silently corrupted every large file; and the activity feed
   is seeded from the journal, so it no longer claims nothing has happened
   after a restart.
+
+- Milestone 13 turned the project's most-repeated limitation into a
+  feature: `internal/authz` decides whether a request is allowed and knows
+  no cloud's policy language, and AWS IAM compiles its documents down to
+  it. Behind `--enforce-iam`, an apply now fails with a legible
+  `AccessDenied` naming the action, the principal and the statement that
+  decided, and succeeds once the policy grants it — both directions proven
+  in `examples/terraform/aws-iam-enforced` and in CI. The flag costs
+  nothing when off, and nothing when on either: an unmapped caller is the
+  account root, so `aws-basic` applies, plans clean and destroys against an
+  enforcing server unchanged. Measured along the way: a denied read fails a
+  plan rather than being mistaken for a missing object, which is what made
+  enforcement safe to build at all.
 
 ## Design decisions still open
 
@@ -196,6 +211,44 @@ to demonstrate once there are instances to refuse it to.
 
 ## Later
 
+- **Authorization is IDENTITY-based only, and AWS-only.** No resource
+  policies (an S3 bucket policy round-trips and decides nothing), no
+  permission boundaries, no SCPs, no session policies, and the trust
+  policy on a role is not evaluated when it is assumed — `sts:AssumeRole`
+  hands back credentials for any role that exists. Azure RBAC and GCP IAM
+  are Milestone 14. Nothing authenticates either: the access key id IS the
+  claim of identity, so enforcement answers "would these permissions
+  work", never "is this caller genuine".
+- **Only four condition keys and eight operators are supported**
+  (`aws:PrincipalArn`, `aws:username`, `aws:RequestedRegion`,
+  `aws:PrincipalAccount`; the String/Arn equality and wildcard pairs, and
+  `Bool`). Everything else REFUSES by name rather than passing, including
+  the `IfExists` and `ForAnyValue` variants, each of which has its own rule
+  about a missing key. Worth knowing: because AWS here is served over plain
+  HTTP, `aws:SecureTransport` is genuinely false, so a real-world bucket
+  policy denying non-TLS access would deny everything — which is one more
+  reason resource policies are not evaluated yet.
+- **Six AWS managed policies are bundled**, chosen because their real
+  documents are short enough to transcribe exactly. They are
+  transcriptions, not fetched, so they can drift as AWS revises a version,
+  and nothing detects that. Any other managed ARN refuses and names itself.
+- **Most EC2 and IAM actions authorize against `"*"`.** AWS itself requires
+  that for nearly every Describe, but where real AWS *does* support
+  resource-level permissions on an EC2 action, Nimbus does not — so a
+  policy restricting `ec2:TerminateInstances` to one instance id grants it
+  on all of them here. Too much rather than too little, which is the
+  direction a client cannot be hurt by, but it means a narrow EC2 policy
+  cannot be *proven* narrow.
+- **EKS, Lambda and the k3s clusters authorize the API call, not what is
+  behind it.** `eks:DescribeCluster` can be refused; nothing inside the
+  cluster is affected, because the token webhook still answers
+  `system:masters` for everyone. A Lambda's execution role is recorded and
+  the handler's own calls arrive as root, since Nimbus mints no instance or
+  function credentials.
+- **Nothing is enforced on the Azure or GCP ports at all**, so
+  `--enforce-iam` on a multi-cloud server refuses AWS requests and lets
+  everything else through. The flag's name says IAM for that reason.
+
 - **An instance is a container, with everything that implies.** No kernel of
   its own, no block device, no systemd, no cloud-init and no guest agent, so
   anything needing one does not work. Instance types are recorded and nothing
@@ -222,7 +275,7 @@ to demonstrate once there are instances to refuse it to.
 - **GCP still has no Cloud Functions.** Cloud
   Routers and their NAT configuration round-trip as state and nothing
   routes, and the project IAM policy is recorded but never enforced — the
-  same honest limitation Azure RBAC and AWS IAM have.
+  limitation Azure RBAC still has and AWS IAM no longer does.
 - **GKE is k3s, so most of its surface is not modelled.** No Autopilot, no
   workload identity, no private clusters, no release channels, no
   autoscaling: those fields round-trip and nothing acts on them. Every
@@ -258,8 +311,8 @@ to demonstrate once there are instances to refuse it to.
 - **EKS node groups are still k3s agent containers, not instances.** They do
   not appear in `DescribeInstances`, so a cluster's nodes and an account's
   instances are two separate worlds. NAT gateways are recorded but nothing
-  routes, and IAM is recorded but nothing is enforced — the same honest
-  limitation Azure RBAC has.
+  routes. IAM itself IS enforced now, behind `--enforce-iam`; what is not is
+  any of EKS's own authorization — see the entry below.
 - **Lambda has only `$LATEST`.** No published versions, aliases, layers,
   event source mappings, function URLs or concurrency settings: publishing a
   version would mean keeping a copy of the code and a second container per
@@ -340,8 +393,10 @@ to demonstrate once there are instances to refuse it to.
 - **The registry has no authentication.** `registry:2` runs open, and
   `listCredentials` returns decorative values; an imagePullSecret built from
   them works because nothing checks it.
-- **Role assignments are never enforced.** See CLAUDE.md: they round-trip and
-  are drawn, but no request is refused.
+- **AZURE role assignments are never enforced.** They round-trip and are
+  drawn, but no request is refused for lacking a role. AWS IAM is enforced
+  behind `--enforce-iam` since Milestone 13; Azure and GCP are Milestone 14,
+  and until then an Azure apply still cannot prove its permissions.
 
 - **A mid-apply restart fails the apply.** Terraform polls while the port is
   closed and azurerm reports `unimplemented polling status "Unknown"`. Nothing

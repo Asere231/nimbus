@@ -1092,3 +1092,143 @@ jobs:
             echo "$remaining"
             exit 1
           fi
+
+  iam-enforced:
+    name: terraform aws-iam-enforced (--enforce-iam)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false # so exit codes reach us unchanged
+
+      - name: Start Nimbus with enforcement on
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          # AWS only, and plain HTTP, so no certificate has to be trusted.
+          ./bin/nimbus start --clouds aws --enforce-iam &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      # Turning the flag on must cost nothing, because an unmapped caller
+      # is the account ROOT -- which in real AWS carries no policies and
+      # can do anything. So an example that knows nothing about IAM has to
+      # apply, plan clean and destroy against an ENFORCING server exactly
+      # as it does without the flag. Verified on macOS before this job
+      # existed; this is what keeps it true.
+      - name: an ordinary example is unaffected by the flag
+        working-directory: examples/terraform/aws-basic
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+          set +e
+          terraform plan -detailed-exitcode -input=false
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::aws-basic plan returned $code with --enforce-iam on; expected 0"
+            exit 1
+          fi
+          terraform destroy -auto-approve -input=false
+
+      # Both directions. An emulator that refused everything would pass
+      # the first half of this, which is why the second half is here.
+      - name: an apply that must FAIL, and then succeed
+        working-directory: examples/terraform/aws-iam-enforced
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+
+          set +e
+          out=$(terraform apply -auto-approve -input=false 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+
+          if [ "$code" -eq 0 ]; then
+            echo "::error::the apply succeeded; nothing was refused, so enforcement is not working"
+            exit 1
+          fi
+          # The message matters as much as the refusal: a client that
+          # cannot recognise a denial retries it instead of reporting it.
+          for want in AccessDenied s3:PutObject nimbus-app; do
+            case "$out" in
+              *"$want"*) ;;
+              *) echo "::error::the failure does not mention $want"; exit 1 ;;
+            esac
+          done
+
+          # And the same apply succeeds once the policy grants the action.
+          terraform apply -auto-approve -input=false -var grant_write=true
+
+          # A clean plan afterwards, the bar every other example meets.
+          set +e
+          terraform plan -detailed-exitcode -input=false -var grant_write=true
+          plan=$?
+          set -e
+          if [ "$plan" -ne 0 ]; then
+            echo "::error::plan -detailed-exitcode returned $plan; expected 0 (no changes)"
+            exit 1
+          fi
+
+      # The finding that mattered most: a denied READ fails the plan rather
+      # than looking like "the object is gone". If it ever started reading
+      # as gone, Terraform would plan to recreate things that exist, and
+      # enforcement would be worse than useless. This pins it.
+      - name: a denied read fails the plan, and does not plan a create
+        working-directory: examples/terraform/aws-iam-enforced
+        run: |
+          set -euo pipefail
+          # Revoke the read while the object stays in state.
+          terraform apply -auto-approve -input=false -var grant_write=true -var grant_read=false
+
+          set +e
+          out=$(terraform plan -input=false -var grant_write=true -var grant_read=false 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+
+          if [ "$code" -eq 0 ]; then
+            echo "::error::a plan whose refresh cannot read the object succeeded"
+            exit 1
+          fi
+          case "$out" in
+            *"1 to add"*|*"must be replaced"*)
+              echo "::error::a denied read was taken for a missing object; Terraform planned a create"
+              exit 1 ;;
+          esac
+
+          # A HEAD response has no body, by HTTP's own rule, so the error
+          # document is discarded and a client sees only "Forbidden" --
+          # measured against aws provider 5.100.0, which reports exactly
+          # that for this refusal and names no permission. The reason
+          # travels in a header of our own instead. Checked HERE, while the
+          # role genuinely lacks the read: an access key that maps to
+          # nothing is the account root, which is allowed everything.
+          reason=$(curl -s -I --max-time 10 \
+            -H "Authorization: AWS4-HMAC-SHA256 Credential=nimbus-app/$(date -u +%Y%m%d)/us-east-1/s3/aws4_request, Signature=x" \
+            "http://localhost:4702/nimbus-enforced/reports/today.txt" \
+            | tr -d '\r' | grep -i '^x-nimbus-denied:' || true)
+          echo "$reason"
+          case "$reason" in
+            *s3:GetObject*) ;;
+            *) echo "::error::a refused HEAD did not carry its reason in X-Nimbus-Denied"; exit 1 ;;
+          esac
+
+          # Recovering needs -refresh=false, because the refresh is what
+          # fails: the permission that would let it read cannot be restored
+          # by a plan that cannot complete. Real AWS behaves the same way,
+          # and it is worth knowing before meeting it on something real.
+          terraform apply -refresh=false -auto-approve -input=false \
+            -var grant_write=true -var grant_read=true
+          terraform destroy -auto-approve -input=false -var grant_write=true

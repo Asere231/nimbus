@@ -19,7 +19,30 @@
 #
 # Without --enforce-iam every step succeeds, because nothing is ever
 # refused -- which is how Nimbus behaved before Milestone 13 and is still
-# the default.
+# the default. The other examples are unaffected by the flag either way:
+# their credentials map to nothing, so Nimbus treats them as the account
+# root.
+#
+# grant_read is the interesting one, and it is a TRAP on purpose.
+#
+# Set it to false after a successful apply and the role can no longer read
+# the object Terraform is managing. The next plan then fails on the
+# refresh -- `api error Forbidden: Forbidden`, because an HTTP HEAD reply
+# has no body to put a reason in -- and you cannot plan your way out: the
+# apply that would restore the permission has to refresh first, and the
+# refresh is what is failing. The way out is to skip it:
+#
+#   terraform apply -refresh=false -var grant_write=true -var grant_read=true
+#
+# Real AWS behaves exactly the same way. Revoking a permission Terraform
+# needs in order to READ its own resources is a mistake worth meeting here
+# rather than on something that matters.
+#
+# What it is NOT is a denial being mistaken for a missing object. A denied
+# read fails the plan; it does not make Terraform decide the object is
+# gone and offer to create it again. That was measured before the rest of
+# this milestone was built, because the other answer would have made
+# enforcement actively dangerous.
 
 terraform {
   required_version = ">= 1.5"

@@ -102,6 +102,15 @@ export function isK8sCluster(type, cloud) {
     table.K8S_CLUSTER_TYPE === (type || "").toLowerCase());
 }
 
+// networkShape is what the network view needs to know about a cloud's
+// networking: which type is a network, which is a subnet, how a subnet
+// names its network and what hangs off one. A cloud without a networking
+// model returns null and the view says it has nothing to draw.
+export function networkShape(cloud) {
+  const table = cloudOf(cloud);
+  return (table && table.NETWORK) || null;
+}
+
 // identityLinks returns the extra, non-containment edges a cloud's graph
 // has -- Azure's role assignments. Clouds without any return nothing.
 export function identityLinks(nodes, cloud) {

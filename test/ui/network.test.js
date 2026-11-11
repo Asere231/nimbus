@@ -13,28 +13,41 @@ const VNET = P + "/virtualNetworks/vnet-hub";
 const NSG = P + "/networkSecurityGroups/nsg-app";
 const RT = P + "/routeTables/rt-app";
 
+// map() flattens one level, so a helper can return a resource AND its
+// children together -- vnet() returns the VNet and its subnets, because in
+// the store they are separate resources and the view reads them that way.
 function map(...list) {
-  return new Map(list.map((r) => [r.id.toLowerCase(), r]));
+  return new Map(list.flat().map((r) => [r.id.toLowerCase(), r]));
 }
 
 function res(id, type, name, body, extra = {}) {
   return { cloud: "azure", id, type, name, parentId: RG, location: "eastus", backing: "modelled", body, ...extra };
 }
 
+// A VNet AND its subnet resources. Azure stores subnets twice -- mirrored
+// into the VNet's body, because that is what azurerm reads back, and as
+// resources of their own -- so the fixture-like shape here carries both,
+// and the view reads the resources.
 function vnet(subnets = [], prefixes = ["10.20.0.0/16"]) {
-  return res(VNET, "Microsoft.Network/virtualNetworks", "vnet-hub", {
-    properties: { addressSpace: { addressPrefixes: prefixes }, subnets },
+  const v = res(VNET, "Microsoft.Network/virtualNetworks", "vnet-hub", {
+    properties: {
+      addressSpace: { addressPrefixes: prefixes },
+      // The mirror, as ARM really returns it: the subnet's own body under
+      // its id and name.
+      subnets: subnets.map((sn) => ({ id: sn.id, name: sn.name, properties: sn.body.properties })),
+    },
   });
+  return [v, ...subnets];
 }
 
-const subnet = (name, prefix, props = {}) => ({
-  id: VNET + "/subnets/" + name,
-  name,
-  properties: { addressPrefix: prefix, ...props },
-});
+// A subnet is a RESOURCE that names its VNet by parent id -- the one rule
+// all three clouds share, which is what lets one view serve them.
+const subnet = (name, prefix, props = {}) =>
+  res(VNET + "/subnets/" + name, "Microsoft.Network/virtualNetworks/subnets", name,
+    { properties: { addressPrefix: prefix, ...props } }, { parentId: VNET });
 
 test("a VNet becomes a container holding its subnets", () => {
-  const m = networkModel(map(vnet([subnet("snet-apps", "10.20.0.0/24"), subnet("snet-data", "10.20.1.0/24")])));
+  const m = networkModel(map(vnet([subnet("snet-apps", "10.20.0.0/24"), subnet("snet-data", "10.20.1.0/24")])), "azure");
   assert.equal(m.vnets.length, 1);
   const v = m.vnets[0];
   assert.equal(v.name, "vnet-hub");
@@ -43,14 +56,22 @@ test("a VNet becomes a container holding its subnets", () => {
     [["snet-apps", "10.20.0.0/24"], ["snet-data", "10.20.1.0/24"]]);
 });
 
-// The subnets come from the VNet's own body rather than from the child
-// resources, because that mirror is the thing azurerm reads back -- see the
-// parent/child sync in CLAUDE.md. Both exist; one is the source of truth.
-test("subnets are read from the VNet body, not from the child resources", () => {
-  const child = res(VNET + "/subnets/snet-apps", "Microsoft.Network/virtualNetworks/subnets", "snet-apps",
-    { properties: { addressPrefix: "10.20.0.0/24" } });
-  const m = networkModel(map(vnet([subnet("snet-apps", "10.20.0.0/24")]), child));
-  assert.equal(m.vnets[0].subnets.length, 1, "the child must not be counted a second time");
+// Azure keeps subnets in TWO places: the VNet's body mirrors them, because
+// that is what azurerm reads back (the parent/child sync in CLAUDE.md), and
+// each is also a resource of its own. Whichever the view reads, a subnet
+// must appear ONCE.
+//
+// The view reads the child resources, because that is the one rule all
+// three clouds share -- a subnet is a resource that names its network, by
+// parent id here, by vpcId on AWS and by a self link on GCP. This test used
+// to assert the mechanism (read the body); it now asserts the property,
+// which is what actually matters and holds either way.
+test("a subnet is counted once, though Azure stores it in two places", () => {
+  // vnet() produces BOTH: the mirrored entry in the VNet's body and the
+  // subnet resource. One subnet goes in, so one must come out.
+  const m = networkModel(map(vnet([subnet("snet-apps", "10.20.0.0/24")])), "azure");
+  assert.equal(m.vnets[0].subnets.length, 1, "the mirror must not add a second one");
+  assert.equal(m.vnets[0].subnets[0].prefix, "10.20.0.0/24");
 });
 
 test("an NSG and a route table attach to the subnet that names them", () => {
@@ -60,11 +81,13 @@ test("an NSG and a route table attach to the subnet that names them", () => {
     })]),
     res(NSG, "Microsoft.Network/networkSecurityGroups", "nsg-app", { properties: {} }),
     res(RT, "Microsoft.Network/routeTables", "rt-app", { properties: {} }),
-  ));
+  ), "azure");
   const sn = m.vnets[0].subnets[0];
-  assert.equal(sn.nsg.name, "nsg-app");
-  assert.equal(sn.route.name, "rt-app");
-  assert.ok(sn.nsg.known && sn.route.known, "both exist, so both are clickable");
+  // Two chips, drawn right to left: the route table then the security
+  // group. Named by the cloud's own descriptor rather than by the view.
+  assert.deepEqual(sn.chips.map((c) => [c.kind, c.name]), [["rt", "rt-app"], ["nsg", "nsg-app"]]);
+  assert.ok(sn.chips.every((c) => c.known), "both exist, so both are clickable");
+  assert.deepEqual(sn.chips.map((c) => c.label), ["Route table", "Network security group"]);
   assert.equal(m.orphans.length, 0, "an attached NSG is not an orphan");
 });
 
@@ -75,17 +98,18 @@ test("an NSG nothing references is listed as unattached", () => {
     vnet([subnet("snet-apps", "10.20.0.0/24")]),
     res(NSG, "Microsoft.Network/networkSecurityGroups", "nsg-app", { properties: {} }),
     res(P + "/publicIPAddresses/pip1", "Microsoft.Network/publicIPAddresses", "pip1", { properties: {} }),
-  ));
+  ), "azure");
   assert.deepEqual(m.orphans.map((o) => o.name).sort(), ["nsg-app", "pip1"]);
 });
 
 test("a subnet naming an NSG that does not exist still shows the attachment", () => {
   const m = networkModel(map(vnet([subnet("snet-data", "10.20.1.0/24", {
     networkSecurityGroup: { id: NSG },
-  })])));
+  })])), "azure");
   const sn = m.vnets[0].subnets[0];
-  assert.equal(sn.nsg.name, "nsg-app");
-  assert.equal(sn.nsg.known, false, "nothing to click through to, and the chip says so");
+  const nsg = sn.chips.find((c) => c.kind === "nsg");
+  assert.equal(nsg.name, "nsg-app");
+  assert.equal(nsg.known, false, "nothing to click through to, and the chip says so");
 });
 
 test("peerings join two VNets and name the far end", () => {
@@ -97,7 +121,7 @@ test("peerings join two VNets and name the far end", () => {
     vnet([]),
     res(other, "Microsoft.Network/virtualNetworks", "vnet-spoke", { properties: { addressSpace: { addressPrefixes: ["10.30.0.0/16"] } } }),
     peer,
-  ));
+  ), "azure");
   assert.equal(m.peerings.length, 1);
   const p = m.peerings[0];
   assert.equal(p.from, VNET.toLowerCase(), "the parent VNet, taken from the peering's own id");
@@ -112,7 +136,7 @@ test("a peering to a VNet that is not emulated here still has a from", () => {
   const far = "/subscriptions/other/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/elsewhere";
   const m = networkModel(map(vnet([]), res(VNET + "/virtualNetworkPeerings/out",
     "Microsoft.Network/virtualNetworks/virtualNetworkPeerings", "out",
-    { properties: { remoteVirtualNetwork: { id: far } } })));
+    { properties: { remoteVirtualNetwork: { id: far } } })), "azure");
   assert.equal(m.peerings[0].from, VNET.toLowerCase());
   assert.equal(m.peerings[0].remoteName, "elsewhere");
 });
@@ -120,7 +144,7 @@ test("a peering to a VNet that is not emulated here still has a from", () => {
 test("the layout grows a VNet box to fit its subnets and never overlaps two", () => {
   const m = networkModel(map(vnet([
     subnet("a", "10.20.0.0/24"), subnet("b", "10.20.1.0/24"), subnet("c", "10.20.2.0/24"),
-  ])));
+  ])), "azure");
   // A second, empty VNet below it.
   const other = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet-zz";
   m.vnets.push({ ...m.vnets[0], id: other, key: other, name: "vnet-zz", subnets: [] });
@@ -138,7 +162,7 @@ test("the layout grows a VNet box to fit its subnets and never overlaps two", ()
 });
 
 test("nothing network-shaped means an empty model, not a crash", () => {
-  const m = networkModel(new Map());
+  const m = networkModel(new Map(), "azure");
   assert.deepEqual(m, { vnets: [], peerings: [], orphans: [] });
   const size = networkLayout(m);
   assert.ok(size.width > 0 && size.height > 0);
@@ -149,9 +173,9 @@ test("nothing network-shaped means an empty model, not a crash", () => {
 // VNets, and something unattached.
 test("the fixture exercises every part of the network view", () => {
   const doc = JSON.parse(readFileSync(new URL("../../internal/ui/static/fixture.json", import.meta.url)));
-  const m = networkModel(new Map(doc.resources.map((r) => [r.id.toLowerCase(), r])));
+  const m = networkModel(new Map(doc.resources.map((r) => [r.id.toLowerCase(), r])), "azure");
   assert.equal(m.vnets.length, 2, "a hub and a spoke");
-  assert.ok(m.vnets.some((v) => v.subnets.some((s) => s.nsg && s.nsg.known)),
+  assert.ok(m.vnets.some((v) => v.subnets.some((s) => s.chips.some((c) => c.known))),
     "an attached NSG, since that is the view's point");
   assert.equal(m.peerings.length, 1);
   const p = m.peerings[0];
@@ -191,7 +215,7 @@ test("a virtual machine is placed in its subnet through its NIC", () => {
     vnet([snet]),
     nic(NIC, snet.id),
     machine(VM, [NIC], { nimbusContainer: "nimbus-vm-vm-web-abc123" }),
-  ));
+  ), "azure");
 
   const sn = m.vnets[0].subnets[0];
   assert.equal(sn.machines.length, 1);
@@ -206,13 +230,13 @@ test("a machine whose NIC is missing is not guessed into a subnet", () => {
   const snet = subnet("snet-apps", "10.20.0.0/24");
   // The NIC is referenced but not in the store -- half an apply, or a NIC
   // in another resource group Nimbus never saw.
-  const m = networkModel(map(vnet([snet]), machine(VM, [NIC])));
+  const m = networkModel(map(vnet([snet]), machine(VM, [NIC])), "azure");
   assert.equal(m.vnets[0].subnets[0].machines.length, 0);
 });
 
 test("a machine with no container is drawn, but not as running", () => {
   const snet = subnet("snet-apps", "10.20.0.0/24");
-  const m = networkModel(map(vnet([snet]), nic(NIC, snet.id), machine(VM, [NIC])));
+  const m = networkModel(map(vnet([snet]), nic(NIC, snet.id), machine(VM, [NIC])), "azure");
   const machines = m.vnets[0].subnets[0].machines;
   assert.equal(machines.length, 1);
   assert.equal(machines[0].running, false);
@@ -220,7 +244,7 @@ test("a machine with no container is drawn, but not as running", () => {
 
 test("a NIC attached to a machine is not listed as an orphan", () => {
   const snet = subnet("snet-apps", "10.20.0.0/24");
-  const m = networkModel(map(vnet([snet]), nic(NIC, snet.id), machine(VM, [NIC])));
+  const m = networkModel(map(vnet([snet]), nic(NIC, snet.id), machine(VM, [NIC])), "azure");
   assert.ok(!m.orphans.some((o) => o.id === NIC), "the NIC belongs to a machine now");
 });
 
@@ -231,7 +255,7 @@ test("a subnet holding machines is taller than one that does not", () => {
     vnet([withVM, empty]),
     nic(NIC, withVM.id),
     machine(VM, [NIC]),
-  ));
+  ), "azure");
   networkLayout(m);
 
   const [a, b] = m.vnets[0].subnets;

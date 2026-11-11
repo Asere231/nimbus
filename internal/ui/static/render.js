@@ -53,7 +53,9 @@ export function render() {
 
   const def = viewFor(state.view);
   if (def && def.model) {
-    const model = def.model(view);
+    // The cloud, because a view's model may be per-cloud: the network
+    // view asks each cloud's table what a network and a subnet are.
+    const model = def.model(view, state.cloud);
     // A view with nothing in it has to SAY so. An apply with no VNets in it
     // -- examples/terraform/azure-app is exactly that -- left the network
     // view a blank canvas, which reads as a broken page rather than as a

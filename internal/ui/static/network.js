@@ -22,7 +22,7 @@
 // The model and the layout are pure; only draw() touches the DOM.
 
 import { el, fit } from "./dom.js";
-import { typeStyle } from "./types.js";
+import { typeStyle, networkShape } from "./types.js";
 
 // Geometry. A VNet box is wide because a subnet row has to hold a name, a
 // CIDR and two attachment chips without any of them being truncated.
@@ -37,111 +37,140 @@ const lower = (s) => String(s || "").toLowerCase();
 const leaf = (id) => String(id || "").split("/").filter(Boolean).pop() || "";
 
 // networkModel turns the resource map into what the network view draws.
-export function networkModel(resources) {
+//
+// Cloud-neutral: everything that differs between the three comes from that
+// cloud's NETWORK descriptor through types.js. The one fact this rests on
+// is uniform across all three -- **a subnet is a stored resource that
+// NAMES its network** -- Azure by parent id, AWS by vpcId, GCP by a
+// `network` self link. Azure also mirrors its subnets into the VNet's
+// body, which is what this used to read; the resources and the mirror are
+// always in step, and asking the resources is what generalises.
+export function networkModel(resources, cloud) {
+  const shape = networkShape(cloud);
   const all = [...resources.values()];
-  const byID = new Map(all.map((r) => [lower(r.id), r]));
-  const attached = new Set(); // ids drawn inside a VNet, so not orphans
+  if (!shape) return { vnets: [], peerings: [], orphans: [] };
 
-  // VM -> NIC -> subnet, in two hops. Built once, keyed by subnet.
-  const machinesBySubnet = new Map();
-  const nicSubnets = new Map(); // nic key -> subnet key
-  for (const r of all) {
-    if (lower(r.type) !== "microsoft.network/networkinterfaces") continue;
-    const configs = ((r.body && r.body.properties) || {}).ipConfigurations || [];
-    for (const c of configs) {
-      const subnetID = ((c.properties || {}).subnet || {}).id;
-      if (subnetID) {
-        nicSubnets.set(lower(r.id), lower(subnetID));
-        break;
-      }
+  const byID = new Map(all.map((r) => [lower(r.id), r]));
+  const attached = new Set(); // ids drawn inside a network, so not orphans
+  const isType = (r, t) => Boolean(t) && lower(r.type) === t;
+
+  // Instances, keyed by the subnet they sit in.
+  //
+  // Some clouds name a subnet directly and some take two hops: an Azure VM
+  // names its network interfaces, and a NIC names the subnet. A descriptor
+  // with `hopType` gets the second hop resolved here, which is why the
+  // view holds every resource rather than only the networking ones.
+  const hopSubnets = new Map();
+  if (shape.hopType && shape.hopSubnet) {
+    for (const r of all) {
+      if (!isType(r, shape.hopType)) continue;
+      const subnet = shape.hopSubnet(r);
+      if (subnet) hopSubnets.set(lower(r.id), subnet);
     }
   }
+
+  const machinesBySubnet = new Map();
   for (const r of all) {
-    if (lower(r.type) !== "microsoft.compute/virtualmachines") continue;
-    const props = (r.body && r.body.properties) || {};
-    const nics = (props.networkProfile || {}).networkInterfaces || [];
-    for (const n of nics) {
-      const subnetKey = nicSubnets.get(lower(n.id));
-      if (!subnetKey) continue;
-      if (!machinesBySubnet.has(subnetKey)) machinesBySubnet.set(subnetKey, []);
-      machinesBySubnet.get(subnetKey).push({
-        id: r.id,
-        key: lower(r.id),
-        name: r.name,
-        // A machine a container really runs for is worth distinguishing
-        // from one that is only a record.
-        running: Boolean(r.body && r.body.nimbusContainer),
-        size: (props.hardwareProfile || {}).vmSize || "",
-      });
-      attached.add(lower(n.id));
-      break; // one subnet per machine is enough to place it
+    if (!isType(r, shape.instanceType)) continue;
+    let subnetKey = "";
+    if (shape.instanceSubnet) {
+      subnetKey = shape.instanceSubnet(r);
+    } else if (shape.instanceHops) {
+      for (const hop of shape.instanceHops(r)) {
+        if (hopSubnets.has(hop)) {
+          subnetKey = hopSubnets.get(hop);
+          attached.add(hop); // the NIC is accounted for, not an orphan
+          break;
+        }
+      }
     }
+    // An instance whose subnet is missing is simply not drawn in one
+    // rather than guessed at.
+    if (!subnetKey) continue;
+    if (!machinesBySubnet.has(subnetKey)) machinesBySubnet.set(subnetKey, []);
+    machinesBySubnet.get(subnetKey).push({
+      id: r.id,
+      key: lower(r.id),
+      name: r.name,
+      // A machine a container really runs for is worth distinguishing
+      // from one that is only a record.
+      running: Boolean(r.body && r.body.nimbusContainer),
+      size: shape.instanceLabel ? shape.instanceLabel(r) : "",
+    });
   }
   for (const list of machinesBySubnet.values()) {
     list.sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  // Subnets, grouped by the network each one names.
+  const subnetsByNetwork = new Map();
+  for (const r of all) {
+    if (!isType(r, shape.subnetType)) continue;
+    const netKey = shape.networkOf(r);
+    const chips = (shape.chipsOf ? shape.chipsOf(r) : []).map((c) => {
+      attached.add(lower(c.id));
+      return {
+        kind: c.kind,
+        id: c.id,
+        label: c.label,
+        name: leaf(c.id),
+        known: byID.has(lower(c.id)),
+      };
+    });
+    if (!subnetsByNetwork.has(netKey)) subnetsByNetwork.set(netKey, []);
+    subnetsByNetwork.get(netKey).push({
+      id: r.id,
+      key: lower(r.id),
+      name: r.name,
+      prefix: shape.cidrOf(r),
+      chips,
+      machines: machinesBySubnet.get(lower(r.id)) || [],
+    });
+  }
+
   const vnets = [];
   for (const r of all) {
-    if (lower(r.type) !== "microsoft.network/virtualnetworks") continue;
-    const props = (r.body && r.body.properties) || {};
-    const subnets = [];
-    for (const sn of props.subnets || []) {
-      const sp = sn.properties || {};
-      const nsgID = sp.networkSecurityGroup && sp.networkSecurityGroup.id;
-      const rtID = sp.routeTable && sp.routeTable.id;
-      if (nsgID) attached.add(lower(nsgID));
-      if (rtID) attached.add(lower(rtID));
-      subnets.push({
-        id: sn.id || "",
-        key: lower(sn.id),
-        name: sn.name || leaf(sn.id),
-        prefix: sp.addressPrefix || (sp.addressPrefixes || [])[0] || "",
-        nsg: nsgID ? { id: nsgID, name: leaf(nsgID), known: byID.has(lower(nsgID)) } : null,
-        route: rtID ? { id: rtID, name: leaf(rtID), known: byID.has(lower(rtID)) } : null,
-        machines: machinesBySubnet.get(lower(sn.id)) || [],
-      });
-    }
+    if (!isType(r, shape.networkType)) continue;
+    const subnets = subnetsByNetwork.get(lower(r.id)) || [];
+    subnets.sort((a, b) => a.name.localeCompare(b.name));
     vnets.push({
       id: r.id,
       key: lower(r.id),
       name: r.name,
       location: r.location || "",
-      prefixes: (props.addressSpace && props.addressSpace.addressPrefixes) || [],
+      prefixes: shape.prefixesOf ? shape.prefixesOf(r) : [],
       subnets,
       r,
     });
   }
   vnets.sort((a, b) => a.name.localeCompare(b.name));
 
-  // Peerings are their own resource type; each names the VNet at the far
-  // end. A peering whose remote VNet is not emulated here still draws, as a
-  // link that goes nowhere, because that is the truth.
+  // A cross-network relationship, where a cloud has one. Azure's peerings
+  // are the only example; a peering whose remote network is not emulated
+  // here still draws, as a link that goes nowhere, because that is the
+  // truth.
   const peerings = [];
-  for (const r of all) {
-    if (lower(r.type) !== "microsoft.network/virtualnetworks/virtualnetworkpeerings") continue;
-    const props = (r.body && r.body.properties) || {};
-    const remote = (props.remoteVirtualNetwork && props.remoteVirtualNetwork.id) || "";
-    // The parent VNet is everything before "/virtualNetworkPeerings/".
-    const from = String(r.id).split(/\/virtualNetworkPeerings\//i)[0];
-    peerings.push({
-      name: r.name,
-      from: lower(from),
-      to: lower(remote),
-      remoteName: leaf(remote),
-      state: props.peeringState || "",
-    });
+  if (shape.peeringType && shape.peeringEnds) {
+    for (const r of all) {
+      if (!isType(r, shape.peeringType)) continue;
+      const ends = shape.peeringEnds(r);
+      peerings.push({
+        name: r.name,
+        from: ends.from,
+        to: ends.to,
+        remoteName: leaf(ends.to),
+        state: ends.state || "",
+      });
+    }
   }
 
-  // Network resources that belong to nobody: an NSG or route table nothing
-  // references, a public IP, a NAT gateway. Worth showing -- an unattached
-  // NSG is usually a mistake, and it is invisible in the tree view.
+  // Networking resources that belong to nobody: a security group or route
+  // table nothing references, a public IP, a gateway. Worth showing -- an
+  // unattached rule is usually a mistake, and it is invisible in the tree.
   const orphans = all
     .filter((r) => {
-      const t = lower(r.type);
-      if (!t.startsWith("microsoft.network/")) return false;
-      if (t === "microsoft.network/virtualnetworks") return false;
-      if (t.includes("/virtualnetworks/")) return false; // subnets, peerings
+      if (!shape.isNetworkResource || !shape.isNetworkResource(r.type)) return false;
+      if (isType(r, shape.subnetType) || isType(r, shape.networkType)) return false;
       return !attached.has(lower(r.id));
     })
     .sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name));
@@ -258,18 +287,22 @@ export function draw(svg, model, { selected, filter, onSelect }) {
         }
       }
 
-      // Attachments, right-aligned on the subnet's first row.
+      // Whatever this cloud attaches to a subnet, right-aligned on its
+      // first row. The chips and their human labels come from the cloud's
+      // own descriptor: Azure has two (a security group and a route
+      // table), AWS has one, and GCP has none at all, because its
+      // firewalls attach to the NETWORK and match on tags. A view that
+      // named them itself would be inventing a model for two clouds.
       let cx = sn.w - 12 - CHIP_W;
-      for (const [kind, att] of [["rt", sn.route], ["nsg", sn.nsg]]) {
-        if (!att) continue;
-        const cg = el("g", { class: "net-chip " + kind, transform: `translate(${cx},${(SUB_H - CHIP_H) / 2})` }, sg);
+      for (const chip of sn.chips) {
+        const cg = el("g", { class: "net-chip " + chip.kind, transform: `translate(${cx},${(SUB_H - CHIP_H) / 2})` }, sg);
         el("rect", { width: CHIP_W, height: CHIP_H, rx: 6 }, cg);
         const ct = el("text", { x: CHIP_W / 2, y: 16, "text-anchor": "middle" }, cg);
-        ct.textContent = fit(att.name, 12);
+        ct.textContent = fit(chip.name, 12);
         const ctip = el("title", {}, cg);
-        ctip.textContent = (kind === "nsg" ? "Network security group: " : "Route table: ") + att.name;
-        if (att.known) {
-          cg.addEventListener("click", (ev) => { ev.stopPropagation(); onSelect(lower(att.id)); });
+        ctip.textContent = chip.label + ": " + chip.name;
+        if (chip.known) {
+          cg.addEventListener("click", (ev) => { ev.stopPropagation(); onSelect(lower(chip.id)); });
         }
         cx -= CHIP_W + 8;
       }

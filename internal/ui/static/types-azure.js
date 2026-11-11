@@ -206,3 +206,87 @@ export function displayName(r) {
   }
   return (r.body && r.body.displayName) ? r.body.displayName + " (" + r.name.slice(0, 8) + ")" : r.name;
 }
+
+// --- the network view's model ----------------------------------------------
+//
+// What the shared network view needs to know about Azure's networking, so
+// that `network.js` can draw three clouds without naming any of their
+// types. The uniform fact the view rests on: in every cloud a subnet is a
+// stored resource that NAMES its network. Azure names it by parent id,
+// which is also what the topology view nests on.
+//
+// Azure is the only one of the three with two things attached to a SUBNET
+// (a security group and a route table) and the only one where an instance
+// takes two hops to reach one: a VM names its network interfaces, and a
+// NIC's ipConfigurations name the subnet. AWS and GCP both name a subnet
+// directly.
+export const NETWORK = {
+  networkType: "microsoft.network/virtualnetworks",
+  subnetType: "microsoft.network/virtualnetworks/subnets",
+  instanceType: "microsoft.compute/virtualmachines",
+
+  // A VNet's own address space, shown beside its name.
+  prefixesOf: (r) => (((r.body || {}).properties || {}).addressSpace || {}).addressPrefixes || [],
+
+  cidrOf: (r) => {
+    const p = (r.body || {}).properties || {};
+    return p.addressPrefix || (p.addressPrefixes || [])[0] || "";
+  },
+
+  // The subnet's network. Azure's hierarchy puts a subnet under its VNet,
+  // so the parent id IS the answer.
+  networkOf: (r) => String(r.parentId || "").toLowerCase(),
+
+  // A security group and a route table, each by resource id. The order is
+  // the order they are drawn in, right to left.
+  chipsOf: (r) => {
+    const p = (r.body || {}).properties || {};
+    const out = [];
+    const rt = p.routeTable && p.routeTable.id;
+    const nsg = p.networkSecurityGroup && p.networkSecurityGroup.id;
+    if (rt) out.push({ kind: "rt", id: rt, label: "Route table" });
+    if (nsg) out.push({ kind: "nsg", id: nsg, label: "Network security group" });
+    return out;
+  },
+
+  // VM -> NIC -> subnet. The NIC ids a machine names, for the view to
+  // follow; it resolves them itself because it holds every resource.
+  instanceHops: (r) => {
+    const nics = (((r.body || {}).properties || {}).networkProfile || {}).networkInterfaces || [];
+    return nics.map((n) => String(n.id || "").toLowerCase()).filter(Boolean);
+  },
+  // What a NIC points at, which is the second hop.
+  hopType: "microsoft.network/networkinterfaces",
+  hopSubnet: (r) => {
+    const configs = ((r.body || {}).properties || {}).ipConfigurations || [];
+    for (const c of configs) {
+      const id = ((c.properties || {}).subnet || {}).id;
+      if (id) return String(id).toLowerCase();
+    }
+    return "";
+  },
+
+  // A machine worth distinguishing from a record, and its size.
+  instanceLabel: (r) => (((r.body || {}).properties || {}).hardwareProfile || {}).vmSize || "",
+
+  // Peerings are their own type and name the VNet at the far end. The only
+  // cross-network relationship any of the three clouds has here.
+  peeringType: "microsoft.network/virtualnetworks/virtualnetworkpeerings",
+  peeringEnds: (r) => {
+    const p = (r.body || {}).properties || {};
+    return {
+      from: String(r.id).split(/\/virtualNetworkPeerings\//i)[0].toLowerCase(),
+      to: String((p.remoteVirtualNetwork && p.remoteVirtualNetwork.id) || "").toLowerCase(),
+      state: p.peeringState || "",
+    };
+  },
+
+  // Which types belong in the "attached to nothing" column. An unattached
+  // security group is usually a mistake and is invisible in the tree.
+  isNetworkResource: (type) => {
+    const t = (type || "").toLowerCase();
+    if (!t.startsWith("microsoft.network/")) return false;
+    if (t === "microsoft.network/virtualnetworks") return false;
+    return !t.includes("/virtualnetworks/"); // subnets, peerings
+  },
+};

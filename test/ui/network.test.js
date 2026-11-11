@@ -450,15 +450,30 @@ test("every class the network view draws is styled in the export", () => {
   const view = readFileSync(new URL("network.js", dir), "utf8");
   const exporter = readFileSync(new URL("export.js", dir), "utf8");
 
+  // The EXPORT_CSS template literal ONLY -- not the whole file. Searching
+  // the file passes for the wrong reason: export.js also names classes in
+  // a querySelectorAll argument, so ".net-subnet" is present there whether
+  // or not anything styles it. Measured: this test was green while
+  // net-vnet and net-subnet had no rule at all.
+  const css = exporter.slice(exporter.indexOf("const EXPORT_CSS = `") + 20);
+  const sheet = css.slice(0, css.indexOf("`"));
+  assert.ok(sheet.includes("{"), "could not find the export stylesheet");
+
   const classes = new Set();
   for (const m of view.matchAll(/class:\s*"([a-z0-9 .-]+)"/g)) {
     for (const c of m[1].split(/\s+/)) if (c) classes.add(c);
   }
   // The ones the topology view shares and export.js styles generically.
   for (const shared of ["badge", "card", "nm", "ty"]) classes.delete(shared);
+  // Interaction-only classes. In style.css these two carry nothing but
+  // cursor, :hover, .selected and .dim -- state that cannot exist in a
+  // detached file, which has no pointer, no selection and no filter. They
+  // are group wrappers whose CHILDREN (.net-box, .net-sub-box) do the
+  // drawing, so having no export rule is correct rather than missing.
+  for (const interaction of ["net-vnet", "net-subnet"]) classes.delete(interaction);
   assert.ok(classes.size >= 8, "expected the network view's own classes");
 
-  const missing = [...classes].filter((c) => !exporter.includes("." + c));
+  const missing = [...classes].filter((c) => !sheet.includes("." + c));
   assert.deepEqual(missing, [],
     "these classes draw on screen but have no rule in the exported SVG");
 });

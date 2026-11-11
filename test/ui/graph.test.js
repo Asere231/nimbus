@@ -201,3 +201,22 @@ test("fixture.json is a complete, well-parented topology", () => {
     assert.ok(new Date(e.time).getTime() < Date.now(), "fixture events must be in the past");
   }
 });
+
+// Each cloud's ROOT container is "accepted (state only)" in the server --
+// a subscription, an account and a project are all stored with
+// Backing: "state", because nothing creates them and nothing runs behind
+// them. The fixture said "modelled" for Azure's, which drew it with a
+// solid border while the other two were dashed.
+//
+// Nobody could see that while the fixture had one cloud in it; putting
+// three side by side is what made it obvious. The fixture is what this
+// view is eyeballed against, so it has to be accurate about the thing it
+// is demonstrating.
+test("every cloud's root container is state-only, as the server stores it", () => {
+  const doc = JSON.parse(readFileSync(new URL("../../internal/ui/static/fixture.json", import.meta.url)));
+  const roots = doc.resources.filter((r) => !r.parentId);
+  assert.equal(roots.length, 3, "one root per cloud");
+  for (const r of roots) {
+    assert.equal(r.backing, "state", r.type + " should be accepted (state only)");
+  }
+});

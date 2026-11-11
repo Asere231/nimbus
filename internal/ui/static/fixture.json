@@ -1666,5 +1666,60 @@
         }
       ]
     }
-  ]
+  ],
+  "access": {
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.Network/virtualNetworks/vnet-app": {
+      "principal": "22222222-2222-2222-2222-222222222222",
+      "kind": "servicePrincipal",
+      "enforcing": true,
+      "resource": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.Network/virtualNetworks/vnet-app",
+      "checks": [
+        {
+          "action": "Microsoft.Network/virtualNetworks/read",
+          "allowed": true,
+          "rule": "role assignment reader-app (Reader) at /subscriptions/00000000-0000-0000-0000-000000000000",
+          "reason": "role assignment reader-app (Reader) at /subscriptions/00000000-0000-0000-0000-000000000000 allows Microsoft.Network/virtualNetworks/read on /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.Network/virtualNetworks/vnet-app"
+        },
+        {
+          "action": "Microsoft.Network/virtualNetworks/write",
+          "allowed": false,
+          "rule": "",
+          "reason": "nothing grants Microsoft.Network/virtualNetworks/write on /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.Network/virtualNetworks/vnet-app to servicePrincipal 22222222-2222-2222-2222-222222222222"
+        },
+        {
+          "action": "Microsoft.Network/virtualNetworks/delete",
+          "allowed": false,
+          "rule": "",
+          "reason": "nothing grants Microsoft.Network/virtualNetworks/delete on /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.Network/virtualNetworks/vnet-app to servicePrincipal 22222222-2222-2222-2222-222222222222"
+        }
+      ]
+    },
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app": {
+      "principal": "22222222-2222-2222-2222-222222222222",
+      "kind": "servicePrincipal",
+      "enforcing": true,
+      "resource": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app",
+      "checks": [
+        {
+          "action": "Microsoft.Resources/subscriptions/resourceGroups/read",
+          "allowed": true,
+          "rule": "role assignment reader-app (Reader) at /subscriptions/00000000-0000-0000-0000-000000000000",
+          "reason": "allowed by Reader at the subscription"
+        },
+        {
+          "action": "Microsoft.Resources/subscriptions/resourceGroups/write",
+          "allowed": false,
+          "rule": "",
+          "reason": "nothing grants it"
+        },
+        {
+          "action": "Microsoft.Resources/subscriptions/resourceGroups/delete",
+          "allowed": false,
+          "rule": "role assignment guard (custom) at /subscriptions/00000000-0000-0000-0000-000000000000",
+          "reason": "Nimbus does not know the role definition 99999999-9999-9999-9999-999999999999",
+          "unevaluated": true
+        }
+      ]
+    }
+  }
 }

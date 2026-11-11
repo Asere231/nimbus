@@ -128,10 +128,18 @@ var gcpRoles = map[string]gcpRole{
 	},
 
 	"roles/compute.admin": {Permissions: []string{"compute.*"}},
-	"roles/compute.networkAdmin": {Permissions: []string{
-		"compute.networks.*", "compute.subnetworks.*", "compute.firewalls.*",
-		"compute.routes.*", "compute.routers.*",
-	}},
+	// networkAdmin manages networks and does NOT hand out access --
+	// Compute networks have no IAM policy of their own. The `.*` patterns
+	// would have granted `setIamPolicy` by accident, which is the single
+	// worst permission for an approximation to be loose about, so it is
+	// excluded. Caught by a test, not by reading the catalogue.
+	"roles/compute.networkAdmin": {
+		Permissions: []string{
+			"compute.networks.*", "compute.subnetworks.*", "compute.firewalls.*",
+			"compute.routes.*", "compute.routers.*",
+		},
+		Excluded: []string{"*.setIamPolicy"},
+	},
 	"roles/compute.viewer": {Permissions: []string{"compute.*.get", "compute.*.list"}},
 
 	"roles/pubsub.admin":     {Permissions: []string{"pubsub.*"}},
@@ -302,4 +310,70 @@ func (s *Server) heldPermissions(r *http.Request, asked []string) []string {
 		}
 	}
 	return held
+}
+
+// --- explaining ------------------------------------------------------------
+
+// ExplainAccess answers what a member may do to one resource.
+//
+// The permissions are derived from the store's own type string, which
+// carries the service: `compute.googleapis.com/Network` is
+// `compute.networks.*`. Same derivation as the enforcement point's, so
+// the two cannot disagree about what a permission is called.
+func (s *Server) ExplainAccess(principal, resourceID, resourceType string) authz.Report {
+	p := s.principalFor(principal)
+	report := authz.Report{
+		Principal: p.ID, Kind: p.Kind, Unrestricted: p.Unrestricted,
+		Enforcing: s.cfg.EnforceIAM, Resource: resourceID,
+	}
+	prefix, collection := permissionPartsFor(resourceType)
+	if prefix == "" {
+		return report
+	}
+	actions := []string{
+		prefix + "." + collection + ".get",
+		prefix + "." + collection + ".create",
+		prefix + "." + collection + ".delete",
+		prefix + "." + collection + ".setIamPolicy",
+	}
+	report.Checks = authz.Explain(p, resourceID, actions, s.rulesFor(p.ID))
+	return report
+}
+
+// ExplainOne answers a single question, which is what `nimbus can` asks.
+func (s *Server) ExplainOne(principal, action, resource string) authz.Check {
+	p := s.principalFor(principal)
+	return authz.Explain(p, resource, []string{action}, s.rulesFor(p.ID))[0]
+}
+
+func (s *Server) principalFor(principal string) authz.Principal {
+	if principal == "" {
+		principal = s.cfg.Principal
+	}
+	if !isMember(principal) {
+		return authz.Principal{
+			ID: "nimbus-default", Name: "the default identity",
+			Kind: "serviceAccount", Unrestricted: true,
+		}
+	}
+	kind, name, _ := strings.Cut(principal, ":")
+	return authz.Principal{ID: principal, Name: name, Kind: kind}
+}
+
+// permissionPartsFor turns a store type into a permission prefix and
+// collection: "compute.googleapis.com/Subnetwork" is compute and
+// subnetworks.
+func permissionPartsFor(resourceType string) (prefix, collection string) {
+	host, kind, ok := strings.Cut(resourceType, "/")
+	if !ok || kind == "" {
+		return "", ""
+	}
+	prefix, _, _ = strings.Cut(host, ".")
+	if prefix == "" {
+		return "", ""
+	}
+	// Kind is singular and TitleCase; a collection is plural and
+	// lowerCamelCase. `ServiceAccount` becomes `serviceAccounts`.
+	collection = strings.ToLower(kind[:1]) + kind[1:] + "s"
+	return prefix, collection
 }

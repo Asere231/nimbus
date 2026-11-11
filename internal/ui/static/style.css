@@ -317,3 +317,14 @@ button { font: inherit; color: inherit; }
 .node.plan-create .plan-badge { fill: var(--good); }
 .node.plan-update .plan-badge { fill: var(--warn); }
 .node.plan-delete .plan-badge, .node.plan-replace .plan-badge { fill: var(--bad); }
+
+/* The access panel: one row per action, with the rule that decided. */
+.access-row { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.access-row:last-child { border-bottom: 0; }
+.access-head { display: flex; align-items: baseline; gap: 6px; }
+.access-verdict { font-weight: 700; width: 1em; flex: none; }
+.access-verdict.allow { color: var(--good); }
+.access-verdict.deny { color: var(--bad); }
+.access-verdict.unknown { color: var(--warn); }
+.access-action { font-size: 11px; word-break: break-all; }
+.access-why { padding-left: calc(1em + 6px); }

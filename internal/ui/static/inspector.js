@@ -6,6 +6,7 @@ import { $ } from "./dom.js";
 import { TIER_LABELS, tierOf, displayName } from "./types.js";
 import { panels as azurePanels } from "./inspector-azure.js";
 import { panels as awsPanels } from "./inspector-aws.js";
+import { showAccess } from "./access.js";
 
 // Each cloud contributes the extra panels its data planes justify: Azure's
 // blob and secret listings, and whatever AWS grows. A resource is shown the
@@ -34,6 +35,9 @@ export function showInspector(r) {
     meta.append(dt, dd);
   }
   $("#i-json").innerHTML = highlight(JSON.stringify(r.body, null, 2));
+  // Access is shared rather than per-cloud: the server answers in one
+  // shape for all three, so there is nothing here to dispatch on.
+  void showAccess(r);
   for (const name of Object.keys(PANELS)) {
     const mine = name === String(r.cloud || "").toLowerCase();
     for (const panel of PANELS[name]) panel(mine ? r : null);

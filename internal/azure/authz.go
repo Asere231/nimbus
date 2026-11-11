@@ -303,3 +303,53 @@ func authorizationFailed(p authz.Principal, action, scope, reason string) *armEr
 			p.Name, p.ID, action, scope, reason),
 	}
 }
+
+// --- explaining ------------------------------------------------------------
+
+// ExplainAccess answers what a principal may do to one resource.
+//
+// The actions are DERIVED from the resource's own type, which is the same
+// property that makes the enforcement point need no table: an ARM type
+// plus read/write/delete is exactly what the permissions are called. So
+// this cannot drift from what is enforced, because both compute the name
+// the same way.
+func (s *Server) ExplainAccess(principal, resourceID, resourceType string) authz.Report {
+	p := s.principalFor(principal)
+	report := authz.Report{
+		Principal: p.ID, Kind: p.Kind, Unrestricted: p.Unrestricted,
+		Enforcing: s.cfg.EnforceIAM, Resource: resourceID,
+	}
+	if resourceType == "" {
+		return report
+	}
+	actions := []string{
+		resourceType + "/read",
+		resourceType + "/write",
+		resourceType + "/delete",
+	}
+	report.Checks = authz.Explain(p, resourceID, actions, s.rulesFor(p.ID))
+	return report
+}
+
+// ExplainOne answers a single question, which is what `nimbus can` asks.
+func (s *Server) ExplainOne(principal, action, resource string) authz.Check {
+	p := s.principalFor(principal)
+	return authz.Explain(p, resource, []string{action}, s.rulesFor(p.ID))[0]
+}
+
+// principalFor resolves a named principal, or the default identity when
+// no name is given -- so the inspector has something to show before
+// anyone has chosen a principal to ask about.
+func (s *Server) principalFor(principal string) authz.Principal {
+	if principal == "" {
+		principal = s.cfg.Principal
+	}
+	if principal == "" || eq(principal, DefaultObjectID) ||
+		eq(principal, principalFromClientID(s.cfg.ClientID)) {
+		return authz.Principal{
+			ID: DefaultObjectID, Name: "the default identity",
+			Kind: "servicePrincipal", Unrestricted: true,
+		}
+	}
+	return authz.Principal{ID: principal, Name: principal, Kind: "servicePrincipal"}
+}

@@ -292,3 +292,72 @@ func request(permission, resource string) authz.Request {
 		Resource:  resource,
 	}
 }
+
+// --- explaining -----------------------------------------------------------
+
+// The inspector and `nimbus can` both read this, and it must agree with
+// what a request actually gets. One engine, asked two ways.
+func TestExplainAgreesWithWhatARequestGets(t *testing.T) {
+	s := newEnforcingServer(t, "")
+	setBinding(t, s, "roles/storage.objectViewer", appMember)
+
+	cases := []struct {
+		permission string
+		want       bool
+	}{
+		{"storage.objects.get", true},
+		{"storage.objects.list", true},
+		{"storage.objects.create", false},
+		{"storage.buckets.delete", false},
+	}
+	for _, c := range cases {
+		check := s.ExplainOne(appMember, c.permission, "nimbus-iam-enforced")
+		if check.Allowed != c.want {
+			t.Errorf("ExplainOne(%s) = %v, want %v (%s)", c.permission, check.Allowed, c.want, check.Reason)
+		}
+		if check.Reason == "" {
+			t.Errorf("%s has no reason", c.permission)
+		}
+		if c.want && check.Rule == "" {
+			t.Errorf("%s is allowed by nothing named", c.permission)
+		}
+	}
+}
+
+func TestExplainAccessDerivesItsActionsFromTheType(t *testing.T) {
+	s := newEnforcingServer(t, "")
+	setBinding(t, s, "roles/compute.networkAdmin", appMember)
+
+	report := s.ExplainAccess(appMember, "projects/p/global/networks/n", "compute.googleapis.com/Network")
+	if len(report.Checks) == 0 {
+		t.Fatal("no checks for a network")
+	}
+	if !report.Enforcing {
+		t.Error("the report does not say enforcement is on")
+	}
+	seen := map[string]bool{}
+	for _, c := range report.Checks {
+		seen[c.Action] = c.Allowed
+	}
+	// compute.googleapis.com/Network -> compute.networks.*, which is the
+	// same derivation the enforcement point uses.
+	if !seen["compute.networks.create"] {
+		t.Errorf("networkAdmin cannot create a network: %+v", report.Checks)
+	}
+	if seen["compute.networks.setIamPolicy"] {
+		t.Error("networkAdmin was reported as able to set an IAM policy")
+	}
+}
+
+func TestExplainSaysWhenAPrincipalIsUnrestricted(t *testing.T) {
+	s := newEnforcingServer(t, "")
+	report := s.ExplainAccess("", "projects/p/global/networks/n", "compute.googleapis.com/Network")
+	if !report.Unrestricted {
+		t.Error("the default identity is not reported as unrestricted")
+	}
+	for _, c := range report.Checks {
+		if !c.Allowed {
+			t.Errorf("an unrestricted principal was denied %s", c.Action)
+		}
+	}
+}

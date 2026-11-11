@@ -23,7 +23,7 @@ func newUI(t *testing.T) (*httptest.Server, *core.Store, *core.Bus) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(Handler(store, bus, Info{Version: "test", Clouds: map[string]string{"azure": "https://localhost:4701"}}, nil, nil))
+	srv := httptest.NewServer(Handler(store, bus, Info{Version: "test", Clouds: map[string]string{"azure": "https://localhost:4701"}}, nil, nil, nil))
 	t.Cleanup(srv.Close)
 	return srv, store, bus
 }
@@ -314,7 +314,7 @@ func TestSecretRoutesListNamesAndRevealOnDemand(t *testing.T) {
 		t.Fatal(err)
 	}
 	secrets := &fakeSecrets{}
-	srv := httptest.NewServer(Handler(store, bus, Info{Version: "test"}, nil, secrets))
+	srv := httptest.NewServer(Handler(store, bus, Info{Version: "test"}, nil, secrets, nil))
 	t.Cleanup(srv.Close)
 
 	res, err := http.Get(srv.URL + "/api/keyvault/secrets?vault=kv1")
@@ -465,7 +465,7 @@ func TestTheFeedIsPopulatedAfterARestart(t *testing.T) {
 	fresh.SetJournal(j2)
 
 	srv := httptest.NewServer(Handler(freshStore, fresh,
-		Info{Version: "test", Clouds: map[string]string{}}, nil, nil))
+		Info{Version: "test", Clouds: map[string]string{}}, nil, nil, nil))
 	defer srv.Close()
 
 	req, _ := http.NewRequest("GET", srv.URL+"/api/events", nil)

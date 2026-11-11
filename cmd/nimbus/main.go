@@ -188,6 +188,10 @@ func start(args []string) {
 	var servers []*cloudServer
 	var blobs ui.BlobBrowser
 	var secrets ui.SecretBrowser
+	// Each cloud answers "why is this allowed or denied" for its own
+	// resources, with its own evaluator -- the same one that refuses a
+	// request, so the explanation cannot drift from the behaviour.
+	explainers := map[string]ui.Explainer{}
 
 	if running["azure"] {
 		azURL := fmt.Sprintf("https://%s:%d", *host, *azPort)
@@ -197,6 +201,7 @@ func start(args []string) {
 			azCfg.DataDir = dataDir
 		}
 		az := azure.New(azCfg, store, bus)
+		explainers["azure"] = az
 		blobs = blobBrowser{az.BlobBrowser()}
 		secrets = secretBrowser{az.SecretBrowser()}
 		servers = append(servers, &cloudServer{
@@ -224,6 +229,7 @@ func start(args []string) {
 			awsCfg.DataDir = dataDir
 		}
 		a := aws.New(awsCfg, store, bus)
+		explainers["aws"] = a
 		servers = append(servers, &cloudServer{
 			name:  "aws",
 			label: fmt.Sprintf(`AWS          %s      --endpoint-url %s`, awsURL, awsURL),
@@ -247,6 +253,7 @@ func start(args []string) {
 			gcpCfg.DataDir = dataDir
 		}
 		g := gcp.New(gcpCfg, store, bus)
+		explainers["gcp"] = g
 		servers = append(servers, &cloudServer{
 			name:  "gcp",
 			label: fmt.Sprintf(`GCP          %s      project = "%s"`, gcpURL, g.ProjectID()),
@@ -282,7 +289,8 @@ func start(args []string) {
 	uiSrv := &http.Server{
 		Addr: fmt.Sprintf(":%d", *uiPort),
 		Handler: ui.Handler(store, bus,
-			ui.Info{Version: version, Clouds: endpoints, DataDir: dataDir}, blobs, secrets),
+			ui.Info{Version: version, Clouds: endpoints, DataDir: dataDir}, blobs, secrets,
+			explainers),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

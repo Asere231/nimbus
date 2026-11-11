@@ -241,3 +241,61 @@ func Glob(pattern, s string) bool {
 	}
 	return j == len(pattern)
 }
+
+// --- explaining, rather than only deciding --------------------------------
+
+// Report answers "what may this principal do to this resource".
+//
+// A refusal in the activity feed is enough to debug one call; it is not
+// enough to learn a permission model, which is what this project exists
+// for. So the same engine that refuses a request also answers the
+// question in advance, for the visualizer's inspector and for `nimbus
+// can` -- and because both read it from one endpoint backed by one
+// evaluator, the explanation cannot drift from the behaviour.
+//
+// Cloud-neutral on purpose: each cloud decides which actions are worth
+// asking about and what its rules are called, and the shape of the answer
+// is the same for all three.
+type Report struct {
+	// Principal is who the question was asked about, and Kind is what
+	// that cloud calls such a thing: a role, a servicePrincipal, a
+	// serviceAccount.
+	Principal string `json:"principal"`
+	Kind      string `json:"kind,omitempty"`
+	// Unrestricted says the principal bypasses policy altogether, which
+	// is worth showing rather than listing a column of allows.
+	Unrestricted bool `json:"unrestricted,omitempty"`
+	// Enforcing is false when --enforce-iam is off. Then every answer
+	// below is what WOULD happen, which is useful and must not be
+	// mistaken for what is happening.
+	Enforcing bool    `json:"enforcing"`
+	Resource  string  `json:"resource,omitempty"`
+	Checks    []Check `json:"checks"`
+}
+
+// Check is one action's answer.
+type Check struct {
+	Action  string `json:"action"`
+	Allowed bool   `json:"allowed"`
+	// Rule is the Source() of whatever decided, empty when nothing did
+	// and the implicit deny applied.
+	Rule   string `json:"rule,omitempty"`
+	Reason string `json:"reason"`
+	// Unevaluated marks "Nimbus cannot tell", which is a different thing
+	// from "no".
+	Unevaluated bool `json:"unevaluated,omitempty"`
+}
+
+// Explain evaluates several actions against one rule set, which is what a
+// report is made of.
+func Explain(p Principal, resource string, actions []string, rules []Rule) []Check {
+	out := make([]Check, 0, len(actions))
+	for _, action := range actions {
+		d := Evaluate(Request{Principal: p, Action: action, Resource: resource}, rules)
+		out = append(out, Check{
+			Action: action, Allowed: d.Allowed, Rule: d.Source,
+			Reason: d.Reason, Unevaluated: d.Unevaluated,
+		})
+	}
+	return out
+}

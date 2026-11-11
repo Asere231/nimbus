@@ -114,3 +114,11 @@ export async function clearPlan() {
   if (fixtureMode) return;
   await fetch("/api/plan", { method: "DELETE" });
 }
+
+// getAccess asks why the current principal can or cannot act on a
+// resource. In ?fixture mode the answers come from the fixture, so the
+// panel can be looked at with no server at all.
+export async function getAccess(id) {
+  if (fixtureMode) return ((await fixture()).access || {})[id] || null;
+  return json("/api/authz?resource=" + encodeURIComponent(id));
+}

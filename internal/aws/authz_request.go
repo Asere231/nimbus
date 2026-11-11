@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/Asere231/nimbus/internal/authz"
 )
@@ -248,4 +249,83 @@ func restoreBody(r *http.Request, body []byte) {
 	if body != nil {
 		r.Body = io.NopCloser(bytes.NewReader(body))
 	}
+}
+
+// --- explaining ------------------------------------------------------------
+
+// explainActions are the actions worth asking about per resource type.
+//
+// A TABLE, where Azure and GCP derive theirs -- for the same reason the
+// request classifier needed one: AWS's action names do not follow from the
+// type. `AWS::S3::Bucket` is acted on by `s3:ListBucket` but its CONTENTS
+// by `s3:GetObject` on a different ARN, which no derivation would produce.
+//
+// A type that is not here gets an empty report rather than invented
+// actions, and the inspector says so.
+var explainActions = map[string][]string{
+	typeBucket:         {"s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteBucket"},
+	typeDynamoTable:    {"dynamodb:DescribeTable", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteTable"},
+	typeVPC:            {"ec2:DescribeVpcs", "ec2:CreateSubnet", "ec2:DeleteVpc"},
+	typeLambdaFunction: {"lambda:GetFunction", "lambda:InvokeFunction", "lambda:UpdateFunctionCode", "lambda:DeleteFunction"},
+	typeEKSCluster:     {"eks:DescribeCluster", "eks:CreateNodegroup", "eks:DeleteCluster"},
+	typeRole:           {"iam:GetRole", "iam:PassRole", "iam:DeleteRole"},
+	typeUser:           {"iam:GetUser", "iam:DeleteUser"},
+	typePolicy:         {"iam:GetPolicy", "iam:DeletePolicy"},
+	typeInstance:       {"ec2:DescribeInstances", "ec2:StopInstances", "ec2:TerminateInstances"},
+	typeLogGroup:       {"logs:DescribeLogStreams", "logs:PutLogEvents", "logs:DeleteLogGroup"},
+}
+
+// resourceARNFor is the ARN those actions are asked about. For S3 the
+// object actions are about the bucket's CONTENTS, which is a different ARN
+// from the bucket -- the distinction `s3:ListBucket` on the bucket and
+// `s3:GetObject` on `bucket/*` exists to draw.
+func resourceARNFor(resourceType, action, id string) string {
+	if resourceType == typeBucket && strings.Contains(action, "Object") {
+		return id + "/*"
+	}
+	return id
+}
+
+// ExplainAccess answers what a principal may do to one resource.
+func (s *Server) ExplainAccess(principal, resourceID, resourceType string) authz.Report {
+	c := s.callerFor(principal)
+	report := authz.Report{
+		Principal: c.Principal.ID, Kind: c.Principal.Kind,
+		Unrestricted: c.Principal.Unrestricted,
+		Enforcing:    s.cfg.EnforceIAM, Resource: resourceID,
+	}
+	actions := explainActions[resourceType]
+	if len(actions) == 0 {
+		return report
+	}
+	rules := s.policies.rules(c.docs)
+	for _, action := range actions {
+		arn := resourceARNFor(resourceType, action, resourceID)
+		report.Checks = append(report.Checks, authz.Explain(c.Principal, arn, []string{action}, rules)...)
+	}
+	return report
+}
+
+// ExplainOne answers a single question, which is what `nimbus can` asks.
+func (s *Server) ExplainOne(principal, action, resource string) authz.Check {
+	c := s.callerFor(principal)
+	return authz.Explain(c.Principal, resource, []string{action}, s.policies.rules(c.docs))[0]
+}
+
+// callerFor resolves a named principal rather than one from a request, so
+// the inspector and the CLI can ask about somebody else.
+func (s *Server) callerFor(principal string) caller {
+	if principal == "" {
+		principal = s.cfg.Principal
+	}
+	if principal == "" {
+		return s.rootCaller()
+	}
+	if c, ok := s.callerForKey(principal); ok {
+		return c
+	}
+	// A name that maps to nothing is reported as itself holding no
+	// policies, rather than silently as root: "this principal does not
+	// exist" and "this principal may do anything" must not look alike.
+	return caller{Principal: authz.Principal{ID: principal, Name: principal, Kind: "unknown"}}
 }

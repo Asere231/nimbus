@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.15.0 — 2026-11-11
+
+Milestone 15: finishing Azure. It was the only one of the three clouds
+that could not run your code, and the only one with nowhere to keep what
+anything printed.
+
+- **Azure Container Apps that really run**, on `internal/engines/run` —
+  the same engine behind GCP's Cloud Run, unchanged for its second
+  caller. An image pulled, a container started, and `curl` against the
+  FQDN in the Terraform output returning what it serves. Requests are
+  proxied rather than sent to the container's published port, so they
+  appear in the activity feed and the FQDN stays stable across restarts.
+- **Log Analytics that holds logs and answers queries.** A workspace was a
+  shell whose own comment said queries "would find nothing because nothing
+  was ever sent to it". A container app's console now lands in the
+  workspace its environment names, and `az monitor log-analytics query`
+  returns the rows.
+- **A KQL pipeline subset** — `where`, `project`, `take`, `limit`,
+  `count` — with everything else refused AND named. Both other answers are
+  worse: a no-op returns every row, which is the `FilterExpression` trap,
+  and an empty result is indistinguishable from "nothing has been logged
+  yet". For the same reason an unknown table is empty while an unknown
+  workspace is a 404.
+- **The app in the visualizer**, linked to its environment, with its log
+  lines in the inspector beside it — and in `fixture.json`, so `?fixture`
+  shows all of it with no server.
+- `examples/terraform/azure-containerapp`, and a Docker-backed CI job that
+  applies it, curls the app, waits for its console to reach the workspace,
+  queries it, and checks that an unsupported operator is refused by name.
+
+Measured, and three of these changed the work:
+
+- **azurerm polls the RESOURCE for a container app, not an operation** —
+  not one `Azure-AsyncOperation` request in a whole debug log. GKE's
+  behaviour, the opposite of Cloud Run's. The first run proved nothing,
+  because the image was already local; with a real pull it took 27 seconds
+  and the container was answering the instant the apply returned.
+- **`az monitor log-analytics query` needed no new CLI plumbing**: the
+  extension takes its base URL from the metadata document's
+  `logAnalyticsResourceId`, which has pointed at Nimbus since Milestone 5
+  and gone unused. The command itself is not in az 2.90.0 — it is the
+  `log-analytics` extension, which installs only in a shell without
+  `REQUESTS_CA_BUNDLE` set.
+- **azurerm calls `listSecrets` right after creating an app**, and
+  answering it with the generic `{}` put a red "unimplemented action" line
+  in the feed for something that was working.
+
+Two bugs came from tests that already existed: the hook invented
+`properties.configuration` when a client sent none, and a container app
+cannot reach Succeeded against the Docker `Fake` — deliberately, because
+`run`'s readiness probe is a real HTTP GET.
+
 ## 0.14.0 — 2026-11-11
 
 Milestone 14: Azure RBAC, GCP IAM, and showing why. "Permissions are

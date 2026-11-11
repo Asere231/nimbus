@@ -65,8 +65,8 @@ eval "$(./bin/nimbus env azure)"          # PowerShell: ./bin/nimbus.exe env azu
 
 | Tier | Resource types | Behaviour |
 |---|---|---|
-| Real | Storage accounts and containers, AKS clusters and node pools, Key Vaults, container registries, Linux virtual machines | Something actually runs: bytes on disk, k3s in Docker, a `registry:2` container, secrets you can read back with a client |
-| Modelled by hand | Resource groups, virtual networks, subnets, managed identities, role assignments and definitions, Log Analytics workspaces | Validation, server-generated fields, parent/child sync, cascade delete |
+| Real | Storage accounts and containers, AKS clusters and node pools, Key Vaults, container registries, Linux virtual machines, **Container Apps** | Something actually runs: bytes on disk, k3s in Docker, a `registry:2` container, a container serving on its own FQDN, secrets you can read back with a client |
+| Modelled by hand | Resource groups, virtual networks, subnets, managed identities, role assignments and definitions, Log Analytics workspaces | Validation, server-generated fields, parent/child sync, cascade delete. A workspace **holds logs**: a container app's console lands in it and `az monitor log-analytics query` returns the rows |
 | Modelled from the specs | 53 more types across networking, compute, web, data and integration | Read-only fields and defaults taken from Microsoft's own OpenAPI specs, applied generically — no hook per type |
 | Accepted | Any other ARM type | Stored and returned with `provisioningState: Succeeded`; nothing runs behind it |
 | Actions | `listKeys`, `listClusterUserCredential`, `listCredentials`, `sharedKeys`, … | Answered for the types above; anything else returns `{}` and shows as "unimplemented" in the activity feed |
@@ -114,6 +114,40 @@ Four examples: `aws-basic` applies 14 resources across STS, EC2, S3 and IAM;
 nothing but `AWS_ENDPOINT_URL` telling it where Nimbus is; `aws-eks` brings up
 a cluster `kubectl` can reach; and `aws-iam-enforced` proves a permission is
 genuinely refused and then granted. All plan clean and destroy.
+
+### A container that really runs, on Azure
+
+```bash
+cd examples/terraform/azure-containerapp && terraform apply
+curl -k "https://$(terraform output -raw fqdn)/"
+```
+
+An `azurerm_container_app` starts a real container from any image the
+Docker daemon can pull, on the same engine behind GCP's Cloud Run. The
+FQDN in the output is Nimbus, which proxies through — so the request shows
+up in the activity feed, where a request straight to a container port
+would be invisible.
+
+It has **one label** of app name before a shared suffix, where real Azure
+also puts the environment and the region in: a TLS wildcard matches
+exactly one label, so an `{app}.{env}.` name would need a certificate per
+environment. Two environments therefore cannot hold apps of the same name
+here, which real Azure allows.
+
+Whatever the container prints lands in the Log Analytics workspace its
+environment names, and can be read back:
+
+```bash
+az monitor log-analytics query \
+  --workspace "$(terraform output -raw workspace_customer_id)" \
+  --analytics-query "ContainerAppConsoleLogs | where Log_s contains 'GET' | take 10"
+```
+
+`where`, `project`, `take`, `limit` and `count` work. Anything else is
+**refused and named** rather than guessed at — `summarize` answers "not
+supported by Nimbus, so this query is refused rather than answered with a
+guess". The query command lives in az's `log-analytics` extension, which
+needs installing in a shell without `REQUESTS_CA_BUNDLE` set.
 
 ### Permissions that are actually checked
 

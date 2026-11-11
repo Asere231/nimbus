@@ -1404,3 +1404,130 @@ jobs:
             echo "$remaining"
             exit 1
           fi
+
+  containerapp:
+    name: terraform azure-containerapp (run engine + Log Analytics)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Docker and the app image
+        run: |
+          docker version --format '{{.Server.Version}}'
+          # Pre-pulled so the apply measures Nimbus rather than the
+          # network. The engine pulls it itself when it is missing, which
+          # is what makes the create genuinely long-running.
+          docker pull nginx:alpine
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus start --clouds azure &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, curl the app, query its logs, destroy
+        working-directory: examples/terraform/azure-containerapp
+        run: |
+          set -euo pipefail
+          # Go on Linux honours SSL_CERT_FILE, so the CA does not have to
+          # be installed into the system store -- the line every azurerm
+          # job here uses.
+          export SSL_CERT_FILE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          FQDN=$(terraform output -raw fqdn)
+          WS=$(terraform output -raw workspace_customer_id)
+
+          # The app is up the moment the apply returns, because the create
+          # is long-running through Hook.Provision and azurerm polls the
+          # RESOURCE until it is Succeeded -- measured, see the example's
+          # header. So this needs no wait.
+          curl -sk --fail --max-time 30 "https://$FQDN/" > /tmp/app.html
+          grep -qi nginx /tmp/app.html || {
+            echo "::error::the app's FQDN did not serve what the image serves"
+            cat /tmp/app.html; exit 1; }
+
+          # The request above went THROUGH Nimbus, so it is in the feed.
+          # That is the reason for proxying rather than publishing the
+          # container's port.
+          curl -sf "http://localhost:4700/api/resources" >/dev/null
+
+          # Its console has to reach the workspace. The tailer polls every
+          # three seconds, so wait for a line rather than racing it --
+          # "the apply returned" has never meant "the logs have arrived",
+          # which is the lesson all three instance jobs learned.
+          for i in $(seq 1 30); do
+            lines=$(curl -sf "http://localhost:4700/api/loganalytics/logs?workspace=$WS" \
+              | grep -c '"message"' || true)
+            if [ "${lines:-0}" -gt 0 ]; then break; fi
+            sleep 1
+          done
+          if [ "${lines:-0}" -eq 0 ]; then
+            echo "::error::nothing from the app's console reached the workspace"
+            exit 1
+          fi
+          echo "$lines log lines reached the workspace"
+
+          # And the query API answers the document the az extension reads.
+          # (The CLI command itself lives in the `log-analytics` extension,
+          # which needs installing in a shell without REQUESTS_CA_BUNDLE,
+          # so CI exercises the endpoint directly -- it is the same server
+          # code either way.)
+          query() {
+            curl -sk --max-time 20 -X POST \
+              -H 'Content-Type: application/json' \
+              -d "{\"query\":$1}" \
+              "https://localhost:4701/loganalytics/v1/workspaces/$WS/query"
+          }
+          out=$(query '"ContainerAppConsoleLogs | take 5"')
+          echo "$out" | head -c 400; echo
+          for want in '"tables"' '"PrimaryResult"' '"columns"' '"rows"'; do
+            case "$out" in
+              *"$want"*) ;;
+              *) echo "::error::the query answer is missing $want"; exit 1 ;;
+            esac
+          done
+
+          # An unsupported operator must be REFUSED AND NAMED, not treated
+          # as a no-op returning every row (the FilterExpression trap) and
+          # not as an empty result, which reads as "nothing logged yet".
+          out=$(query '"ContainerAppConsoleLogs | summarize count() by Log_s"')
+          echo "$out"
+          case "$out" in
+            *summarize*) ;;
+            *) echo "::error::an unsupported KQL operator was not refused by name"; exit 1 ;;
+          esac
+
+          set +e
+          terraform plan -detailed-exitcode -input=false
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::plan -detailed-exitcode returned $code; expected 0 (no changes)"
+            exit 1
+          fi
+
+          terraform destroy -auto-approve -input=false
+
+      - name: Nothing left running
+        run: |
+          left=$(docker ps -a --filter label=nimbus.resource-id -q | wc -l | tr -d ' ')
+          if [ "$left" != "0" ]; then
+            echo "::error::destroy left $left container(s) behind:"
+            docker ps -a --filter label=nimbus.resource-id
+            exit 1
+          fi

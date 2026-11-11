@@ -1,9 +1,9 @@
 # Roadmap
 
-**Current: Milestone 15 — finishing Azure
-(`docs/prompts/m15-azure-complete.md`).** Phase 5 starts with the cloud
-this project began with, because Azure is the only one of the three that
-cannot run your code and the only one with nowhere to keep what it prints.
+**Current: Milestone 16 — a network view for AWS and GCP
+(`docs/prompts/m16-vpc-view.md`).** Milestone 15 finished Azure: it runs
+your code now, on the same engine behind Cloud Run, and a Log Analytics
+workspace holds what that code prints.
 
 **Phase 4 is complete.** Milestone 11 gave all three clouds instances that
 really boot, Milestone 12 cleared the defects that made Nimbus quietly
@@ -202,15 +202,26 @@ to demonstrate once there are instances to refuse it to.
 
 | # | Milestone | Done when |
 |---|---|---|
-| 15 | **Finishing Azure**: Container Apps on the `run` engine, Log Analytics that ingests and queries | `curl` reaches a container Terraform created, and its stdout comes back out of a Log Analytics query |
+| 15 | ~~**Finishing Azure**: Container Apps on the `run` engine, Log Analytics that ingests and queries~~ **done** | `curl` reaches a container Terraform created, and its stdout comes back out of a Log Analytics query |
 | 16 | **A network view for AWS and GCP** | An EC2 and a GCE instance each appear in the subnet they belong to |
 | 17 | **Resource-level policies** | A principal reads a bucket ONLY because of the bucket policy, and an explicit deny in it wins |
 
-Milestone 15 is first because Azure is the one cloud that cannot run code:
-AWS has Lambda and GCP has Cloud Run, and Azure has a Kubernetes cluster, a
-VM, and nothing in between. It should also be the cheapest of the three —
-`internal/engines/run` already does the work and Azure simply does not use
-it, and `microsoft.app/containerapps` is already in the spec table.
+Milestone 15 was first because Azure was the one cloud that could not run
+code, and it was indeed the cheapest: `internal/engines/run` already did
+the work and Azure simply was not using it, and
+`microsoft.app/containerapps` was already in the spec table with
+`ingress.fqdn` declared and unfilled.
+
+- `examples/terraform/azure-containerapp` runs a real container on Azure:
+  an image pulled, a container started, and `curl` against the FQDN from
+  the output returning what it serves — through Nimbus, so the request is
+  in the activity feed. Applies, plans clean, destroys, leaves nothing.
+  Its console lands in the Log Analytics workspace its environment names,
+  and `az monitor log-analytics query` returns the rows: a workspace is no
+  longer a shell whose comment said queries "would find nothing".
+  Measured along the way: azurerm polls the RESOURCE for a container app
+  rather than an operation, which is GKE's behaviour and the opposite of
+  Cloud Run's.
 
 **Still unscheduled, and the gap to trust least:**
 
@@ -257,6 +268,39 @@ it, and `microsoft.app/containerapps` is already in the spec table.
   `nimbus cert` uses `Import-Certificate` into `CurrentUser\Root`.
 
 ## Later
+
+- **A container app runs its FIRST container only.** Real Container Apps
+  run every container in the template as a sidecar group; a sidecar here is
+  stored and not started, exactly the limit Cloud Run has. There is no
+  scaling either: `template.scale` round-trips and one container runs, so
+  `minReplicas`/`maxReplicas` mean nothing, and there are no revisions —
+  one app, one container, `latestRevisionName` derived from the id and
+  stable.
+- **An app's FQDN has one label, so app names must be unique across
+  environments.** Real Azure's is
+  `{app}.{envdomain}.{region}.azurecontainerapps.io`; a TLS wildcard
+  matches exactly one label, so the environment cannot be in the name
+  without a certificate per environment. Two environments holding apps of
+  the same name is legal in Azure and collides here.
+- **A workspace's logs are in memory and bounded** at 10,000 lines, and
+  are NOT persisted even with `--persist` — like CloudWatch Logs' and
+  Pub/Sub's. The workspace survives a restart; its rows do not. Ingestion
+  polls each running app's console every three seconds, so a line can be
+  up to three seconds late, and only a CONTAINER APP's output is ingested:
+  nothing else writes to a workspace, so diagnostic settings, the AKS
+  monitoring add-on and the agent ingestion API still record nothing.
+- **The KQL subset is `where`, `project`, `take`, `limit` and `count`**,
+  one comparison per `where` with no `and`/`or`, and `contains` is
+  case-insensitive as KQL's is. Everything else is refused and named —
+  including `summarize`, `extend`, `order by`, time ranges and every
+  function — rather than being guessed at. There is no `timespan`
+  handling: a query's time range is ignored, which can only ever return
+  too much.
+- **Azure still has no Functions.** Container Apps was the right first
+  choice because it takes any image, which is what the `run` engine does;
+  Functions would need a host per language, and Lambda only works here
+  because AWS publishes base images with the runtime interface emulator
+  inside them. There is no Azure equivalent to lean on.
 
 - **Authorization is IDENTITY-based only, on all three clouds.** No
   resource policies (an S3 bucket policy, a Pub/Sub topic's own bindings

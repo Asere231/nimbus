@@ -25,7 +25,7 @@ Do them in order. Each one ends at a clean commit with the milestone marked done
 | `m12-correctness-pass.md` | Four defects that mislead rather than merely lack | + Docker, AWS CLI |
 | `m13-authorization-core.md` | Authorization that can say no: the engine, and AWS IAM | Terraform |
 | `m14-rbac-and-explain.md` | Azure RBAC, GCP IAM, and showing why | Browser |
-| `m15-azure-complete.md` | Finishing Azure: Container Apps that run, Log Analytics that holds logs | + Docker, Azure CLI |
+| `m15-azure-complete.md` | Finishing Azure: Container Apps that run, Log Analytics that holds logs | + Docker, Azure CLI (`log-analytics` extension) |
 | `m16-vpc-view.md` | A network view for AWS and GCP | Browser |
 | `m17-resource-policies.md` | Policies attached to the resource, not the caller | Terraform |
 

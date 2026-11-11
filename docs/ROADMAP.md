@@ -196,6 +196,15 @@ to demonstrate once there are instances to refuse it to.
   tables with Microsoft's Python SDKs; the vault has no equivalent, so the
   challenge flow is only proven against azurerm and the az CLI.
 
+- **`examples/multicloud` is not in CI**, and was not before this
+  milestone either: it wants Docker for three k3s clusters at once, which
+  is a heavy new job to add in a close-out and exactly the kind nobody
+  then looks at. It is verified on the owner's machine instead — twelve
+  resources across three clouds in one process with `--enforce-iam` ON,
+  applying, planning clean, destroying and leaving no containers, which is
+  the strongest evidence that turning enforcement on costs nothing. The
+  flag-off path for four examples across the same three clouds IS in CI.
+
 - **The Docker-stopped path is only unit-tested.** Stopping Docker Desktop
   mid-session would have disrupted the machine, so the ARM error and feed note
   are covered by a test against the Fake rather than by pulling the plug.

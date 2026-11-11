@@ -97,6 +97,9 @@ type Server struct {
 	// apps runs the Container Apps, on the same engine Cloud Run uses --
 	// see internal/engines/run, which knows about neither cloud.
 	apps *run.Engine
+	// logs is what a Log Analytics workspace actually holds. Bounded and
+	// in memory, like CloudWatch's -- see logstore.go.
+	logs *logStore
 }
 
 // New creates the Azure emulator.
@@ -158,6 +161,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		StartTimeout: cfg.ClusterTimeout,
 		KeepRunning:  cfg.KeepClusters,
 	}, s.docker)
+	s.logs = newLogStore()
 	// The challenge a Key Vault client gets points at our own login endpoint,
 	// and asks for a token for Azure's Key Vault audience -- which our token
 	// endpoint will happily issue, since it issues tokens for any scope.
@@ -249,6 +253,10 @@ func (s *Server) Start() func() {
 		done()
 		s.k3s.Watch(ctx)
 	}()
+	// Container app consoles into their workspaces. Its own goroutine
+	// rather than a step in the one above, because k3s.Watch blocks for
+	// the life of the process.
+	go s.tailContainerApps(ctx)
 	return cancel
 }
 
@@ -355,6 +363,11 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) (note string) {
 	case p == "/metadata/endpoints":
 		s.handleMetadata(w, r)
 		return "metadata"
+	case strings.HasPrefix(p, LogAnalyticsPrefix):
+		// The query data plane. Reached through the metadata document's
+		// logAnalyticsResourceId, which has pointed here since Milestone
+		// 5 -- see logquery.go.
+		return s.serveLogAnalytics(w, r)
 	case strings.HasSuffix(p, "/oauth2/v2.0/token") || strings.HasSuffix(p, "/oauth2/token"):
 		s.handleToken(w, r)
 		return "token issued"

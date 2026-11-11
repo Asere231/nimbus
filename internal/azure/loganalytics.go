@@ -7,17 +7,20 @@ import (
 	"time"
 )
 
-// Log Analytics, as a stub.
+// Log Analytics: the workspace resource.
 //
-// Nothing in Nimbus ingests or queries logs, and this milestone does not try
-// to. The workspace exists because so much Azure configuration refuses to
-// apply without one -- the AKS monitoring add-on, diagnostic settings, most
-// community modules -- and because the two things clients read back are
-// server-generated: the workspace's customerId and its shared keys.
+// This was a stub for eleven milestones, and its comment said queries
+// "would find nothing because nothing was ever sent to it". Since
+// Milestone 15 something is: a container app's console is tailed into the
+// workspace its environment names, and `az monitor log-analytics query`
+// returns the rows. The store is logstore.go and the query surface is
+// logquery.go.
 //
-// A workspace here is therefore an honest shell: it round-trips, it has stable
-// identity, and queries against it would find nothing because nothing was ever
-// sent to it.
+// What is still true of this file is the identity: the two things clients
+// read back are server-generated -- the workspace's customerId, which is
+// also what the data plane is addressed by, and its shared keys. Both are
+// derived from the resource id so they survive a restart, because an agent
+// configuration generated from them would otherwise stop matching.
 const typeLogAnalyticsWorkspace = "Microsoft.OperationalInsights/workspaces"
 
 func registerLogAnalyticsHooks(s *Server) {

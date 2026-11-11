@@ -482,6 +482,10 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, t target) 
 		writeJSON(w, 200, out)
 		return ""
 	}
+	if out, ok := s.containerAppAction(t); ok {
+		writeJSON(w, 200, out)
+		return ""
+	}
 	writeJSON(w, 200, map[string]any{})
 	return "unimplemented action: " + t.Action
 }

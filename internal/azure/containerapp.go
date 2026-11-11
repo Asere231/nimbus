@@ -297,3 +297,26 @@ func stripHostPort(host string) string {
 	}
 	return host
 }
+
+// containerAppAction answers the POST actions on a container app.
+//
+// `listSecrets` is the one that matters, and it is measured rather than
+// guessed: azurerm calls it immediately after creating an app, and Nimbus
+// answered the generic `{}` with "unimplemented action" in the activity
+// feed. The apply did not fail -- the provider tolerates a secretless
+// response -- but a red line for something that is working trains people
+// to ignore the colour, which is exactly the argument the S3
+// sub-resources and Key Vault's certificate contacts already made.
+//
+// An app with no secrets has an empty `value` list, not a missing one: a
+// client iterates it without checking.
+func (s *Server) containerAppAction(t target) (any, bool) {
+	res, err := s.store.Get(t.ID)
+	if err != nil || !eq(res.Type, typeContainerApp) {
+		return nil, false
+	}
+	if !eq(t.Action, "listSecrets") {
+		return nil, false
+	}
+	return map[string]any{"value": []any{}}, true
+}

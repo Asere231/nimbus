@@ -216,3 +216,25 @@ func mustPut(t *testing.T, srv *httptest.Server, path string, body map[string]an
 		t.Fatalf("PUT %s: %d %v", path, code, out)
 	}
 }
+
+// azurerm calls listSecrets straight after creating an app. Measured: it
+// does not fail the apply when the answer is the generic `{}`, but a red
+// "unimplemented action" line in the feed for something that is working
+// trains people to ignore the colour -- the argument S3's dozen bucket
+// sub-resources and Key Vault's certificate contacts already made.
+func TestAContainerAppAnswersListSecrets(t *testing.T) {
+	srv, _ := newAppServer(t)
+	mustPut(t, srv, rgPath("rg"), map[string]any{"location": "eastus"})
+	mustPut(t, srv, envPath, map[string]any{"location": "eastus"})
+	mustPut(t, srv, appPath("web"), containerAppBody("nginx:alpine"))
+
+	code, body := do(t, srv, http.MethodPost, appPath("web")+"/listSecrets", nil)
+	if code != 200 {
+		t.Fatalf("listSecrets = %d %v", code, body)
+	}
+	// An empty list, not a missing one: a client iterates it without
+	// checking whether it is there.
+	if _, ok := body["value"].([]any); !ok {
+		t.Errorf("listSecrets has no value list: %v", body)
+	}
+}

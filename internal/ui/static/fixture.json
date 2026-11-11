@@ -787,6 +787,83 @@
       },
       "createdAt": "2026-10-28T15:04:46Z",
       "updatedAt": "2026-10-28T15:04:46Z"
+    },
+    {
+      "cloud": "azure",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.OperationalInsights/workspaces/law-nimbus",
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "name": "law-nimbus",
+      "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app",
+      "location": "eastus",
+      "backing": "modelled",
+      "createdAt": "2026-11-11T14:24:50Z",
+      "updatedAt": "2026-11-11T14:24:50Z",
+      "body": {
+        "properties": {
+          "customerId": "395318f5-e004-b89a-b538-9472349fe52d",
+          "sku": {
+            "name": "PerGB2018"
+          },
+          "retentionInDays": 30,
+          "appLogsConfiguration": null
+        }
+      }
+    },
+    {
+      "cloud": "azure",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.App/managedEnvironments/cae-nimbus",
+      "type": "Microsoft.App/managedEnvironments",
+      "name": "cae-nimbus",
+      "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app",
+      "location": "eastus",
+      "backing": "modelled",
+      "createdAt": "2026-11-11T14:24:50Z",
+      "updatedAt": "2026-11-11T14:24:50Z",
+      "body": {
+        "properties": {
+          "defaultDomain": "containerapps.nimbus.localhost:4701",
+          "staticIp": "127.0.0.1",
+          "appLogsConfiguration": {
+            "destination": "log-analytics",
+            "logAnalyticsConfiguration": {
+              "customerId": "395318f5-e004-b89a-b538-9472349fe52d"
+            }
+          }
+        }
+      }
+    },
+    {
+      "cloud": "azure",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.App/containerApps/web",
+      "type": "Microsoft.App/containerApps",
+      "name": "web",
+      "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app",
+      "location": "eastus",
+      "backing": "real",
+      "createdAt": "2026-11-11T14:24:50Z",
+      "updatedAt": "2026-11-11T14:24:50Z",
+      "body": {
+        "properties": {
+          "managedEnvironmentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.App/managedEnvironments/cae-nimbus",
+          "runningStatus": "Running",
+          "latestRevisionName": "web--a1b2c3d4",
+          "configuration": {
+            "ingress": {
+              "external": true,
+              "targetPort": 80,
+              "fqdn": "web.containerapps.nimbus.localhost:4701"
+            }
+          },
+          "template": {
+            "containers": [
+              {
+                "name": "main",
+                "image": "nginx:alpine"
+              }
+            ]
+          }
+        }
+      }
     }
   ],
   "events": [
@@ -1207,6 +1284,39 @@
       "resourceType": "Nimbus.Kubernetes/pods",
       "name": "worker",
       "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.ContainerService/managedClusters/aks-nimbus"
+    },
+    {
+      "seq": 39,
+      "time": "2026-10-28T15:05:08Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "azure",
+      "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.OperationalInsights/workspaces/law-nimbus",
+      "resourceType": "Microsoft.OperationalInsights/workspaces",
+      "name": "law-nimbus",
+      "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app"
+    },
+    {
+      "seq": 40,
+      "time": "2026-10-28T15:05:10Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "azure",
+      "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.App/managedEnvironments/cae-nimbus",
+      "resourceType": "Microsoft.App/managedEnvironments",
+      "name": "cae-nimbus",
+      "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app"
+    },
+    {
+      "seq": 41,
+      "time": "2026-10-28T15:05:12Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "azure",
+      "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.App/containerApps/web",
+      "resourceType": "Microsoft.App/containerApps",
+      "name": "web",
+      "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app"
     }
   ],
   "blobs": {
@@ -1239,12 +1349,12 @@
     {
       "id": "20261028T150411.000Z",
       "start": "2026-10-28T15:04:11Z",
-      "end": "2026-10-28T15:05:06Z",
-      "created": 29,
+      "end": "2026-10-28T15:05:12Z",
+      "created": 32,
       "updated": 1,
       "deleted": 0,
       "requests": 8,
-      "steps": 30,
+      "steps": 33,
       "events": [
         {
           "seq": 1,
@@ -1663,6 +1773,39 @@
           "resourceType": "Nimbus.Kubernetes/pods",
           "name": "worker",
           "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.ContainerService/managedClusters/aks-nimbus"
+        },
+        {
+          "seq": 39,
+          "time": "2026-10-28T15:05:08Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "azure",
+          "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.OperationalInsights/workspaces/law-nimbus",
+          "resourceType": "Microsoft.OperationalInsights/workspaces",
+          "name": "law-nimbus",
+          "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app"
+        },
+        {
+          "seq": 40,
+          "time": "2026-10-28T15:05:10Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "azure",
+          "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.App/managedEnvironments/cae-nimbus",
+          "resourceType": "Microsoft.App/managedEnvironments",
+          "name": "cae-nimbus",
+          "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app"
+        },
+        {
+          "seq": 41,
+          "time": "2026-10-28T15:05:12Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "azure",
+          "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app/providers/Microsoft.App/containerApps/web",
+          "resourceType": "Microsoft.App/containerApps",
+          "name": "web",
+          "parentId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-nimbus-app"
         }
       ]
     }
@@ -1721,5 +1864,27 @@
         }
       ]
     }
+  },
+  "logs": {
+    "395318f5-e004-b89a-b538-9472349fe52d": [
+      {
+        "time": "2026-11-11T14:24:50Z",
+        "app": "web",
+        "stream": "stdout",
+        "message": "/docker-entrypoint.sh: Configuration complete; ready for start up"
+      },
+      {
+        "time": "2026-11-11T14:24:50Z",
+        "app": "web",
+        "stream": "stdout",
+        "message": "2026/11/11 14:24:50 [notice] 1#1: start worker processes"
+      },
+      {
+        "time": "2026-11-11T14:24:51Z",
+        "app": "web",
+        "stream": "stdout",
+        "message": "172.17.0.1 - - [11/Nov/2026:14:24:51 +0000] \"GET / HTTP/1.1\" 200 896 \"-\" \"curl/8.7.1\""
+      }
+    ]
   }
 }

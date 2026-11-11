@@ -6,7 +6,7 @@
 // own module, which is why these are not in inspector.js.
 
 import { $ } from "./dom.js";
-import { getBlobs, blobURL, getSecrets, getSecret } from "./api.js";
+import { getBlobs, blobURL, getSecrets, getSecret, getLogs, getResource } from "./api.js";
 
 // Blobs are not graph nodes -- a container can hold thousands -- so they are
 // fetched for whichever container is selected and listed here instead.
@@ -127,4 +127,83 @@ function humanSize(n) {
 }
 
 // panels is what inspector.js calls for a selected Azure resource.
-export const panels = [showBlobs, showSecrets];
+// A workspace's lines, and a container app's own output.
+//
+// Beside the resource that produced them, which is the thing a log viewer
+// never gives you: `docker logs` knows the container and not the app, and
+// a query needs a customerId somebody has to find first. Selecting the app
+// is the shortest path from "what is this" to "what has it been doing".
+//
+// A workspace shows everything sent to it; an app shows its own lines,
+// which means resolving the workspace its ENVIRONMENT names -- the same
+// indirection the server's ingestion does, and the reason an app with no
+// workspace configured shows nothing here rather than an error.
+async function showLogs(r) {
+  const panel = $("#i-logs");
+  const type = r ? (r.type || "").toLowerCase() : "";
+  const isWorkspace = type === "microsoft.operationalinsights/workspaces";
+  const isApp = type === "microsoft.app/containerapps";
+  if (!isWorkspace && !isApp) {
+    panel.hidden = true;
+    return;
+  }
+
+  const props = (r.body && r.body.properties) || {};
+  let workspace = isWorkspace ? props.customerId : await workspaceOfApp(props);
+  if (!workspace) {
+    // An app whose environment names no workspace. Real Azure has
+    // nowhere to put its logs either; saying so beats an empty list that
+    // reads as "it has printed nothing".
+    panel.hidden = false;
+    $("#i-logs-count").textContent = "no workspace";
+    $("#i-logs-list").innerHTML =
+      "<div class='muted'>This app's environment has no Log Analytics workspace, " +
+      "so its output stays in the container console only.</div>";
+    return;
+  }
+
+  panel.hidden = false;
+  $("#i-logs-list").innerHTML = "<div class='muted'>Loading…</div>";
+  let rows = [];
+  try {
+    rows = await getLogs(workspace, isApp ? r.name : "");
+  } catch (e) {
+    $("#i-logs-list").innerHTML = "<div class='muted'>Could not load logs.</div>";
+    return;
+  }
+  $("#i-logs-count").textContent = rows.length === 1 ? "1 line" : `${rows.length} lines`;
+  if (!rows.length) {
+    $("#i-logs-list").innerHTML = "<div class='muted'>Nothing has been logged yet.</div>";
+    return;
+  }
+  $("#i-logs-list").replaceChildren(...rows.map(logRow));
+}
+
+// workspaceOfApp follows an app to its environment to its workspace.
+async function workspaceOfApp(props) {
+  const envID = props.managedEnvironmentId;
+  if (!envID) return "";
+  try {
+    const env = await getResource(envID);
+    const cfg = ((env.body || {}).properties || {}).appLogsConfiguration || {};
+    return (cfg.logAnalyticsConfiguration || {}).customerId || "";
+  } catch (e) {
+    return "";
+  }
+}
+
+function logRow(row) {
+  const el = document.createElement("div");
+  el.className = "log-row";
+  const time = document.createElement("span");
+  time.className = "log-time muted";
+  // Time only: the date is almost always today and the column is narrow.
+  time.textContent = String(row.time || "").slice(11, 19);
+  const msg = document.createElement("span");
+  msg.className = "log-msg";
+  msg.textContent = row.message;
+  el.append(time, msg);
+  return el;
+}
+
+export const panels = [showBlobs, showSecrets, showLogs];

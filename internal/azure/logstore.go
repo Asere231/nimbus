@@ -236,3 +236,47 @@ func (s *Server) workspaceCustomerIDs() map[string]string {
 func sortLines(lines []logLine) {
 	sort.SliceStable(lines, func(i, j int) bool { return lines[i].Time < lines[j].Time })
 }
+
+// ListLogs is the visualizer's view of a workspace: the most recent lines,
+// newest last, optionally narrowed to one app.
+//
+// The shape is internal/ui's rather than this package's, which is why the
+// adapter lives in cmd/nimbus -- the same arrangement the blob and secret
+// browsers have, so internal/ui knows nothing about Log Analytics and
+// internal/azure knows nothing about the visualizer.
+func (s *Server) ListLogs(workspace, app string, limit int) []logLine {
+	lines := s.logs.all(workspace)
+	sortLines(lines)
+	if app != "" {
+		var narrowed []logLine
+		for _, l := range lines {
+			if eq(l.App, app) {
+				narrowed = append(narrowed, l)
+			}
+		}
+		lines = narrowed
+	}
+	if limit > 0 && len(lines) > limit {
+		lines = lines[len(lines)-limit:]
+	}
+	return lines
+}
+
+// LogLine is one row, exported so cmd/nimbus can adapt it to the
+// visualizer's shape without this package importing internal/ui.
+type LogLine struct {
+	Time    string
+	App     string
+	Stream  string
+	Message string
+}
+
+// Logs returns a workspace's lines in the exported shape.
+func (s *Server) Logs(workspace, app string, limit int) []LogLine {
+	in := s.ListLogs(workspace, app, limit)
+	out := make([]LogLine, 0, len(in))
+	for _, l := range in {
+		out = append(out, LogLine{Time: l.Time, App: l.App, Stream: l.Stream, Message: l.Message})
+	}
+	return out
+}

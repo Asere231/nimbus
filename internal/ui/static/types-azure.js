@@ -110,13 +110,23 @@ export const ROOT_LABEL = "subscriptions";
 // place; AWS has no equivalent, so it has none.
 export const GROUP_TYPE = "microsoft.resources/resourcegroups";
 
-// ROLE_ASSIGNMENT is the one Azure relationship that is not containment: a
-// principal somewhere in the graph granted access to a resource somewhere
-// else. render.js draws these as dashed links.
+// ROLE_ASSIGNMENT was the FIRST Azure relationship that is not
+// containment: a principal somewhere in the graph granted access to a
+// resource somewhere else. render.js draws these as dashed links.
 export const ROLE_ASSIGNMENT = "microsoft.authorization/roleassignments";
 
+// CONTAINER_APP is the second. An app's ARM parent is its resource group,
+// because that is where its id says it lives -- the environment is a
+// REFERENCE in properties.managedEnvironmentId, structurally the same kind
+// of thing as a role assignment's scope. So it is drawn as a link rather
+// than by nesting the app inside the environment, which would make the
+// graph disagree with the resource id.
+export const CONTAINER_APP = "microsoft.app/containerapps";
+
 // identityLinks returns the from/to pairs to draw for a set of laid-out
-// nodes. A cloud without such a relationship simply does not export it.
+// nodes -- every non-containment edge, not only the identity ones it was
+// written for. A cloud without such a relationship simply does not export
+// it.
 export function identityLinks(nodes) {
   // principalId -> the node that OWNS that principal. A user-assigned
   // identity reports it in properties; everything else carries one in
@@ -145,6 +155,15 @@ export function identityLinks(nodes) {
     const to = byKey.get(String(props.scope || "").toLowerCase());
     if (!from || !to || from === to) continue;
     out.push({ from, to, label: roleName(props.roleDefinitionId) });
+  }
+
+  // A container app to the environment it runs in.
+  for (const n of nodes) {
+    if ((n.r.type || "").toLowerCase() !== CONTAINER_APP) continue;
+    const props = (n.r.body && n.r.body.properties) || {};
+    const to = byKey.get(String(props.managedEnvironmentId || "").toLowerCase());
+    if (!to || to === n) continue;
+    out.push({ from: n, to, label: "environment" });
   }
   return out;
 }

@@ -28,10 +28,11 @@ type Info struct {
 // Handler returns the visualizer's HTTP handler. blobs and secrets may be
 // nil, in which case those endpoints are simply not registered.
 func Handler(store *core.Store, bus *core.Bus, info Info, blobs BlobBrowser, secrets SecretBrowser,
-	explainers map[string]Explainer) http.Handler {
+	logs LogBrowser, explainers map[string]Explainer) http.Handler {
 	mux := http.NewServeMux()
 	registerBlobRoutes(mux, blobs)
 	registerSecretRoutes(mux, secrets)
+	registerLogRoutes(mux, logs)
 	registerAuthzRoutes(mux, store, explainers)
 
 	// The plan overlay, pushed in by `nimbus plan-view`. One at a time, in

@@ -122,3 +122,16 @@ export async function getAccess(id) {
   if (fixtureMode) return ((await fixture()).access || {})[id] || null;
   return json("/api/authz?resource=" + encodeURIComponent(id));
 }
+
+// getLogs asks for a workspace's recent lines, optionally one app's. In
+// ?fixture mode they come from the fixture, so the panel can be looked at
+// with no server.
+export async function getLogs(workspace, app) {
+  if (fixtureMode) {
+    const all = ((await fixture()).logs || {})[workspace] || [];
+    return app ? all.filter((l) => l.app === app) : all;
+  }
+  const q = new URLSearchParams({ workspace });
+  if (app) q.set("app", app);
+  return json("/api/loganalytics/logs?" + q.toString());
+}

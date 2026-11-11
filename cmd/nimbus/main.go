@@ -191,6 +191,7 @@ func start(args []string) {
 	var servers []*cloudServer
 	var blobs ui.BlobBrowser
 	var secrets ui.SecretBrowser
+	var logs ui.LogBrowser
 	// Each cloud answers "why is this allowed or denied" for its own
 	// resources, with its own evaluator -- the same one that refuses a
 	// request, so the explanation cannot drift from the behaviour.
@@ -206,6 +207,7 @@ func start(args []string) {
 		az := azure.New(azCfg, store, bus)
 		explainers["azure"] = az
 		blobs = blobBrowser{az.BlobBrowser()}
+		logs = logBrowser{az}
 		secrets = secretBrowser{az.SecretBrowser()}
 		servers = append(servers, &cloudServer{
 			name:  "azure",
@@ -293,7 +295,7 @@ func start(args []string) {
 		Addr: fmt.Sprintf(":%d", *uiPort),
 		Handler: ui.Handler(store, bus,
 			ui.Info{Version: version, Clouds: endpoints, DataDir: dataDir}, blobs, secrets,
-			explainers),
+			logs, explainers),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -653,6 +655,22 @@ func nimbusClient() (*http.Client, error) {
 
 // secretBrowser adapts the Key Vault data plane to the visualizer's
 // interface, in the same place and for the same reason as blobBrowser.
+// logBrowser adapts Azure's log store to the visualizer's shape, so
+// internal/ui knows nothing about Log Analytics and internal/azure
+// knows nothing about the visualizer -- the same arrangement the blob and
+// secret browsers have.
+type logBrowser struct{ az *azure.Server }
+
+func (b logBrowser) ListLogs(workspace, app string, limit int) []ui.LogRow {
+	out := []ui.LogRow{}
+	for _, l := range b.az.Logs(workspace, app, limit) {
+		out = append(out, ui.LogRow{
+			Time: l.Time, App: l.App, Stream: l.Stream, Message: l.Message,
+		})
+	}
+	return out
+}
+
 type secretBrowser struct{ h *keyvault.Handler }
 
 func (b secretBrowser) ListSecrets(vault string) []ui.SecretInfo {

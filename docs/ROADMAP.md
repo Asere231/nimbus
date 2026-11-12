@@ -1,10 +1,12 @@
 # Roadmap
 
-**Current: nothing scheduled.** Milestone 17 closed Phase 5: a policy
+**Current: Milestone 18 — Windows, properly
+(`docs/prompts/m18-windows.md`).** Milestone 17 closed Phase 5: a policy
 attached to a RESOURCE now decides on all three clouds, and Azure's
-`dataActions` are enforced where a principal exists. See "Still
-unscheduled" below for what is left, of which Windows is the gap to
-trust least.
+`dataActions` are enforced where a principal exists. Windows is the gap
+to trust least — the code is built and unit-tested there on every push,
+and no Windows machine has ever run Terraform, `az` or `kubectl` against
+it.
 
 **Phase 4 is complete.** Milestone 11 gave all three clouds instances that
 really boot, Milestone 12 cleared the defects that made Nimbus quietly
@@ -206,6 +208,7 @@ to demonstrate once there are instances to refuse it to.
 | 15 | ~~**Finishing Azure**: Container Apps on the `run` engine, Log Analytics that ingests and queries~~ **done** | `curl` reaches a container Terraform created, and its stdout comes back out of a Log Analytics query |
 | 16 | ~~**A network view for AWS and GCP**~~ **done** | An EC2 and a GCE instance each appear in the subnet they belong to |
 | 17 | ~~**Resource-level policies**~~ **done** | A principal reads a bucket ONLY because of the bucket policy, and an explicit deny in it wins |
+| 18 | **Windows, properly** | Terraform, a data plane and a container all work on Windows, and what is different is written down |
 
 Milestone 15 was first because Azure was the one cloud that could not run
 code, and it was indeed the cheapest: `internal/engines/run` already did
@@ -255,11 +258,14 @@ the work and Azure simply was not using it, and
 
 **Still unscheduled, and the gap to trust least:**
 
-- **Windows, properly.** Still only DNS-tested; no Windows machine has run
-  Terraform, `az` or `kubectl` against Nimbus. Three platform bugs have
-  reached `main` by only ever being proven on a Mac, which is the whole
-  argument for doing it — and it wants a session on a Windows machine
-  rather than a milestone prompt.
+- **Windows, properly** is Milestone 18 (`docs/prompts/m18-windows.md`),
+  and it wants a session ON a Windows machine. Still only DNS-tested: the
+  `*.localhost` finding was verified with a resolver call and no client
+  has ever used it there. Three platform bugs have reached `main` by only
+  ever being proven on a Mac, which is the whole argument for doing it.
+  The prompt lists the suspicions worth checking first — a
+  case-insensitive filesystem collapsing two S3 keys into one file is the
+  sharpest.
 
 ## Design decisions still open
 

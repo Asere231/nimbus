@@ -174,13 +174,31 @@ func (s *Server) Start() func() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		reattachCtx, done := context.WithTimeout(ctx, 2*time.Minute)
-		for _, found := range s.k3s.Reattach(reattachCtx, s.store.Exists) {
-			s.setClusterStatus(found.Cluster.ResourceID, found)
-		}
+		s.reattach(reattachCtx)
 		done()
 		s.k3s.Watch(ctx)
 	}()
 	return cancel
+}
+
+// reattach adopts everything a previous Nimbus left running.
+//
+// EVERY engine, which is the point: until this existed only clusters were
+// adopted, and the other two were simply forgotten. With --persist their
+// containers outlive the process by design, so forgetting them left a
+// Lambda whose store entry still said Active, whose every invoke answered
+// ResourceNotReadyException, and whose container a destroy could not find
+// to remove -- with the thing plainly Up in `docker ps`.
+//
+// Synchronous, and called from the goroutine rather than being one, so a
+// test can put the system in the state it means to assert about instead of
+// racing a background adoption.
+func (s *Server) reattach(ctx context.Context) {
+	for _, found := range s.k3s.Reattach(ctx, s.store.Exists) {
+		s.setClusterStatus(found.Cluster.ResourceID, found)
+	}
+	s.vms.Reattach(ctx, s.store.Exists)
+	s.lambda.Reattach(ctx, s.store.Exists)
 }
 
 // setClusterStatus records what reattaching found. A container that is
@@ -217,6 +235,12 @@ func (s *Server) Shutdown(ctx context.Context) {
 func (s *Server) UseDocker(d docker.Client) {
 	s.k3s.SetDocker(d)
 	s.lambda.SetDocker(d)
+	// The vm engine too. It was missed, which meant `s.vms` kept the real
+	// CLI through every test that called this -- exactly what the comment
+	// in newLambdaTestServer says must never happen, since a handler that
+	// starts a container would leave it running after the package passed.
+	// Azure and GCP both swap all three; AWS was the odd one out.
+	s.vms.SetDocker(d)
 }
 
 // K3s exposes the engine, which the EKS tests drive directly.

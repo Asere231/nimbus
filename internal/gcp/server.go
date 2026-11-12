@@ -204,9 +204,7 @@ func (s *Server) Start() func() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		reattachCtx, done := context.WithTimeout(ctx, 2*time.Minute)
-		for _, found := range s.k3s.Reattach(reattachCtx, s.store.Exists) {
-			s.setGKEStatus(found)
-		}
+		s.reattach(reattachCtx)
 		done()
 		s.k3s.Watch(ctx)
 	}()
@@ -394,4 +392,24 @@ func lastSegment(s string) string {
 		return s[i+1:]
 	}
 	return s
+}
+
+// reattach adopts everything a previous Nimbus left running.
+//
+// EVERY engine, which is the point: until this existed only clusters were
+// adopted, and instances and Cloud Run services were forgotten. With
+// --persist their containers outlive the process by design, so forgetting
+// them left a service still advertising its URL and serving nothing -- the
+// proxy is built from svc.Port, and an un-adopted service has none -- and
+// an instance whose container a delete could not find to remove.
+//
+// Synchronous, and called from the goroutine rather than being one, so a
+// test can put the system in the state it means to assert about instead of
+// racing a background adoption.
+func (s *Server) reattach(ctx context.Context) {
+	for _, found := range s.k3s.Reattach(ctx, s.store.Exists) {
+		s.setGKEStatus(found)
+	}
+	s.vms.Reattach(ctx, s.store.Exists)
+	s.services.Reattach(ctx, s.store.Exists)
 }

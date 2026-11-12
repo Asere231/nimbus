@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -72,4 +73,26 @@ func FreePort(base int) (int, error) {
 		return port, nil
 	}
 	return 0, fmt.Errorf("no free port found between %d and %d", base, base+500)
+}
+
+// HostPort is the host port a container publishes its containerPort on, or
+// 0 if it does not publish it.
+//
+// Ports maps "8080/tcp" to "addr:port", so the host port is what follows the
+// LAST colon -- an IPv6 bind address has its own.
+//
+// Every engine that adopts a container after a restart needs this: the port
+// is the one thing about a running container that cannot be derived, and an
+// adopted function or service without it is one nothing can reach.
+func HostPort(c Container, containerPort string) int {
+	hostPort := c.Ports[containerPort]
+	i := strings.LastIndex(hostPort, ":")
+	if i < 0 {
+		return 0
+	}
+	n, err := strconv.Atoi(hostPort[i+1:])
+	if err != nil {
+		return 0
+	}
+	return n
 }

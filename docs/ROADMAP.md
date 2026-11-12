@@ -314,19 +314,6 @@ the work and Azure simply was not using it, and
 
 ## Later
 
-- **Only k3s clusters are reattached after a restart.** `vm.Engine.Reattach`
-  exists, is unit-tested by `TestReattachAdoptsContainersItFinds`, and is
-  called by NOBODY — all three clouds reattach `s.k3s` and nothing else, and
-  `funcs` and `run` have no Reattach at all. So with `--persist` an instance,
-  Lambda or service container survives a Nimbus restart by design, the
-  engine's registry comes back empty, and a later `terraform destroy` cannot
-  find the container to remove: `vms.Get(id)` is nil, terminate retires the
-  record and the container is orphaned for ever. Measured in Milestone 18 —
-  restart between an `aws-instance` apply and its destroy and the container
-  is still Up afterwards. A unit test proving a method works while nothing
-  calls it is this repo's "passes for the wrong reason" trap in its purest
-  form. Wiring Reattach into the three clouds, for all three engines, is its
-  own piece of work.
 - **`nimbus --help` is not a command**, so it falls through to the usage text
   on stderr and exits 2. In PowerShell that renders as a red
   `NativeCommandError` block, which is an alarming first contact with the

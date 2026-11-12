@@ -240,16 +240,7 @@ func (s *Server) Start() func() {
 		// Reattach first, so a restart with --persist picks up existing
 		// containers before the watcher starts asking about them.
 		reattachCtx, done := context.WithTimeout(ctx, 2*time.Minute)
-		s.reattachRegistries(reattachCtx)
-		// A cluster whose container is gone or unreachable is Failed: the
-		// resource is what Terraform reads, so it has to say so.
-		for _, found := range s.k3s.Reattach(reattachCtx, s.store.Exists) {
-			state := "Failed"
-			if found.Ready {
-				state = "Succeeded"
-			}
-			s.setProvisioningState(found.Cluster.ResourceID, state)
-		}
+		s.reattach(reattachCtx)
 		done()
 		s.k3s.Watch(ctx)
 	}()
@@ -458,4 +449,32 @@ func readBody(r *http.Request) (map[string]any, error) {
 		return nil, fmt.Errorf("request body is not a JSON object: %w", err)
 	}
 	return m, nil
+}
+
+// reattach adopts everything a previous Nimbus left running.
+//
+// EVERY engine, which is the point: until this existed only clusters and
+// registries were adopted, and VMs and container apps were forgotten. With
+// --persist their containers outlive the process by design, so forgetting
+// them left a container app still advertising its FQDN in the store and
+// serving nothing -- the proxy a request goes through is built from
+// svc.Port, and an un-adopted service has no port. The container was up,
+// the resource read back perfectly, and the address did not work.
+//
+// Synchronous, and called from the goroutine rather than being one, so a
+// test can put the system in the state it means to assert about instead of
+// racing a background adoption.
+func (s *Server) reattach(ctx context.Context) {
+	s.reattachRegistries(ctx)
+	// A cluster whose container is gone or unreachable is Failed: the
+	// resource is what Terraform reads, so it has to say so.
+	for _, found := range s.k3s.Reattach(ctx, s.store.Exists) {
+		state := "Failed"
+		if found.Ready {
+			state = "Succeeded"
+		}
+		s.setProvisioningState(found.Cluster.ResourceID, state)
+	}
+	s.vms.Reattach(ctx, s.store.Exists)
+	s.apps.Reattach(ctx, s.store.Exists)
 }

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.18.1 — 2026-11-12
+
+`--persist` now restores the running things, not just the store.
+
+- **Every engine is reattached on startup.** Only k3s clusters were, so
+  after a restart with `--persist` a Lambda read back `Active` and
+  answered `ResourceNotReadyException` to every invoke; a container app
+  and a Cloud Run service kept their addresses and served nothing; and an
+  instance could not be terminated, because the delete never reached a
+  container the registry had forgotten. In every case the container was
+  plainly `Up` in `docker ps`, which is the least helpful place for the
+  evidence to be.
+- `funcs` and `run` gained a `Reattach`; `vm` already had one, written,
+  unit-tested and called by nobody. The assertion now lives at the cloud,
+  where the wiring is, rather than at the engine, where it passed while
+  nothing invoked it.
+- **`UseDocker` on the AWS server missed the vm engine**, so it kept the
+  real Docker client through every test that called it — what the test
+  harness's own comment says must never happen.
+
 ## 0.18.0 — 2026-11-12
 
 Milestone 18: Windows, actually run. The code had been built and

@@ -140,7 +140,7 @@ func (s *Server) projectIAM(w http.ResponseWriter, r *http.Request, id, verb str
 			Permissions []string `json:"permissions"`
 		}
 		_ = readJSON(r, &req)
-		writeJSON(w, http.StatusOK, map[string]any{"permissions": s.heldPermissions(r, req.Permissions)})
+		writeJSON(w, http.StatusOK, map[string]any{"permissions": s.heldPermissions(r, id, req.Permissions)})
 		return ""
 	}
 	e := notFound("Nimbus does not implement the %q verb yet", verb)

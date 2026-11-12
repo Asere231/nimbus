@@ -53,7 +53,7 @@ func (b *bindingRule) Source() string       { return b.source }
 func (b *bindingRule) Applies(req authz.Request) (bool, error) {
 	// Scope first, so a binding on another resource says nothing about
 	// this request -- including when its role is one Nimbus cannot read.
-	if b.resource != "" && !eqFold(b.resource, req.Resource) {
+	if !coversResource(b.resource, req.Resource) {
 		return false, nil
 	}
 	if b.unsupported != nil {
@@ -177,7 +177,11 @@ func (s *Server) rulesFor(member string) []authz.Rule {
 			fmt.Sprintf("project IAM binding #%d (%s)", i+1, str(b["role"])),
 			str(b["role"]), ""))
 	}
-	return rules
+	// And every binding attached to a resource of its own. The two sets
+	// are simply concatenated: a resource binding is another binding,
+	// which is GCP's whole model and why this cloud needed no
+	// combination rule of its own.
+	return append(rules, s.resourceRulesFor(member)...)
 }
 
 // bindingNames reports whether a binding's members include this one.
@@ -293,7 +297,12 @@ func permissionDenied(p authz.Principal, permission, reason string) *apiError {
 // heldPermissions filters a list down to the ones the caller actually has,
 // which is what testIamPermissions is for. With enforcement off every
 // permission is held, because nothing is refused.
-func (s *Server) heldPermissions(r *http.Request, asked []string) []string {
+// `resource` is what the question is about. It is not optional: a
+// binding attached to one resource is scoped to it, so asking with an
+// empty resource reports a member holding none of the permissions its
+// own resource policy grants -- which is the opposite of what this call
+// exists to prevent.
+func (s *Server) heldPermissions(r *http.Request, resource string, asked []string) []string {
 	if !s.cfg.EnforceIAM {
 		return asked
 	}
@@ -304,7 +313,9 @@ func (s *Server) heldPermissions(r *http.Request, asked []string) []string {
 	rules := s.rulesFor(p.ID)
 	held := []string{}
 	for _, permission := range asked {
-		d := authz.Evaluate(authz.Request{Principal: p, Action: permission}, rules)
+		d := authz.Evaluate(authz.Request{
+			Principal: p, Action: permission, Resource: resource,
+		}, rules)
 		if d.Allowed {
 			held = append(held, permission)
 		}

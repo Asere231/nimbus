@@ -412,9 +412,15 @@ func (s *Server) serviceVerb(w http.ResponseWriter, r *http.Request, location, n
 		writeJSON(w, http.StatusOK, policy)
 		return nil
 	case "testIamPermissions":
+		// The truth, not an echo. Echoing was honest while nothing was
+		// enforced; now it would be a lie told by the one call whose
+		// job is to stop a client being surprised by a 403 -- the same
+		// correction the project policy's got in Milestone 14.
 		var req map[string]any
 		_ = readJSON(r, &req)
-		writeJSON(w, http.StatusOK, map[string]any{"permissions": req["permissions"]})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"permissions": s.heldPermissions(r, name, stringList(req["permissions"])),
+		})
 		return nil
 	}
 	return notFound("Nimbus does not emulate the Cloud Run %s verb yet", verb)

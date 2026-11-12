@@ -128,10 +128,17 @@ func shapeOf(r *http.Request, parts []string) (collection, name, verb string) {
 
 	// What is left alternates collection, name, collection, name...
 	rest := trimmed[i:]
+	// Whether a resource was NAMED, tracked apart from the name itself:
+	// an object's name is composed with its bucket's below, and the
+	// composed value is non-empty even for a collection-level call. The
+	// verb depends on the former -- GET /b/demo/o is a LIST.
+	container, named := "", false
 	for j := 0; j < len(rest); j += 2 {
+		container = name
 		collection = rest[j]
 		name = ""
-		if j+1 < len(rest) {
+		named = j+1 < len(rest)
+		if named {
 			name = rest[j+1]
 		}
 		if expanded, ok := storageCollections[collection]; ok {
@@ -148,10 +155,22 @@ func shapeOf(r *http.Request, parts []string) (collection, name, verb string) {
 			if j+1 < len(rest) {
 				name = strings.Join(rest[j+1:], "/")
 			}
+			// An object is named WITH ITS BUCKET, which is the one
+			// place a resource's container is part of its identity
+			// here. Two reasons, and both are load-bearing: a bucket's
+			// own IAM binding has to reach its objects, which is what
+			// everybody means by granting access to a bucket; and a
+			// refusal reading "denied on today.txt" names an object in
+			// no particular bucket, which tells nobody anything.
+			if container != "" && name != "" {
+				name = container + "/" + name
+			} else if container != "" {
+				name = container
+			}
 			break
 		}
 	}
-	return collection, name, verbFor(r, name != "", colonVerb)
+	return collection, name, verbFor(r, named, colonVerb)
 }
 
 // isPrefixSegment reports a leading service or version segment, which

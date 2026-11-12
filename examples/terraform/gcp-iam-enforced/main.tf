@@ -135,6 +135,71 @@ resource "google_storage_bucket_object" "report" {
   depends_on = [google_project_iam_member.app]
 }
 
+# --- a binding on the RESOURCE, not on the project -------------------------
+#
+# Milestone 17. Everything above grants at the PROJECT, which reaches
+# every resource in it. A bucket's own IAM policy grants on that bucket
+# alone -- and on its objects, which is what everybody means by giving a
+# service account access to a bucket.
+#
+# `second_member` holds NO project binding at all. It can write into
+# nimbus-iam-enforced and nowhere else, and the only thing that grants it
+# is google_storage_bucket_iam_member below. Turn `resource_binding` off
+# and the same apply fails with PERMISSION_DENIED.
+#
+# Note which API this uses. Pub/Sub and Cloud Run set a resource policy
+# with a colon verb (`topics/t:setIamPolicy`); Cloud Storage uses a
+# SUB-RESOURCE whose HTTP method carries the verb (`PUT /b/{bucket}/iam`),
+# with the policy as the body rather than wrapped in {"policy": ...}.
+# Four conventions for IAM in one cloud.
+
+variable "second_member" {
+  type        = string
+  default     = "serviceAccount:reports@nimbus-local.iam.gserviceaccount.com"
+  description = "A member with no project binding, granted only by the bucket's own policy."
+}
+
+variable "resource_binding" {
+  type        = bool
+  default     = true
+  description = <<-EOT
+    Whether the bucket grants second_member anything. Set it to false and
+    the second object fails with PERMISSION_DENIED on
+    storage.objects.create, naming a member that holds nothing anywhere
+    else -- which is the point: the bucket was the only thing granting it.
+  EOT
+}
+
+provider "google" {
+  alias   = "reports"
+  project = var.project
+  region  = var.region
+
+  access_token = var.second_member
+
+  storage_custom_endpoint             = "${var.nimbus_endpoint}/storage/v1/"
+  resource_manager_custom_endpoint    = "${var.nimbus_endpoint}/v1/"
+  resource_manager_v3_custom_endpoint = "${var.nimbus_endpoint}/v3/"
+}
+
+resource "google_storage_bucket_iam_member" "reports" {
+  count = var.resource_binding ? 1 : 0
+
+  bucket = google_storage_bucket.data.name
+  role   = "roles/storage.objectAdmin"
+  member = var.second_member
+}
+
+resource "google_storage_bucket_object" "from_resource_binding" {
+  provider = google.reports
+
+  name    = "reports/from-the-bucket-policy.txt"
+  bucket  = google_storage_bucket.data.name
+  content = "written by ${var.second_member}, allowed only by the bucket's own policy\n"
+
+  depends_on = [google_storage_bucket_iam_member.reports]
+}
+
 output "member" {
   value = var.app_member
 }

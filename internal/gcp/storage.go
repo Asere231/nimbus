@@ -42,6 +42,27 @@ func (s *Server) serveStorage(w http.ResponseWriter, r *http.Request, parts []st
 		return s.deleteBucket(w, r, rest[0])
 	}
 
+	// A bucket's own IAM policy, and a FOURTH convention for IAM in one
+	// cloud. Pub/Sub and Cloud Run use colon verbs on the resource
+	// (`:setIamPolicy`), resourcemanager uses one on the project, and
+	// Cloud Storage uses a SUB-RESOURCE with the HTTP method carrying
+	// the verb: GET /b/{b}/iam reads, PUT writes, POST /b/{b}/iam/
+	// testPermissions asks. Its body is the Policy object itself rather
+	// than {"policy": {...}}, which policyFromRequest absorbs.
+	if len(rest) == 2 && rest[1] == "iam" {
+		return s.bucketIAM(w, r, rest[0])
+	}
+	if len(rest) == 3 && rest[1] == "iam" && rest[2] == "testPermissions" {
+		// The permissions are a repeated QUERY parameter here, not a
+		// body -- the one place GCP asks this question with a GET-shaped
+		// request.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"kind":        "storage#testIamPermissionsResponse",
+			"permissions": s.heldPermissions(r, rest[0], r.URL.Query()["permissions"]),
+		})
+		return ""
+	}
+
 	// Anywhere Caches, which matter far more than they look.
 	//
 	// The provider asks for them INSIDE its force_destroy loop, and its own
@@ -278,4 +299,42 @@ func bumpString(v any) string {
 func sortedNames(names []string) []string {
 	sort.Strings(names)
 	return names
+}
+
+// bucketIAM serves GET and PUT on /b/{bucket}/iam.
+//
+// A bucket's policy grants on the bucket AND on its objects, which is
+// what everybody means by giving a service account access to a bucket --
+// see coversResource, where that containment lives.
+func (s *Server) bucketIAM(w http.ResponseWriter, r *http.Request, name string) string {
+	id := s.bucketLink(name)
+	if _, err := s.store.Get(id); err != nil {
+		writeError(w, notFound("Not Found (bucket=%s).", name))
+		return "no such bucket"
+	}
+	switch r.Method {
+	case http.MethodGet:
+		policy := s.getResourcePolicy(id)
+		policy["kind"] = "storage#policy"
+		policy["resourceId"] = "projects/_/buckets/" + name
+		writeJSON(w, http.StatusOK, policy)
+		return ""
+	case http.MethodPut, http.MethodPost:
+		policy, aerr := policyFromRequest(r)
+		if aerr != nil {
+			writeError(w, aerr)
+			return "bad policy"
+		}
+		if err := s.setResourcePolicy(id, policy); err != nil {
+			writeError(w, internalError(err))
+			return "storing the policy"
+		}
+		out := s.getResourcePolicy(id)
+		out["kind"] = "storage#policy"
+		out["resourceId"] = "projects/_/buckets/" + name
+		writeJSON(w, http.StatusOK, out)
+		return ""
+	}
+	writeError(w, notFound("Nimbus does not implement %s on a bucket's IAM policy", r.Method))
+	return "bucket iam " + r.Method
 }

@@ -94,6 +94,15 @@ func (s *Server) pubsubKind(collection string) (resourceType string, nameFor fun
 	return "", nil, false
 }
 
+// pubsubID is the store id for a topic or a subscription, which is also
+// its full resource name.
+func (s *Server) pubsubID(collection, name string) string {
+	if _, nameFor, ok := s.pubsubKind(collection); ok {
+		return nameFor(name)
+	}
+	return name
+}
+
 func (s *Server) loadPubSub(collection, name string) (map[string]any, *apiError) {
 	resourceType, nameFor, ok := s.pubsubKind(collection)
 	if !ok {
@@ -295,16 +304,28 @@ func (s *Server) pubsubVerb(w http.ResponseWriter, r *http.Request, collection, 
 	case "modifyPushConfig":
 		return s.modifyPushConfig(w, name, req)
 	case "getIamPolicy":
-		// Recorded, never enforced -- as Azure RBAC and AWS IAM are.
-		writeJSON(w, http.StatusOK, map[string]any{"version": 1, "etag": "ACAB"})
+		writeJSON(w, http.StatusOK, s.getResourcePolicy(s.pubsubID(collection, name)))
 		return nil
 	case "setIamPolicy":
+		// This used to echo the policy back and store NOTHING, under a
+		// comment claiming it was recorded. A binding a client sets
+		// successfully and then reads back as absent is worse than no
+		// support at all, because it looks like it worked.
+		id := s.pubsubID(collection, name)
 		policy, _ := req["policy"].(map[string]any)
-		if policy == nil {
-			policy = map[string]any{}
+		if err := s.setResourcePolicy(id, policy); err != nil {
+			return internalError(err)
 		}
-		policy["etag"] = "ACAB"
-		writeJSON(w, http.StatusOK, policy)
+		writeJSON(w, http.StatusOK, s.getResourcePolicy(id))
+		return nil
+	case "testIamPermissions":
+		// The truth, now that there is a truth to tell -- the same fix
+		// the project policy's got in Milestone 14, for the same
+		// reason: this is the one call whose job is to stop a client
+		// being surprised by a 403.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"permissions": s.heldPermissions(r, name, stringList(req["permissions"])),
+		})
 		return nil
 	default:
 		// Refused with the construct named, rather than silently doing

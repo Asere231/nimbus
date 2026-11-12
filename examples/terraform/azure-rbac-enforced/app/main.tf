@@ -49,6 +49,23 @@ variable "app_principal_id" {
   default = "22222222-2222-2222-2222-222222222222"
 }
 
+variable "read_secret" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Whether to read the secret's VALUE, which is a data action. Turn it
+    on AFTER ../platform has granted Network Contributor and the apply
+    above succeeds: with the vault role still Key Vault Reader, this
+    fails with Forbidden on
+    Microsoft.KeyVault/vaults/secrets/getSecret/action -- while reading
+    the VAULT itself keeps working, because that is a control-plane
+    permission and both roles have it.
+
+    Then `-var secrets_user=true` on ../platform and the same apply
+    succeeds. Nothing in this file changes between the two.
+  EOT
+}
+
 variable "vault_name" {
   type        = string
   default     = "kv-nimbus-rbac"
@@ -84,14 +101,23 @@ resource "azurerm_virtual_network" "vnet" {
 # and both Key Vault Reader and Key Vault Secrets User have it. Only the
 # value below depends on the data-action axis, which is exactly how it
 # surprises people in real Azure.
+# Opt-in, and the reason is worth knowing: a DATA SOURCE is read during
+# the PLAN, not the apply. Left on, a refused secret read would fail the
+# plan before the VNet above was ever attempted -- so it would hide the
+# control-plane lesson rather than add to it. Two separate things, asked
+# one at a time.
 data "azurerm_key_vault" "kv" {
+  count = var.read_secret ? 1 : 0
+
   name                = var.vault_name
   resource_group_name = var.resource_group
 }
 
 data "azurerm_key_vault_secret" "db" {
+  count = var.read_secret ? 1 : 0
+
   name         = "db-password"
-  key_vault_id = data.azurerm_key_vault.kv.id
+  key_vault_id = data.azurerm_key_vault.kv[0].id
 }
 
 output "vnet_id" {
@@ -99,6 +125,6 @@ output "vnet_id" {
 }
 
 output "secret" {
-  value     = data.azurerm_key_vault_secret.db.value
+  value     = var.read_secret ? data.azurerm_key_vault_secret.db[0].value : null
   sensitive = true
 }

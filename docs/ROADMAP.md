@@ -1,10 +1,10 @@
 # Roadmap
 
-**Current: Milestone 17 — resource-level policies
-(`docs/prompts/m17-resource-policies.md`).** Milestone 16 made the network
-view serve all three clouds: an EC2 and a GCE instance now appear in the
-subnet they belong to, and the drawing no longer knows any cloud's type
-names.
+**Current: nothing scheduled.** Milestone 17 closed Phase 5: a policy
+attached to a RESOURCE now decides on all three clouds, and Azure's
+`dataActions` are enforced where a principal exists. See "Still
+unscheduled" below for what is left, of which Windows is the gap to
+trust least.
 
 **Phase 4 is complete.** Milestone 11 gave all three clouds instances that
 really boot, Milestone 12 cleared the defects that made Nimbus quietly
@@ -205,7 +205,7 @@ to demonstrate once there are instances to refuse it to.
 |---|---|---|
 | 15 | ~~**Finishing Azure**: Container Apps on the `run` engine, Log Analytics that ingests and queries~~ **done** | `curl` reaches a container Terraform created, and its stdout comes back out of a Log Analytics query |
 | 16 | ~~**A network view for AWS and GCP**~~ **done** | An EC2 and a GCE instance each appear in the subnet they belong to |
-| 17 | **Resource-level policies** | A principal reads a bucket ONLY because of the bucket policy, and an explicit deny in it wins |
+| 17 | ~~**Resource-level policies**~~ **done** | A principal reads a bucket ONLY because of the bucket policy, and an explicit deny in it wins |
 
 Milestone 15 was first because Azure was the one cloud that could not run
 code, and it was indeed the cheapest: `internal/engines/run` already did
@@ -238,6 +238,20 @@ the work and Azure simply was not using it, and
   in `test/ui/clouds.test.js`, so a single cloud's type name left in the
   shared drawing now fails the build — and that guard grew a GCP arm,
   which it had never had.
+
+- `examples/terraform/aws-bucket-policy-enforced` proves the half
+  identity-based evaluation could not express: a role whose own policy
+  grants nothing but `sts:GetCallerIdentity` reads an object, and the
+  only reason is the bucket's policy. An explicit `Deny` in that policy
+  beats an `Allow` in the caller's own; `Principal: "*"` makes the bucket
+  readable with no credentials at all (`aws --no-sign-request`), and
+  `restrict_public_buckets` takes that away while the policy still says
+  `*` — which the visualizer's "Public" badge follows, because the badge
+  is derived by the evaluator rather than read off the document.
+  `examples/terraform/gcp-iam-enforced` grows a member granted only by a
+  bucket's own IAM policy, and `azure-rbac-enforced` a secret readable
+  only with "Key Vault Secrets User". All measured against aws 5.100.0,
+  google 6.50.0 and azurerm 4.x.
 
 **Still unscheduled, and the gap to trust least:**
 
@@ -318,14 +332,31 @@ the work and Azure simply was not using it, and
   because AWS publishes base images with the runtime interface emulator
   inside them. There is no Azure equivalent to lean on.
 
-- **Authorization is IDENTITY-based only, on all three clouds.** No
-  resource policies (an S3 bucket policy, a Pub/Sub topic's own bindings
-  and a Cloud Run service's all round-trip and decide nothing), no
-  permission boundaries, no SCPs, no session policies, no Azure deny
-  assignments (Terraform cannot create one — only Blueprints and managed
-  applications can, so there is nothing to drive them with), and a role's
-  trust policy is not evaluated when it is assumed. Azure `dataActions`
-  are recorded and unenforced, because Shared Key carries no principal.
+- **Resource policies ARE evaluated since Milestone 17**, on all three
+  clouds: an S3 bucket policy (with its `Principal` element, and
+  `Principal: "*"` making a bucket genuinely public to unsigned
+  requests), a Pub/Sub topic's and a Cloud Run service's own bindings, a
+  GCS bucket's — which reaches its objects. Azure `dataActions` are
+  enforced on Key Vault's data plane.
+
+  What is still NOT evaluated: permission boundaries, SCPs, session
+  policies, Azure deny assignments (Terraform cannot create one — only
+  Blueprints and managed applications can, so there is nothing to drive
+  them with), a role's trust policy when it is assumed, a Lambda's
+  resource policy (stored so `GetPolicy` can answer), S3 ACLs, and
+  cross-account combination — AWS requires BOTH sides to allow across
+  accounts, and Nimbus has one account, so an allow from either side is
+  enough here. An account-level `Principal` (`...:root`) refuses rather
+  than approximating that rule.
+
+  **Azure STORAGE's data plane cannot be enforced**, and the reason is
+  structural rather than unfinished: Shared Key carries no principal at
+  all, so there is nothing to evaluate a blob data action against. Doing
+  it would mean requiring OAuth on that data plane, which would break
+  `examples/terraform/azure-storage` and `test/storage-sdk`. So a
+  "Storage Blob Data Reader" assignment still governs nothing, while a
+  "Key Vault Secrets User" one decides.
+
   Nothing authenticates either: the credential IS the claim of identity,
   so enforcement answers "would these permissions work", never "is this
   caller genuine".
@@ -509,9 +540,12 @@ the work and Azure simply was not using it, and
   them works because nothing checks it.
 - **Azure role assignments ARE enforced** since Milestone 14, behind
   `--enforce-iam`, including scope inheritance from a subscription or
-  resource group. What is not enforced is `dataActions`: Azure storage's
-  Shared Key carries no principal at all, so a "Key Vault Secrets User"
-  or "Storage Blob Data Reader" assignment still governs nothing.
+  resource group — and since Milestone 17 that includes `dataActions` on
+  **Key Vault's data plane**, so a "Key Vault Secrets User" assignment
+  decides and a Contributor can delete a vault without reading a secret
+  out of it. Storage's data plane is the exception: Shared Key carries no
+  principal, so a "Storage Blob Data Reader" assignment still governs
+  nothing.
 
 - **A mid-apply restart fails the apply.** Terraform polls while the port is
   closed and azurerm reports `unimplemented polling status "Unknown"`. Nothing

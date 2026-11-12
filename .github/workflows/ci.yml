@@ -1285,6 +1285,75 @@ jobs:
             -var grant_write=true -var grant_read=true
           terraform destroy -auto-approve -input=false -var grant_write=true
 
+      # The half identity-based evaluation could not express: the ONLY
+      # thing granting this role is the bucket's own policy. Its inline
+      # policy says sts:GetCallerIdentity and nothing else, so an allow
+      # cannot have come from the caller's side.
+      - name: aws-bucket-policy-enforced, and public access
+        working-directory: examples/terraform/aws-bucket-policy-enforced
+        env:
+          AWS_ACCESS_KEY_ID: nimbus
+          AWS_SECRET_ACCESS_KEY: nimbus
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          read_as() {   # read_as <key> <bucket> -> prints the body or "DENIED"
+            AWS_ACCESS_KEY_ID="$1" AWS_SECRET_ACCESS_KEY=nimbus \
+              aws --endpoint-url http://localhost:4702 \
+              s3 cp "s3://$2/hello.txt" - 2>/dev/null || echo DENIED
+          }
+
+          # Granted by the bucket, refused by the one without a policy.
+          case "$(read_as nimbus-reader nimbus-open)" in
+            *"bucket says so"*) ;;
+            *) echo "::error::the bucket policy did not grant the read"; exit 1 ;;
+          esac
+          case "$(read_as nimbus-reader nimbus-closed)" in
+            DENIED) ;;
+            *) echo "::error::a bucket with no policy allowed the read"; exit 1 ;;
+          esac
+
+          anon() {
+            aws --endpoint-url http://localhost:4702 --no-sign-request \
+              s3 cp s3://nimbus-open/hello.txt - 2>/dev/null || echo DENIED
+          }
+
+          # No credentials at all. Refused until the policy says
+          # Principal: "*" -- an unsigned request used to resolve to the
+          # account ROOT, which is unrestricted, so this is the assertion
+          # that the anonymous principal exists.
+          test "$(anon)" = DENIED || {
+            echo "::error::an unsigned request was allowed on a non-public bucket"; exit 1; }
+
+          terraform apply -auto-approve -input=false -var public=true
+          case "$(anon)" in
+            *"bucket says so"*) ;;
+            *) echo "::error::Principal: \"*\" did not make the bucket public"; exit 1 ;;
+          esac
+
+          # The case worth the trouble: the policy STILL says `*` and the
+          # bucket is not public. A badge read off the document rather
+          # than from the evaluator would be wrong exactly here.
+          terraform apply -auto-approve -input=false -var public=true -var block_public_access=true
+          test "$(anon)" = DENIED || {
+            echo "::error::a public access block did not take public access away"; exit 1; }
+          case "$(read_as nimbus-reader nimbus-open)" in
+            *"bucket says so"*) ;;
+            *) echo "::error::the block also refused a NAMED principal"; exit 1 ;;
+          esac
+
+          # An explicit Deny beats an Allow in the caller's own policy --
+          # which this role does not even have, so it beats the bucket's
+          # own Allow above.
+          terraform apply -auto-approve -input=false -var deny_everyone=true
+          test "$(read_as nimbus-reader nimbus-open)" = DENIED || {
+            echo "::error::an explicit Deny in the bucket policy did not win"; exit 1; }
+
+          terraform destroy -auto-approve -input=false -var deny_everyone=true
+
       # Azure. The example is two root modules, and the reason is measured:
       # azurerm reads the subscription when the provider CONFIGURES, so a
       # principal cannot be granted, in the same apply, the access its own
@@ -1338,10 +1407,45 @@ jobs:
             exit 1
           fi
 
+          # Azure's OTHER axis. The vault role is still Key Vault Reader,
+          # which can list secrets and not read their values -- and
+          # `actions` say nothing about it: the same principal holds
+          # Network Contributor and just created a VNet.
+          #
+          # read_secret is opt-in because a DATA SOURCE is read during the
+          # PLAN: left on, this refusal would fail the plan before the
+          # VNet write above was ever attempted, hiding the control-plane
+          # lesson instead of adding to it.
+          set +e
+          out=$(terraform apply -auto-approve -input=false -var read_secret=true 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -eq 0 ]; then
+            echo "::error::reading the secret succeeded; dataActions decided nothing"
+            exit 1
+          fi
+          for want in Forbidden Microsoft.KeyVault/vaults/secrets/getSecret/action; do
+            case "$out" in
+              *"$want"*) ;;
+              *) echo "::error::the data-action refusal does not mention $want"; exit 1 ;;
+            esac
+          done
+
+          # Grant Key Vault Secrets User and the SAME apply succeeds, with
+          # nothing in the app's configuration changed -- as with the
+          # control-plane grant above.
+          cd ../platform && terraform apply -auto-approve -input=false \
+            -var grant=true -var secrets_user=true
+          cd ../app && terraform apply -auto-approve -input=false -var read_secret=true
+          test "$(terraform output -raw secret)" = "hunter2" || {
+            echo "::error::the secret did not read back"; exit 1; }
+
           # The app module first: the platform module owns the resource
           # group, and destroying that would take the VNet with it.
-          terraform destroy -auto-approve -input=false
-          cd ../platform && terraform destroy -auto-approve -input=false -var grant=true
+          terraform destroy -auto-approve -input=false -var read_secret=true
+          cd ../platform && terraform destroy -auto-approve -input=false \
+            -var grant=true -var secrets_user=true
 
       # GCP. ONE module, unlike Azure's two, because the google provider
       # makes no startup calls -- a Milestone 10 finding paying for itself.

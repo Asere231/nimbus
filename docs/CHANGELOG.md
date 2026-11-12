@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.17.0 — 2026-11-11
+
+Milestone 17: policies attached to the thing, not to the caller.
+Milestones 13 and 14 could refuse a request by evaluating what the
+CALLER holds. The other half of every cloud's model round-tripped and
+decided nothing.
+
+- **An S3 bucket policy decides.** A role whose own policy grants
+  nothing but `sts:GetCallerIdentity` now reads an object because the
+  bucket says it may, and an explicit `Deny` in a bucket policy beats an
+  `Allow` in the caller's own. The `Principal` element was not modelled
+  at all — without it a bucket policy grants to everyone — and is
+  required in a resource policy and refused in an identity one.
+- **An unsigned request is no longer the account root.** It was, which
+  meant that with `--enforce-iam` on, sending no credentials was the
+  most powerful thing you could do. Anonymous is its own principal now,
+  scoped to S3, and `Principal: "*"` is what grants it.
+- **A public bucket is badged in the visualizer**, derived by the
+  evaluator rather than read off the policy — so a policy granting `*`
+  behind `restrict_public_buckets` is correctly NOT public.
+- **GCP resource bindings are evaluated**: a Pub/Sub topic's, a Cloud
+  Run service's and a GCS bucket's, the last reaching its objects.
+  Pub/Sub's `setIamPolicy` was discarding the policy while claiming to
+  record it, and Cloud Storage had no bucket IAM endpoint at all.
+- **Azure `dataActions` are enforced on Key Vault's data plane.** A
+  Contributor can delete a vault and cannot read a secret out of it,
+  which is Azure's most surprising true rule. Storage's data plane
+  cannot be enforced — Shared Key carries no principal — and the
+  roadmap says so.
+- **The explanation follows.** `/api/authz` names the bucket policy or
+  the binding that decided, answers about objects the store does not
+  hold by finding their nearest ancestor, and evaluates a data action on
+  the data-plane axis — it would otherwise have told a Contributor it
+  may read a secret.
+- `internal/authz` was not changed for any of it. Concatenating the
+  caller's rules with the resource's IS AWS's same-account rule, a GCP
+  resource binding is just another binding, and which Azure axis applies
+  rides in the request's context.
+- New: `examples/terraform/aws-bucket-policy-enforced`.
+
 ## 0.16.0 — 2026-11-11
 
 Milestone 16: one network view, three clouds. It drew a VNet, its

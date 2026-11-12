@@ -3,6 +3,7 @@ package aws
 import (
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -104,6 +105,68 @@ func (s *Server) saveBucket(b *bucket) *apiError {
 	})
 	return nil
 }
+
+// updateBucket applies a change to a bucket ATOMICALLY.
+//
+// A bucket's configuration is a dozen separate sub-resources, and
+// Terraform applies independent resources CONCURRENTLY -- so
+// `aws_s3_bucket_policy` and `aws_s3_bucket_public_access_block` on the
+// same bucket really do arrive at once. Load-mutate-save re-reads the
+// bucket and still loses: both handlers read the same copy and the
+// second to write restores the first one's fields.
+//
+// Measured, not theorised: a CI assertion that set a policy and a public
+// access block in one apply found the block gone, and a 20-run
+// concurrency test fails on nearly every iteration without this. It is
+// the lost update core.Store.Update exists for, which this file was not
+// using -- and it has been here since bucket sub-resources were built,
+// not something resource policies introduced.
+func (s *Server) updateBucket(name string, change func(b *bucket) *apiError) *apiError {
+	var failed *apiError
+	err := s.store.Update(bucketARN(name), func(doc map[string]any) error {
+		raw, err := json.Marshal(doc)
+		if err != nil {
+			return err
+		}
+		var b bucket
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return err
+		}
+		if failed = change(&b); failed != nil {
+			return errBucketChangeRefused
+		}
+		// Derived here too, for the same reason saveBucket derives it:
+		// this is now the path every configuration write goes through.
+		b.Public, b.PublicReason = s.isPublicBucket(&b)
+
+		out, err := json.Marshal(&b)
+		if err != nil {
+			return err
+		}
+		var next map[string]any
+		if err := json.Unmarshal(out, &next); err != nil {
+			return err
+		}
+		for k := range doc {
+			delete(doc, k)
+		}
+		for k, v := range next {
+			doc[k] = v
+		}
+		return nil
+	})
+	switch {
+	case failed != nil:
+		return failed
+	case err != nil:
+		return errorf(500, "InternalError", "updating the bucket: %v", err)
+	}
+	return nil
+}
+
+// errBucketChangeRefused aborts the update without reporting the store's
+// own error: the caller's apiError is the one worth showing.
+var errBucketChangeRefused = errors.New("the change was refused")
 
 // serveS3 routes on the method, the path and which sub-resource query
 // parameter is present.
@@ -529,6 +592,14 @@ func (s *Server) putBucketConfig(w http.ResponseWriter, r *http.Request, b *buck
 	if err != nil {
 		return errorf(400, "MalformedXML", "reading the request: %v", err)
 	}
+	return s.writeBucketConfig(w, 200, b.Name, func(b *bucket) *apiError {
+		return s.applyBucketConfig(r, b, sub, body)
+	})
+}
+
+// applyBucketConfig is the mutation itself, run inside updateBucket's
+// lock. It parses what was sent; it never writes to the store.
+func (s *Server) applyBucketConfig(r *http.Request, b *bucket, sub string, body []byte) *apiError {
 	switch sub {
 	case "versioning":
 		var doc struct {
@@ -590,10 +661,17 @@ func (s *Server) putBucketConfig(w http.ResponseWriter, r *http.Request, b *buck
 			b.ACL = acl
 		}
 	}
-	if aerr := s.saveBucket(b); aerr != nil {
+	return nil
+}
+
+// writeBucketConfig applies a change and answers with a bare status,
+// which is what every bucket sub-resource write returns.
+func (s *Server) writeBucketConfig(w http.ResponseWriter, status int, name string,
+	change func(b *bucket) *apiError) *apiError {
+	if aerr := s.updateBucket(name, change); aerr != nil {
 		return aerr
 	}
-	w.WriteHeader(200)
+	w.WriteHeader(status)
 	return nil
 }
 
@@ -605,21 +683,19 @@ type publicAccessBlockXML struct {
 }
 
 func (s *Server) deleteBucketConfig(w http.ResponseWriter, b *bucket, sub string) *apiError {
-	switch sub {
-	case "tagging":
-		b.Tags = nil
-	case "policy":
-		b.Policy = ""
-	case "encryption":
-		b.Encryption = nil
-	case "publicAccessBlock":
-		b.PublicAccess = nil
-	case "ownershipControls":
-		b.Ownership = ""
-	}
-	if aerr := s.saveBucket(b); aerr != nil {
-		return aerr
-	}
-	w.WriteHeader(204)
-	return nil
+	return s.writeBucketConfig(w, 204, b.Name, func(b *bucket) *apiError {
+		switch sub {
+		case "tagging":
+			b.Tags = nil
+		case "policy":
+			b.Policy = ""
+		case "encryption":
+			b.Encryption = nil
+		case "publicAccessBlock":
+			b.PublicAccess = nil
+		case "ownershipControls":
+			b.Ownership = ""
+		}
+		return nil
+	})
 }

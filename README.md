@@ -283,11 +283,22 @@ naming the action, the principal and the rule that decided — so a local
 apply can show that a deployment's permissions are wrong, which is most of
 what the Identity row is for.
 
-What is still only recorded: resource policies (an S3 bucket policy, a
-Pub/Sub topic's own bindings), Azure `dataActions`, permission boundaries
-and a role's trust policy. And nothing is *authenticated* — the credential
-is the claim of identity, so this answers "would these permissions work",
-never "is this caller genuine". See `docs/ROADMAP.md` for the full list.
+Policies attached to the **resource** decide too: an S3 bucket policy, a
+Pub/Sub topic's or a Cloud Run service's own bindings, and a GCS bucket's,
+which reaches the bucket's objects. A bucket policy granting
+`Principal: "*"` really is readable with no credentials at all, and the
+graph badges it — unless a public access block takes it back, in which
+case the policy still says `*` and the bucket is not public. Azure's
+`dataActions` are enforced on Key Vault's data plane, so a Contributor
+can delete a vault and cannot read a secret out of it.
+
+What is still only recorded: permission boundaries, SCPs, a role's trust
+policy, Azure deny assignments, S3 ACLs, and Azure **storage's** data
+plane — Shared Key carries no principal, so there is nothing to evaluate
+a blob data action against. And nothing is *authenticated* — the
+credential is the claim of identity, so this answers "would these
+permissions work", never "is this caller genuine". See
+`docs/ROADMAP.md` for the full list.
 
 ### What an instance is, and what it is not
 

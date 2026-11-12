@@ -111,6 +111,23 @@ export function networkShape(cloud) {
   return (table && table.NETWORK) || null;
 }
 
+// exposure reports that a resource is reachable by anyone, with a short
+// label and the reason -- an S3 bucket whose own policy grants
+// `Principal: "*"`, today.
+//
+// Each cloud answers for itself and most answer nothing, like
+// identityLinks. The ANSWER is not computed here or in the cloud's
+// table: the server derives it by asking the authorization evaluator
+// what an anonymous caller may do, so the badge cannot disagree with
+// what a request actually gets. This only reads what it was told, which
+// is why a bucket behind a public access block is not flagged even
+// though its policy still says `*`.
+export function exposure(r) {
+  const table = cloudOf(r && r.cloud);
+  if (!table || !table.exposure) return null;
+  return table.exposure(r);
+}
+
 // identityLinks returns the extra, non-containment edges a cloud's graph
 // has -- Azure's role assignments. Clouds without any return nothing.
 export function identityLinks(nodes, cloud) {

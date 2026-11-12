@@ -26,6 +26,8 @@ const EXPORT_CSS = `
     font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   .node .ty { fill: #59636e; font-size: 11.5px;
     font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .exposed rect { fill: #fff8e5; stroke: #bf8700; stroke-opacity: .7; }
+  .exposed text { fill: #9a6700; font: 700 9px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .link-identity { fill: none; stroke: #8250df; stroke-opacity: .6; stroke-width: 1.4; stroke-dasharray: 5 4; }
   .net-box { fill: #ffffff; stroke: #c4ccd5; stroke-width: 1.2; }
   .net-title { fill: #1f2328; font-weight: 650; font-size: 14px;

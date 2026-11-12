@@ -41,13 +41,42 @@ type caller struct {
 	docs []policyDocument
 }
 
+// anonymousPrincipalID is the caller behind an unsigned request. Not an
+// ARN, because it is not an identity: nothing but a resource policy
+// granting `Principal: "*"` can ever satisfy it.
+const anonymousPrincipalID = "anonymous"
+
 // resolveCaller works out who is asking, and what policies apply to them.
-func (s *Server) resolveCaller(r *http.Request) caller {
+//
+// An UNSIGNED request to S3 is anonymous, and that is a deliberate
+// departure from everything else here. Every other unmapped caller is the
+// account root, which is unrestricted -- faithful, and what keeps the
+// flag free for configurations that say nothing about IAM. But an
+// unsigned request is not an unmapped caller, it is NO caller, and
+// treating it as root meant that with --enforce-iam on, sending no
+// credentials at all was the most powerful thing you could do. It is also
+// the one path `Principal: "*"` exists for: a public bucket cannot be
+// demonstrated, or accidentally created, until anonymous is its own
+// principal.
+//
+// Scoped to S3 because S3 is the only service here ever called without
+// credentials -- `serviceOf` says the same thing when it routes an
+// unsigned request. Narrow on purpose: this is the one change in the
+// milestone that can refuse something that worked yesterday.
+func (s *Server) resolveCaller(r *http.Request, service string) caller {
 	key := accessKeyOf(r)
 	if key == "" {
+		// --principal wins over anonymous: it is an explicit instruction
+		// from whoever started the server, and it exists precisely for
+		// clients that cannot set an access key.
 		key = s.cfg.Principal
 	}
 	if key == "" {
+		if service == "s3" {
+			return caller{Principal: authz.Principal{
+				ID: anonymousPrincipalID, Name: "anonymous", Kind: "anonymous",
+			}}
+		}
 		return s.rootCaller()
 	}
 	if c, ok := s.callerForKey(key); ok {

@@ -53,7 +53,7 @@ type getCallerIdentityResponse struct {
 // otherwise there is no way to check which identity a tool is using before
 // finding out the hard way, through a denial.
 func (s *Server) getCallerIdentity(w http.ResponseWriter, r *http.Request) {
-	c := s.resolveCaller(r)
+	c := s.resolveCaller(r, "sts")
 
 	doc := getCallerIdentityResponse{Xmlns: namespaceFor("sts")}
 	doc.Result.Account = s.cfg.AccountID

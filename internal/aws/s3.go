@@ -47,6 +47,13 @@ type bucket struct {
 	PublicAccess *publicAccessBlock `json:"publicAccessBlock,omitempty"`
 	Ownership    string             `json:"ownership,omitempty"`
 	ACL          string             `json:"acl,omitempty"`
+
+	// Public and PublicReason are DERIVED in saveBucket by asking the
+	// authorization evaluator what an anonymous caller may do here, and
+	// exist for the visualizer's badge. They are stored, never sent: no
+	// S3 response is built from this struct wholesale.
+	Public       bool   `json:"public,omitempty"`
+	PublicReason string `json:"publicReason,omitempty"`
 }
 
 type s3Encryption struct {
@@ -77,6 +84,16 @@ func (s *Server) loadBucket(name string) (*bucket, *apiError) {
 }
 
 func (s *Server) saveBucket(b *bucket) *apiError {
+	// Whether the bucket is public is DERIVED here, on the one path every
+	// write goes through, so no handler can forget it -- the same
+	// argument as the single authorization point. It is derived by the
+	// evaluator rather than by reading the policy's JSON, so the badge
+	// the visualizer draws cannot disagree with what an anonymous
+	// request actually gets. It is not part of any S3 response: the wire
+	// format is built from the fields, and `?policy` still returns
+	// b.Policy byte for byte.
+	b.Public, b.PublicReason = s.isPublicBucket(b)
+
 	body, err := json.Marshal(b)
 	if err != nil {
 		return errorf(500, "InternalError", "storing the bucket: %v", err)

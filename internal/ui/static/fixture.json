@@ -1101,6 +1101,41 @@
         ],
         "nimbusContainer": "nimbus-gce-web"
       }
+    },
+    {
+      "cloud": "aws",
+      "id": "arn:aws:s3:::nimbus-public-site",
+      "type": "AWS::S3::Bucket",
+      "name": "nimbus-public-site",
+      "parentId": "arn:aws:iam::000000000000:root",
+      "location": "us-east-1",
+      "backing": "real",
+      "createdAt": "2026-10-28T15:05:21Z",
+      "updatedAt": "2026-10-28T15:05:21Z",
+      "body": {
+        "name": "nimbus-public-site",
+        "arn": "arn:aws:s3:::nimbus-public-site",
+        "region": "us-east-1",
+        "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"PublicRead\",\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::nimbus-public-site/*\"}]}",
+        "public": true,
+        "publicReason": "the bucket policy on arn:aws:s3:::nimbus-public-site statement PublicRead"
+      }
+    },
+    {
+      "cloud": "aws",
+      "id": "arn:aws:s3:::nimbus-private-data",
+      "type": "AWS::S3::Bucket",
+      "name": "nimbus-private-data",
+      "parentId": "arn:aws:iam::000000000000:root",
+      "location": "us-east-1",
+      "backing": "real",
+      "createdAt": "2026-10-28T15:05:21Z",
+      "updatedAt": "2026-10-28T15:05:21Z",
+      "body": {
+        "name": "nimbus-private-data",
+        "arn": "arn:aws:s3:::nimbus-private-data",
+        "region": "us-east-1"
+      }
     }
   ],
   "events": [
@@ -1686,6 +1721,28 @@
       "resourceType": "compute.googleapis.com/Instance",
       "name": "web",
       "parentId": "http://localhost:4703/compute/v1/projects/nimbus-local/regions/us-central1/subnetworks/snet-nodes"
+    },
+    {
+      "seq": 54,
+      "time": "2026-10-28T15:05:21Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "aws",
+      "resourceId": "arn:aws:s3:::nimbus-public-site",
+      "resourceType": "AWS::S3::Bucket",
+      "name": "nimbus-public-site",
+      "parentId": "arn:aws:iam::000000000000:root"
+    },
+    {
+      "seq": 55,
+      "time": "2026-10-28T15:05:22Z",
+      "kind": "resource",
+      "action": "create",
+      "cloud": "aws",
+      "resourceId": "arn:aws:s3:::nimbus-private-data",
+      "resourceType": "AWS::S3::Bucket",
+      "name": "nimbus-private-data",
+      "parentId": "arn:aws:iam::000000000000:root"
     }
   ],
   "blobs": {
@@ -1719,11 +1776,11 @@
       "id": "20261028T150411.000Z",
       "start": "2026-10-28T15:04:11Z",
       "end": "2026-10-28T15:05:24Z",
-      "created": 44,
+      "created": 46,
       "updated": 1,
       "deleted": 0,
       "requests": 8,
-      "steps": 45,
+      "steps": 47,
       "events": [
         {
           "seq": 1,
@@ -2307,6 +2364,28 @@
           "resourceType": "compute.googleapis.com/Instance",
           "name": "web",
           "parentId": "http://localhost:4703/compute/v1/projects/nimbus-local/regions/us-central1/subnetworks/snet-nodes"
+        },
+        {
+          "seq": 54,
+          "time": "2026-10-28T15:05:21Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "aws",
+          "resourceId": "arn:aws:s3:::nimbus-public-site",
+          "resourceType": "AWS::S3::Bucket",
+          "name": "nimbus-public-site",
+          "parentId": "arn:aws:iam::000000000000:root"
+        },
+        {
+          "seq": 55,
+          "time": "2026-10-28T15:05:22Z",
+          "kind": "resource",
+          "action": "create",
+          "cloud": "aws",
+          "resourceId": "arn:aws:s3:::nimbus-private-data",
+          "resourceType": "AWS::S3::Bucket",
+          "name": "nimbus-private-data",
+          "parentId": "arn:aws:iam::000000000000:root"
         }
       ]
     }

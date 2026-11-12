@@ -35,12 +35,39 @@ import (
 //     an S3 read, which is why `Applies` settles the action and the
 //     resource before it ever looks at a condition.
 
+// policyKind says whether a document hangs off the CALLER or off the
+// RESOURCE. Two rules differ, and both matter:
+//
+//   - A resource policy MUST name a Principal and an identity policy must
+//     NOT. The tempting reading of a missing Principal -- "it applies to
+//     everybody" -- is the most dangerous one available, so it refuses.
+//   - A resource policy's Resource is optional, defaulting to the thing
+//     the policy is attached to. An identity policy's is required.
+//
+// What does NOT differ is how the two combine, which is the surprise of
+// this milestone: `authz.Evaluate` already does "an explicit deny beats
+// everything, an allow from anywhere allows" over a flat rule set, and
+// that IS AWS's same-account rule for identity plus resource policies. So
+// the two sets are simply concatenated and the core needed no change.
+// (Cross-account requires BOTH to allow; Nimbus has one account, so that
+// path cannot arise -- docs/ROADMAP.md says so.)
+type policyKind int
+
+const (
+	identityPolicy policyKind = iota
+	resourcePolicy
+)
+
 // policyDocument is one document and where it came from, the `Source`
 // being what a decision quotes back so somebody can find the statement in
 // their own configuration.
 type policyDocument struct {
 	Source   string
 	Document string
+	// Kind and Attached describe a resource policy: which thing it hangs
+	// off, so a statement that names no Resource can default to it.
+	Kind     policyKind
+	Attached string
 	// Err records a document that could not even be fetched -- an AWS
 	// managed policy Nimbus does not bundle, above all. It is carried
 	// here rather than dropped so that it becomes a rule that refuses
@@ -75,8 +102,97 @@ type rawStatement struct {
 	NotAction   stringOrList `json:"NotAction"`
 	Resource    stringOrList `json:"Resource"`
 	NotResource stringOrList `json:"NotResource"`
+	// Principal and NotPrincipal appear only in a RESOURCE policy, and
+	// are required there.
+	Principal    rawPrincipal `json:"Principal"`
+	NotPrincipal rawPrincipal `json:"NotPrincipal"`
 	// Condition is {operator: {key: value-or-list}}.
 	Condition map[string]map[string]stringOrList `json:"Condition"`
+}
+
+// rawPrincipal decodes the Principal element, which has more shapes than
+// anything else in a policy document:
+//
+//	"Principal": "*"
+//	"Principal": {"AWS": "arn:aws:iam::000000000000:role/reader"}
+//	"Principal": {"AWS": ["arn:...", "arn:..."]}
+//	"Principal": {"Service": "lambda.amazonaws.com"}
+//
+// A `Service`, `Federated` or `CanonicalUser` principal is a definite NO
+// against an IAM caller rather than something Nimbus cannot evaluate --
+// `{"Service": "cloudfront.amazonaws.com"}` is ordinary in a bucket
+// policy and must not refuse the whole request.
+//
+// An ACCOUNT-level principal (a bare account id, or `...:root`) is
+// different: it delegates to the account and then requires the caller's
+// own identity policy to allow as well, which is a combination rule
+// Nimbus does not implement. That one is carried as unsupported, so the
+// statement refuses and names itself rather than being silently read as
+// a plain allow.
+type rawPrincipal struct {
+	present bool
+	any     bool     // "*" or {"AWS": "*"}
+	ids     []string // exact principal ARNs
+	account []string // account ids and root ARNs, which Nimbus cannot evaluate
+	other   bool     // Service/Federated/CanonicalUser: not this caller
+}
+
+func (p *rawPrincipal) UnmarshalJSON(data []byte) error {
+	p.present = true
+
+	var one string
+	if err := json.Unmarshal(data, &one); err == nil {
+		if one == "*" {
+			p.any = true
+			return nil
+		}
+		p.classify(one)
+		return nil
+	}
+
+	var byType map[string]stringOrList
+	if err := json.Unmarshal(data, &byType); err != nil {
+		return fmt.Errorf("want \"*\" or a map of principal types, got %s", truncate(string(data), 40))
+	}
+	for kind, values := range byType {
+		if !strings.EqualFold(kind, "AWS") {
+			p.other = true
+			continue
+		}
+		for _, v := range values {
+			if v == "*" {
+				p.any = true
+				continue
+			}
+			p.classify(v)
+		}
+	}
+	return nil
+}
+
+// classify sorts one AWS principal value into an exact ARN or an
+// account-level delegation.
+func (p *rawPrincipal) classify(v string) {
+	if strings.HasSuffix(v, ":root") || !strings.HasPrefix(v, "arn:") {
+		p.account = append(p.account, v)
+		return
+	}
+	p.ids = append(p.ids, v)
+}
+
+// matches reports whether this element speaks to a caller. ARNs are
+// compared exactly: IAM does no wildcard matching inside a Principal, and
+// `*` is the whole element rather than a pattern.
+func (p *rawPrincipal) matches(id string) bool {
+	if p.any {
+		return true
+	}
+	for _, want := range p.ids {
+		if want == id {
+			return true
+		}
+	}
+	return false
 }
 
 type rawDocument struct {
@@ -120,6 +236,10 @@ type iamStatement struct {
 	actions, notActions     []string
 	resources, notResources []string
 
+	// principals is set only for a resource policy. A nil one means this
+	// is an identity policy, where the question does not arise.
+	principals, notPrincipals *rawPrincipal
+
 	conditions []iamCondition
 	// unsupported is set when the statement carries something this
 	// emulator cannot evaluate. It is NOT a compile error: the statement
@@ -133,6 +253,12 @@ func (st *iamStatement) Source() string       { return st.source }
 
 func (st *iamStatement) Applies(req authz.Request) (bool, error) {
 	if !st.matchesAction(req.Action) || !st.matchesResource(req.Resource) {
+		return false, nil
+	}
+	// The principal is part of "does this statement speak to this
+	// request", so it settles alongside the action and the resource --
+	// before anything that can fail.
+	if !st.matchesPrincipal(req.Principal.ID) {
 		return false, nil
 	}
 	// Only now, with the statement known to be about this request, may
@@ -173,6 +299,20 @@ func (st *iamStatement) matchesAction(action string) bool {
 		}
 	}
 	return false
+}
+
+// matchesPrincipal is the resource-policy question: does this statement
+// speak to this caller. An identity policy carries no Principal, and
+// there the answer is always yes -- the document is already attached to
+// the principal it governs.
+func (st *iamStatement) matchesPrincipal(id string) bool {
+	switch {
+	case st.notPrincipals != nil:
+		return !st.notPrincipals.matches(id)
+	case st.principals != nil:
+		return st.principals.matches(id)
+	}
+	return true
 }
 
 // matchesResource is case-SENSITIVE, because ARNs are. An S3 key differing
@@ -312,7 +452,7 @@ func anyGlob(patterns []string, have string) bool {
 // into a rule that REFUSES rather than dropping it: a policy nobody can
 // read is not a policy that grants nothing, and the difference is the whole
 // point of this milestone.
-func compileDocument(source, document string) ([]authz.Rule, error) {
+func compileDocument(source, document string, kind policyKind, attached string) ([]authz.Rule, error) {
 	text := decodePolicyDocument(document)
 	var doc rawDocument
 	if err := json.Unmarshal([]byte(text), &doc); err != nil {
@@ -328,7 +468,7 @@ func compileDocument(source, document string) ([]authz.Rule, error) {
 		if name == "" {
 			name = fmt.Sprintf("#%d", i+1)
 		}
-		st, err := compileStatement(source+" statement "+name, raw)
+		st, err := compileStatement(source+" statement "+name, raw, kind, attached)
 		if err != nil {
 			return nil, err
 		}
@@ -337,7 +477,7 @@ func compileDocument(source, document string) ([]authz.Rule, error) {
 	return rules, nil
 }
 
-func compileStatement(source string, raw rawStatement) (*iamStatement, error) {
+func compileStatement(source string, raw rawStatement, kind policyKind, attached string) (*iamStatement, error) {
 	st := &iamStatement{source: source}
 
 	switch strings.ToLower(raw.Effect) {
@@ -370,8 +510,17 @@ func compileStatement(source string, raw rawStatement) (*iamStatement, error) {
 		st.resources = raw.Resource
 	case len(raw.NotResource) > 0:
 		st.notResources = raw.NotResource
+	case kind == resourcePolicy && attached != "":
+		// A resource policy's Resource is optional: left out, it means
+		// the thing the policy hangs off. S3 requires it in practice,
+		// but defaulting beats refusing a document AWS would accept.
+		st.resources = []string{attached, attached + "/*"}
 	default:
 		return nil, fmt.Errorf("%s has no Resource; identity-based policies require one", source)
+	}
+
+	if err := compilePrincipal(st, source, raw, kind); err != nil {
+		return nil, err
 	}
 
 	for op, keys := range raw.Condition {
@@ -395,6 +544,59 @@ func compileStatement(source string, raw rawStatement) (*iamStatement, error) {
 		}
 	}
 	return st, nil
+}
+
+// compilePrincipal settles the Principal element, which is the one part
+// of a statement whose rules depend on what the document is attached to.
+//
+// Both directions are errors rather than something to ignore. An identity
+// policy carrying a Principal is rejected by AWS itself, and ignoring the
+// element would read as "this applies to everyone" -- which is not what
+// the author meant and is wrong in the generous direction. A resource
+// policy with no Principal is equally invalid, and the tempting default
+// is the dangerous one.
+func compilePrincipal(st *iamStatement, source string, raw rawStatement, kind policyKind) error {
+	hasPrincipal := raw.Principal.present || raw.NotPrincipal.present
+
+	if kind == identityPolicy {
+		if hasPrincipal {
+			return fmt.Errorf("%s has a Principal, which only a resource policy may carry; "+
+				"an identity policy already applies to the principal it is attached to", source)
+		}
+		return nil
+	}
+
+	switch {
+	case raw.Principal.present && raw.NotPrincipal.present:
+		return fmt.Errorf("%s has both Principal and NotPrincipal", source)
+	case !hasPrincipal:
+		return fmt.Errorf("%s has no Principal; a resource policy must say who it is about, "+
+			"and Nimbus will not read a missing one as everybody", source)
+	case raw.Principal.present:
+		st.principals = &raw.Principal
+	default:
+		st.notPrincipals = &raw.NotPrincipal
+	}
+
+	// Account-level delegation really means "this account may, IF the
+	// caller's own identity policy also allows" -- a combination rule
+	// Nimbus does not implement. Unsupported rather than approximated,
+	// so the statement refuses the requests it is about and names
+	// itself, instead of granting on half a rule.
+	if accounts := accountPrincipals(raw); len(accounts) > 0 {
+		st.unsupported = fmt.Errorf(
+			"the principal %s delegates to a whole account, which also requires the caller's own "+
+				"identity policy to allow the action -- a rule Nimbus does not implement",
+			strings.Join(accounts, ", "))
+	}
+	return nil
+}
+
+func accountPrincipals(raw rawStatement) []string {
+	if raw.Principal.present {
+		return raw.Principal.account
+	}
+	return raw.NotPrincipal.account
 }
 
 func lowerIfBool(op string, values []string) []string {
@@ -491,7 +693,7 @@ func (c *policyCache) rules(docs []policyDocument) []authz.Rule {
 			rules = append(rules, &brokenRule{source: d.Source, err: d.Err})
 			continue
 		}
-		compiled, err := compileDocument(d.Source, d.Document)
+		compiled, err := compileDocument(d.Source, d.Document, d.Kind, d.Attached)
 		if err != nil {
 			rules = append(rules, &brokenRule{source: d.Source, err: err})
 			continue
@@ -517,7 +719,11 @@ func documentSetKey(docs []policyDocument) string {
 	for _, d := range docs {
 		// Lengths as well as content, so that two different splits of the
 		// same bytes cannot hash alike.
-		fmt.Fprintf(h, "%d:%s|%d:%s|%v|", len(d.Source), d.Source, len(d.Document), d.Document, d.Err)
+		// Kind and Attached are part of the key because they change what
+		// the same text COMPILES TO: a document with no Principal is a
+		// usable identity policy and a refusing resource policy.
+		fmt.Fprintf(h, "%d:%s|%d:%s|%v|%d|%d:%s|",
+			len(d.Source), d.Source, len(d.Document), d.Document, d.Err, d.Kind, len(d.Attached), d.Attached)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

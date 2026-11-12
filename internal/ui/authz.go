@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/Asere231/nimbus/internal/authz"
 	"github.com/Asere231/nimbus/internal/core"
@@ -46,8 +48,17 @@ func registerAuthzRoutes(mux *http.ServeMux, store *core.Store, explainers map[s
 		}
 		res, err := store.Get(id)
 		if err != nil {
-			http.Error(w, "no such resource", http.StatusNotFound)
-			return
+			// The most interesting question is usually about something
+			// Nimbus does not store as a resource of its own: an S3
+			// OBJECT, whose permissions are a different family from its
+			// bucket's. So the nearest ancestor decides which cloud
+			// answers, and the id that was asked about is still the one
+			// evaluated.
+			res, err = nearestAncestor(store, id)
+			if err != nil {
+				http.Error(w, "no such resource", http.StatusNotFound)
+				return
+			}
 		}
 		ex := explainers[res.Cloud]
 		if ex == nil {
@@ -68,4 +79,45 @@ func registerAuthzRoutes(mux *http.ServeMux, store *core.Store, explainers map[s
 		}
 		writeJSON(w, ex.ExplainAccess(principal, id, res.Type))
 	})
+}
+
+// nearestAncestor finds the longest resource id Nimbus holds that
+// CONTAINS the one asked about.
+//
+// It exists because the question people most want answered is about
+// something that is not a resource in its own right: `s3:GetObject` on
+// `arn:aws:s3:::bucket/key`, where only the bucket is stored. The same
+// shape covers a blob under a container and an object under a GCS
+// bucket, so it is written once here rather than per cloud.
+//
+// Containment is SEGMENT-ALIGNED, never a bare prefix: without that,
+// `arn:aws:s3:::logs` would be taken to contain `arn:aws:s3:::logs-old`
+// and a question about one bucket would be answered by another's cloud.
+// The same rule, and the same reason, as Azure's scopeCovers.
+func nearestAncestor(store *core.Store, id string) (*core.Resource, error) {
+	var best *core.Resource
+	for _, r := range store.List(func(r *core.Resource) bool {
+		return contains(r.ID, id)
+	}) {
+		if best == nil || len(r.ID) > len(best.ID) {
+			best = r
+		}
+	}
+	if best == nil {
+		return nil, errNoAncestor
+	}
+	return best, nil
+}
+
+var errNoAncestor = errors.New("no resource contains that id")
+
+func contains(outer, inner string) bool {
+	if len(outer) >= len(inner) || !strings.EqualFold(outer, inner[:len(outer)]) {
+		return false
+	}
+	switch inner[len(outer)] {
+	case '/', ':':
+		return true
+	}
+	return false
 }

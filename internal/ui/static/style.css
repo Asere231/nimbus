@@ -318,6 +318,13 @@ button { font: inherit; color: inherit; }
 .node.plan-update .plan-badge { fill: var(--warn); }
 .node.plan-delete .plan-badge, .node.plan-replace .plan-badge { fill: var(--bad); }
 
+/* Reachable by anyone. Warning-coloured rather than error-coloured: a
+   public bucket is often deliberate, and a graph that shouts at every
+   intentional one teaches people to ignore the colour. */
+.exposed rect { fill: color-mix(in srgb, var(--warn) 18%, transparent);
+  stroke: var(--warn); stroke-opacity: .7; }
+.exposed text { fill: var(--warn); font: 700 9px var(--mono); letter-spacing: .3px; }
+
 /* The access panel: one row per action, with the rule that decided. */
 .access-row { padding: 4px 0; border-bottom: 1px solid var(--line); }
 .access-row:last-child { border-bottom: 0; }

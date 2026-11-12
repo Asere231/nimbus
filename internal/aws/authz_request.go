@@ -58,7 +58,7 @@ func (s *Server) authorize(r *http.Request, service string) (*apiError, string) 
 		return nil, ""
 	}
 
-	c := s.resolveCaller(r)
+	c := s.resolveCaller(r, service)
 
 	// An unrestricted principal is allowed before the request is even
 	// classified. That is not a shortcut: whether an action is mapped is
@@ -102,7 +102,10 @@ func (s *Server) authorize(r *http.Request, service string) (*apiError, string) 
 		req.Context["aws:username"] = c.Principal.Name
 	}
 
-	d := authz.Evaluate(req, s.policies.rules(c.docs))
+	// The caller's documents AND the resource's own, in one set. That
+	// concatenation is the entire implementation of AWS's same-account
+	// combination rule -- see policyKind in authz_iam.go.
+	d := authz.Evaluate(req, s.policies.rules(s.rulesDocs(c, tgt.Resource)))
 	if d.Allowed {
 		return nil, ""
 	}
@@ -111,8 +114,14 @@ func (s *Server) authorize(r *http.Request, service string) (*apiError, string) 
 }
 
 func describePrincipal(p authz.Principal) string {
-	if p.ID == "" {
+	switch {
+	case p.ID == "":
 		return "an unidentified caller"
+	case p.Kind == "anonymous":
+		// Kind and ID are both "anonymous", so the general form reads
+		// "anonymous anonymous". There is no identity to name here --
+		// that is the whole point of this caller.
+		return "an anonymous caller"
 	}
 	return p.Kind + " " + p.ID
 }
@@ -298,9 +307,13 @@ func (s *Server) ExplainAccess(principal, resourceID, resourceType string) authz
 	if len(actions) == 0 {
 		return report
 	}
-	rules := s.policies.rules(c.docs)
 	for _, action := range actions {
 		arn := resourceARNFor(resourceType, action, resourceID)
+		// Per action, because the resource differs per action -- a
+		// bucket's own ARN for a list, its contents for a read -- and a
+		// resource policy is gathered for whichever one is being asked
+		// about.
+		rules := s.policies.rules(s.rulesDocs(c, arn))
 		report.Checks = append(report.Checks, authz.Explain(c.Principal, arn, []string{action}, rules)...)
 	}
 	return report
@@ -309,7 +322,26 @@ func (s *Server) ExplainAccess(principal, resourceID, resourceType string) authz
 // ExplainOne answers a single question, which is what `nimbus can` asks.
 func (s *Server) ExplainOne(principal, action, resource string) authz.Check {
 	c := s.callerFor(principal)
-	return authz.Explain(c.Principal, resource, []string{action}, s.policies.rules(c.docs))[0]
+	rules := s.policies.rules(s.rulesDocs(c, resource))
+	return authz.Explain(c.Principal, resource, []string{action}, rules)[0]
+}
+
+// rulesDocs is every document that bears on one request: the caller's own
+// and the resource's.
+//
+// One function, used by the enforcement path AND by both explain paths,
+// because the moment they gather different documents the inspector can
+// say a thing the server will not do. A fresh slice rather than
+// appending to the caller's: `documentsFor` builds its own, so sharing
+// the backing array would be harmless today and a lost update later.
+func (s *Server) rulesDocs(c caller, resource string) []policyDocument {
+	attached := s.resourcePolicies(resource, c.Principal)
+	if len(attached) == 0 {
+		return c.docs
+	}
+	docs := make([]policyDocument, 0, len(c.docs)+len(attached))
+	docs = append(docs, c.docs...)
+	return append(docs, attached...)
 }
 
 // callerFor resolves a named principal rather than one from a request, so

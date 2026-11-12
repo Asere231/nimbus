@@ -114,7 +114,7 @@ func managedPolicyRules(arn string) ([]authz.Rule, error) {
 	if err != nil {
 		return []authz.Rule{&brokenRule{source: "managed policy " + arn, err: err}}, err
 	}
-	return compileDocument("managed policy "+arn, doc)
+	return compileDocument("managed policy "+arn, doc, identityPolicy, "")
 }
 
 func bundledPolicyNames() []string {

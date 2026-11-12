@@ -198,3 +198,32 @@ func TestGlob(t *testing.T) {
 		}
 	}
 }
+
+// A principal whose kind IS its id -- AWS's anonymous caller, which an
+// unsigned request resolves to -- has no identity to name. The general
+// form would read "anonymous anonymous", which appeared in the activity
+// feed before this.
+func TestAnAnonymousPrincipalIsDescribedWithoutRepeatingItself(t *testing.T) {
+	d := authz.Evaluate(authz.Request{
+		Principal: authz.Principal{ID: "anonymous", Kind: "anonymous"},
+		Action:    "s3:GetObject", Resource: "arn:aws:s3:::demo/a.txt",
+	}, nil)
+	if strings.Contains(d.Reason, "anonymous anonymous") {
+		t.Errorf("the reason repeats itself: %s", d.Reason)
+	}
+	if !strings.Contains(d.Reason, "an anonymous caller") {
+		t.Errorf("the reason does not name the caller: %s", d.Reason)
+	}
+}
+
+// An empty principal must not become "an  caller": EqualFold("","") is
+// true, which is the trap in the rule above.
+func TestAnEmptyPrincipalStillReadsSensibly(t *testing.T) {
+	d := authz.Evaluate(authz.Request{Action: "s3:GetObject", Resource: "x"}, nil)
+	if strings.Contains(d.Reason, "an  caller") {
+		t.Errorf("an empty principal rendered as a blank kind: %s", d.Reason)
+	}
+	if !strings.Contains(d.Reason, "the caller") {
+		t.Errorf("the reason does not fall back to \"the caller\": %s", d.Reason)
+	}
+}

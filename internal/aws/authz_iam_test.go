@@ -11,7 +11,7 @@ import (
 // how every test here reads: a real IAM document in, an answer out.
 func decide(t *testing.T, document string, req authz.Request) authz.Decision {
 	t.Helper()
-	rules, err := compileDocument("policy test", document)
+	rules, err := compileDocument("policy test", document, identityPolicy, "")
 	if err != nil {
 		t.Fatalf("compiling the document: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestAMalformedDocumentIsRefusedAtCompileTime(t *testing.T) {
 		`{"Statement":[{"Effect":"Maybe","Action":"s3:*","Resource":"*"}]}`,
 	}
 	for _, doc := range bad {
-		if _, err := compileDocument("policy test", doc); err == nil {
+		if _, err := compileDocument("policy test", doc, identityPolicy, ""); err == nil {
 			t.Errorf("a malformed document compiled without error: %s", doc)
 		}
 	}

@@ -117,3 +117,19 @@ export const NETWORK = {
       t === "aws::ec2::securitygroup" || t === "aws::ec2::routetable";
   },
 };
+
+// A bucket whose own policy lets an anonymous caller in.
+//
+// The judgement is the SERVER's: `public` and `publicReason` are derived
+// in saveBucket by asking the authorization evaluator what an anonymous
+// principal may do, so this cannot disagree with what a request gets.
+// Reading the policy JSON here instead would be a second implementation
+// of the thing that decides, which is the mistake /api/authz exists to
+// avoid -- and it would be wrong in the one case that matters, a policy
+// granting `*` that a public access block neutralises.
+export function exposure(r) {
+  if ((r.type || "").toLowerCase() !== "aws::s3::bucket") return null;
+  const body = r.body || {};
+  if (!body.public) return null;
+  return { label: "Public", reason: body.publicReason || "its bucket policy grants everyone" };
+}

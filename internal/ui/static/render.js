@@ -5,7 +5,7 @@
 
 import { $, el, fit, switchTab } from "./dom.js";
 import { state } from "./state.js";
-import { typeStyle, tierOf, displayName, rootLabel, identityLinks } from "./types.js";
+import { typeStyle, tierOf, displayName, rootLabel, identityLinks, exposure } from "./types.js";
 import { buildForest, layout, extent, label, W, H } from "./graph.js";
 import { showInspector } from "./inspector.js";
 import { networkModel, networkLayout, draw as drawNetwork } from "./network.js";
@@ -181,10 +181,22 @@ function renderTopology(svg, view, filter) {
       const mark = el("text", { class: "plan-badge", x: W - 10, y: 20, "text-anchor": "end" }, g);
       mark.textContent = MARKS[pendingAction] || "?";
     }
+    // Reachable by anyone. Drawn at the bottom corner rather than beside
+    // the plan mark, so a bucket that is both public and about to change
+    // shows both.
+    const open = exposure(r);
+    if (open) {
+      const pill = el("g", { class: "exposed" }, g);
+      el("rect", { x: W - 58, y: H - 21, width: 48, height: 14, rx: 7 }, pill);
+      const label = el("text", { x: W - 34, y: H - 10.5, "text-anchor": "middle" }, pill);
+      label.textContent = open.label;
+    }
     const title = el("title", {}, g);
     title.textContent = r.ghost
       ? `${r.name}\n${r.type || "unmapped type"}\nto be created by ${r.planAddress}`
-      : `${r.name}\n${r.type}\n${r.id}` + (pendingAction ? `\nplan: ${pendingAction}` : "");
+      : `${r.name}\n${r.type}\n${r.id}` +
+        (pendingAction ? `\nplan: ${pendingAction}` : "") +
+        (open ? `\n${open.label}: ${open.reason}` : "");
     g.addEventListener("mousedown", (ev) => ev.preventDefault()); // no focus-scroll on click
     g.addEventListener("click", () => select(n.key));
     g.addEventListener("keydown", (ev) => { if (ev.key === "Enter") select(n.key); });

@@ -188,6 +188,11 @@ func Evaluate(req Request, rules []Rule) Decision {
 
 func describe(p Principal) string {
 	switch {
+	// A principal whose kind IS its id has no identity to name -- AWS's
+	// anonymous caller, which an unsigned request resolves to. The
+	// general form below would read "anonymous anonymous".
+	case p.ID != "" && strings.EqualFold(p.ID, p.Kind):
+		return "an " + p.Kind + " caller"
 	case p.ID != "" && p.Kind != "":
 		return p.Kind + " " + p.ID
 	case p.ID != "":

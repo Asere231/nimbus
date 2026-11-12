@@ -49,10 +49,14 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.mod # stdlib-only, so there is no go.sum
 
-      # gofmt only needs checking once, and only on Linux: a CRLF checkout on
-      # Windows makes it report every file.
+      # gofmt runs on all three legs. It used to be Linux-only, because a
+      # Windows checkout with core.autocrlf=true got CRLF and gofmt then
+      # reported every file; .gitattributes pins the working tree to LF
+      # everywhere, so there is nothing left to skip. `shell: bash` because
+      # the Windows runner's default shell is PowerShell, which does not
+      # speak $(...).
       - name: gofmt
-        if: matrix.os == 'ubuntu-latest'
+        shell: bash
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then

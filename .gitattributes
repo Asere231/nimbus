@@ -1,0 +1,41 @@
+# Line endings: LF in the repository and LF in the working tree, on every
+# machine.
+#
+# `text=auto` is the half that normalises on commit, which was already
+# happening. `eol=lf` is the half that matters here, because it decides the
+# WORKING TREE and overrides a contributor's core.autocrlf -- Git for Windows
+# sets that to true when it installs, so a Windows checkout got CRLF
+# everywhere and nothing in the repo said otherwise.
+#
+# What that broke was `gofmt -l .`, which reported every one of the 219 Go
+# files as needing formatting, because gofmt normalises CRLF to LF. That made
+# the close-out check in CLAUDE.md impossible to pass on Windows, and is why
+# CI ran gofmt on the Linux leg only -- a workaround that hid the question of
+# what else a CRLF checkout reaches.
+#
+# The answer, measured on Windows 11 with a genuinely CRLF checkout, is
+# NOTHING ELSE:
+#
+#   - Nothing embedded in Go SOURCE can carry CRLF, by two separate
+#     mechanisms, and it is worth keeping them apart. A multi-line raw literal
+#     is immune because Go DISCARDS \r from raw string literals -- the
+#     language spec says so, and a genuinely CRLF source file compiled here
+#     yielded "line one\nline two". Text built with \n escapes in an
+#     interpreted literal is immune because the newline is written by the
+#     program and never read from the file. The vm engine's boot script and
+#     the EKS token-webhook kubeconfig are the first kind; the k3s mirror's
+#     hosts.toml and registries.yaml are the second. So all of them reach
+#     their Linux containers as LF however the repo was checked out.
+#     `TestARealInstanceBootsRunsUserDataAndStaysUp` passes against a real
+#     alpine container on a CRLF tree, which is what proved the boot script
+#     rather than a reading of the spec.
+#   - The only files Nimbus reads from disk at runtime are ones Nimbus wrote
+#     itself, so they carry whatever it wrote.
+#   - The visualizer's static files are embedded with //go:embed and reach the
+#     browser byte for byte, CRLF included, which JavaScript and CSS both
+#     accept as a line terminator.
+#
+# So this file buys one thing: gofmt behaving the same on all three legs. That
+# is worth having anyway -- a formatting check that cannot run on a platform
+# is a formatting check that will drift there.
+* text=auto eol=lf

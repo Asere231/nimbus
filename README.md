@@ -9,11 +9,32 @@ terraform apply  ──HTTPS──▶  Nimbus Azure (ARM) :4701 ──┐
 terraform apply  ──HTTP───▶  Nimbus AWS        :4702 ──┴▶ store ──▶ event bus ──SSE──▶  visualizer :4700
 ```
 
-**Status (v0.1.0, Milestone 1):** ARM control plane with resource groups, virtual networks, subnets, and an "accepted" tier for every other resource type; token and metadata endpoints; live visualizer. Verified with `hashicorp/go-azure-sdk` (the SDK inside the azurerm provider). See [docs/ROADMAP.md](docs/ROADMAP.md).
+**Status (v0.18.1):** all three clouds, in one process. Control planes,
+storage data planes, real Kubernetes clusters, Lambda functions, Cloud Run
+and Container Apps services and compute instances that really boot — plus
+IAM, Azure RBAC and GCP IAM that actually refuse. Driven by Terraform, `az`,
+`aws`, `gcloud` and `kubectl`. Verified on macOS, Linux and Windows.
+See [docs/ROADMAP.md](docs/ROADMAP.md) for what is and is not covered.
+
+## Documentation
+
+| Document | For |
+|---|---|
+| [INSTALL.md](docs/INSTALL.md) | requirements, build, certificates, where state lives, platform notes |
+| [CLIENTS.md](docs/CLIENTS.md) | pointing Terraform, `az`, `aws`, `gcloud` and `kubectl` at Nimbus |
+| [CLI.md](docs/CLI.md) | every `nimbus` command and flag |
+| [IAM.md](docs/IAM.md) | permissions that are actually checked |
+| [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | symptoms, causes and fixes |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | how it works, and how to add a resource type |
+| [GCLOUD.md](docs/GCLOUD.md) | the `gcloud` command set |
+| [OFFLINE.md](docs/OFFLINE.md) | running with no internet at all |
+| [ROADMAP.md](docs/ROADMAP.md) · [CHANGELOG.md](docs/CHANGELOG.md) | where it is going, and what changed |
 
 ## Quick start
 
-Needs Go 1.22+ (and later, Docker for AKS). Works on macOS, Windows and Linux.
+Needs Go 1.22+, and Docker for anything that really runs a container.
+Works on macOS, Windows and Linux — see
+[platform notes](docs/INSTALL.md#platform-notes).
 
 ```bash
 # build

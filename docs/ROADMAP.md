@@ -306,11 +306,19 @@ the work and Azure simply was not using it, and
   nothing else had: `compute networks subnets list` — without the
   `--regions` that `docs/GCLOUD.md` documents — reads the AGGREGATED
   collection, which was implemented for instances only.
-  **What was NOT exercised there**, and so is still unknown on Windows: the
-  `gcp-gke` and `azure-aks`/`azure-app` examples, the `test/storage-sdk`
-  Python harness, ARM/Bicep deployments via `az deployment`, the
-  `--enforce-iam` examples, and the interactive form of `nimbus ssh`. None of
-  these is believed broken; none has been run.
+  Since then, also verified on Windows: **all four `--enforce-iam`
+  examples**, including `azure-rbac-enforced`'s full five-step sequence —
+  the app module denied with `AuthorizationFailed`, granted from the
+  platform module, then succeeding with no change to its own configuration;
+  **`az deployment`** with a real local Bicep compile (az 2.92.0, Bicep
+  0.49.2), outputs resolving and a second what-if reporting `NoChange` for
+  every resource; and **`gcp-gke`**, where `nimbus gcp kubeconfig` wrote a
+  config `kubectl` used to see both nodes Ready.
+  **What is still NOT exercised on Windows**: the `azure-aks` and
+  `azure-app` examples, the `test/storage-sdk` Python harness (it needs a
+  real Python; the one on PATH is the Microsoft Store stub), and the
+  interactive form of `nimbus ssh`, which allocates a TTY and so cannot be
+  driven by a tool. None is believed broken; none has been run.
 
 ## Later
 

@@ -1145,6 +1145,81 @@ jobs:
             exit 1
           fi
 
+  terraform-windows:
+    name: terraform examples (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false # so exit codes reach us unchanged
+
+      # Until Milestone 18 the Windows leg only compiled and unit-tested.
+      # No Windows machine had ever run Terraform against Nimbus, and three
+      # platform bugs had reached main by only ever being proven on a Mac.
+      #
+      # Deliberately NO Docker: GitHub's windows-latest runners have no
+      # daemon for Linux containers, so every Docker-backed example is out of
+      # reach here. That is a limitation of the runner rather than an
+      # oversight, and it is why the Lambda, Container App and k3s examples
+      # are proven on a person's machine instead. These two need nothing but
+      # the binary: azure-basic covers ARM over TLS and so the certificate
+      # path, aws-basic covers SigV4 routing, EC2, IAM and S3 on NTFS.
+      - name: Start Nimbus
+        shell: bash
+        run: |
+          set -euo pipefail
+          go build -o bin/nimbus.exe ./cmd/nimbus
+          ./bin/nimbus.exe cert
+          ./bin/nimbus.exe start --clouds azure,aws,gcp &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, plan, destroy
+        shell: bash
+        working-directory: examples/terraform
+        run: |
+          set -euo pipefail
+          # Go on Windows honours SSL_CERT_FILE, measured in Milestone 18 --
+          # which the README had only ever offered to Linux users. It means
+          # CI needs nothing in the Windows certificate store, and so no
+          # elevation. It REPLACES the system roots rather than adding to
+          # them, but `terraform init` reaches the registry through it
+          # regardless, which was checked specifically.
+          #
+          # $USERPROFILE rather than $HOME: in Git Bash $HOME is a POSIX path
+          # like /c/Users/runneradmin, which a Go program cannot open. Mixed
+          # separators are fine on Windows, so this stays readable.
+          export SSL_CERT_FILE="$USERPROFILE/.nimbus/certs/nimbus-ca.pem"
+
+          for example in azure-basic aws-basic; do
+            echo "::group::$example"
+            cd "$GITHUB_WORKSPACE/examples/terraform/$example"
+            terraform init -input=false
+            terraform apply -auto-approve -input=false
+
+            set +e
+            terraform plan -detailed-exitcode -input=false
+            code=$?
+            set -e
+            if [ "$code" -ne 0 ]; then
+              echo "::error::$example: plan -detailed-exitcode returned $code; expected 0 (no changes)"
+              exit 1
+            fi
+
+            terraform destroy -auto-approve -input=false
+            echo "::endgroup::"
+          done
+
   iam-enforced:
     name: terraform *-enforced (--enforce-iam, all three clouds)
     runs-on: ubuntu-latest

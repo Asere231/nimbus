@@ -1,12 +1,14 @@
 # Roadmap
 
-**Current: Milestone 18 — Windows, properly
-(`docs/prompts/m18-windows.md`).** Milestone 17 closed Phase 5: a policy
-attached to a RESOURCE now decides on all three clouds, and Azure's
-`dataActions` are enforced where a principal exists. Windows is the gap
-to trust least — the code is built and unit-tested there on every push,
-and no Windows machine has ever run Terraform, `az` or `kubectl` against
-it.
+**Current: nothing scheduled.** Milestone 18 ran Nimbus on Windows for the
+first time: eight examples apply, plan clean and destroy there, `az` drives
+the blob data plane, `kubectl` reaches an EKS cluster, and what is different
+about the platform is written down in CLAUDE.md under "Windows, actually
+run". Most of the prompt's suspicions were disproved — including the one it
+called sharpest — but the three bugs it did find were none of them
+Windows-only, and two of them had been losing data on every platform since
+the stores were written. The next milestone is unchosen; "Later" below is
+the list to pick from.
 
 **Phase 4 is complete.** Milestone 11 gave all three clouds instances that
 really boot, Milestone 12 cleared the defects that made Nimbus quietly
@@ -208,7 +210,7 @@ to demonstrate once there are instances to refuse it to.
 | 15 | ~~**Finishing Azure**: Container Apps on the `run` engine, Log Analytics that ingests and queries~~ **done** | `curl` reaches a container Terraform created, and its stdout comes back out of a Log Analytics query |
 | 16 | ~~**A network view for AWS and GCP**~~ **done** | An EC2 and a GCE instance each appear in the subnet they belong to |
 | 17 | ~~**Resource-level policies**~~ **done** | A principal reads a bucket ONLY because of the bucket policy, and an explicit deny in it wins |
-| 18 | **Windows, properly** | Terraform, a data plane and a container all work on Windows, and what is different is written down |
+| 18 | ~~**Windows, properly**~~ **done** | Terraform, a data plane and a container all work on Windows, and what is different is written down |
 
 Milestone 15 was first because Azure was the one cloud that could not run
 code, and it was indeed the cheapest: `internal/engines/run` already did
@@ -258,14 +260,9 @@ the work and Azure simply was not using it, and
 
 **Still unscheduled, and the gap to trust least:**
 
-- **Windows, properly** is Milestone 18 (`docs/prompts/m18-windows.md`),
-  and it wants a session ON a Windows machine. Still only DNS-tested: the
-  `*.localhost` finding was verified with a resolver call and no client
-  has ever used it there. Three platform bugs have reached `main` by only
-  ever being proven on a Mac, which is the whole argument for doing it.
-  The prompt lists the suspicions worth checking first — a
-  case-insensitive filesystem collapsing two S3 keys into one file is the
-  sharpest.
+- **Everything still unscheduled is listed under "Later".** Windows was
+  Milestone 18 and is done; see the Windows entry above and CLAUDE.md's
+  "Windows, actually run" for what is now proven there and what is not.
 
 ## Design decisions still open
 
@@ -294,17 +291,35 @@ the work and Azure simply was not using it, and
   mid-session would have disrupted the machine, so the ARM error and feed note
   are covered by a test against the Fake rather than by pulling the plug.
 
-- **Windows has only been DNS-tested**, and Milestone 12 deliberately left it
-  that way rather than half-doing it. No Windows machine has run Terraform,
-  `az` or `kubectl` against Nimbus; CI's Windows leg runs the Go tests only.
-  Given that three platform bugs reached `main` by only ever being proven on
-  a Mac, this is the gap to trust least, and it wants a session of its own on
-  a Windows machine.
-  The certificate path matters there too: Windows has its own rules, and
-  `nimbus cert` uses `Import-Certificate` into `CurrentUser\Root`.
+- **Windows is no longer the gap to trust least** — Milestone 18 ran it. What
+  was exercised there, on Windows 11 Home with Terraform 1.17.1, azurerm 4.x,
+  aws 5.100.0, az 2.92.0, aws-cli **2**.40.0 and Docker Desktop 29.9.3:
+  `azure-basic`, `aws-basic`, `gcp-basic`, `azure-storage`, `aws-serverless`,
+  `azure-containerapp`, `aws-eks` and `aws-instance` all apply, plan clean
+  (`-detailed-exitcode` = 0) and destroy; `az` registers through
+  `nimbus az register --run` and drives the blob data plane; `kubectl` reaches
+  an EKS cluster through the token webhook; `nimbus ssh` works from Git Bash,
+  PowerShell and cmd.exe. `nimbus cert`'s `CurrentUser\Root` advice is
+  verified rather than assumed.
+  **What was NOT exercised there**, and so is still unknown on Windows: the
+  `gcloud` CLI and `nimbus gcp register --run`, the `gcp-gke` and
+  `azure-aks`/`azure-app` examples, the visualizer's `node --test` suite, the
+  `test/storage-sdk` Python harness, ARM/Bicep deployments via `az
+  deployment`, the `--enforce-iam` examples, and the interactive form of
+  `nimbus ssh`. None of these is believed broken; none has been run.
 
 ## Later
 
+- **`nimbus --help` is not a command**, so it falls through to the usage text
+  on stderr and exits 2. In PowerShell that renders as a red
+  `NativeCommandError` block, which is an alarming first contact with the
+  binary for something that worked. Found in Milestone 18 and left alone
+  because it is cosmetic; `-h`/`--help` should print usage and exit 0.
+- **A persisted store written before Milestone 18 may hold a stale file.**
+  `fsname.Encode` is the identity for ordinary lowercase keys, so existing
+  data loads unchanged, but a key that previously collided or failed to write
+  can leave one orphan file from the broken era. Clearing `~/.nimbus/data` is
+  the simple answer; nothing reads the orphan, it just sits there.
 - **A container app runs its FIRST container only.** Real Container Apps
   run every container in the template as a sidecar group; a sidecar here is
   stored and not started, exactly the limit Cloud Run has. There is no

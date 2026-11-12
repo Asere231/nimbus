@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.18.0 — 2026-11-12
+
+Milestone 18: Windows, actually run. The code had been built and
+unit-tested there on every push and never once executed — no Windows
+machine had run Terraform, `az` or `kubectl` against Nimbus. Most of the
+prompt's suspicions turned out to be wrong, including the one it called
+sharpest; the three real bugs were none of them Windows-only.
+
+- **Eight examples apply, plan clean and destroy on Windows**:
+  `azure-basic`, `aws-basic`, `gcp-basic`, `azure-storage`,
+  `aws-serverless`, `azure-containerapp`, `aws-eks` and `aws-instance`.
+  `az` registers through `nimbus az register --run` and drives the blob
+  data plane; `kubectl` reaches an EKS cluster through the token
+  webhook; `nimbus ssh` works from Git Bash, PowerShell and cmd.exe.
+- **An object name is not a filename.** NTFS and APFS are both
+  case-insensitive by default, so two keys differing only in case became
+  one file — S3 then listed a key that 404'd while the key that worked
+  was not listed, and Azure returned the same content under both names.
+  `:` opened an NTFS alternate data stream; `?`, `*` and `|` failed the
+  write with the error swallowed in both stores. `internal/fsname`
+  percent-encodes what a filesystem cannot hold, and is the identity for
+  every key in every example here. Only the Linux CI leg was ever immune,
+  which is why ten milestones passed without anyone noticing.
+- **Every S3 key ending in `.json` was lost on restart, on every
+  platform.** `load` skipped all `.json` paths as metadata sidecars,
+  including the object's own data file.
+- **`--persist` is about shutdown, not about delete.** A destroyed
+  Lambda, Container App or Cloud Run service left its container running
+  for ever, because two engines checked the keep-running flag themselves
+  one level below the only caller that should.
+- **A blob name could escape its container.** `../../x` was written two
+  levels up, beside the account manifest a blob of that name would
+  overwrite. S3 had refused this since Milestone 8; the blob store never
+  learned it.
+- **`.gitattributes` pins the working tree to LF**, so `gofmt` runs on
+  all three CI legs instead of Linux only — it had been skipped there
+  with a comment explaining the CRLF problem, which is what stopped
+  anyone asking what else CRLF reached. The answer, measured: nothing.
+- **A Windows Terraform job joins CI**, applying `azure-basic` and
+  `aws-basic`. No Docker: `windows-latest` has no daemon for Linux
+  containers, which is a limit of the runner rather than an oversight.
+
 ## 0.17.0 — 2026-11-11
 
 Milestone 17: policies attached to the thing, not to the caller.

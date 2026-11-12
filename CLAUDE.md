@@ -229,6 +229,123 @@ only ever show up on a machine you are not using.
 - **`/dev/null` is a character device**, so `os.ModeCharDevice` says "terminal" for a process whose stdin is `/dev/null`. The standard library cannot detect a TTY without an ioctl it does not expose, so do not try: decide from what was asked for instead. `nimbus ssh` allocates a TTY for an interactive shell and never for a command, which is also what makes it usable in CI.
 - **A CI job added in a close-out and never looked at can be red for three milestones.** The two AWS Docker jobs went in with M8 and had never once passed; the GKE job failed on its first run. All of it was the `host.docker.internal` gap, invisible on the Mac everything was proven on. Reading `gh run list` is part of closing out a milestone, not an optional extra.
 
+### Windows, actually run (Milestone 18)
+
+Nimbus had never been RUN on Windows before this. The CI leg compiled it and
+ran the unit tests, and that was all. Most of what follows is a suspicion
+that was CHECKED AND DISPROVED, which is worth writing down for the same
+reason a bug is: the next person will suspect the same things. The three real
+bugs it turned up were none of them Windows-only.
+
+- **Git for Windows sets `core.autocrlf=true`, and the only thing a CRLF
+  checkout breaks is `gofmt`** -- which reported all 219 Go files, making the
+  close-out check impossible to pass there. Nothing else is affected, by two
+  separate mechanisms worth keeping apart: Go DISCARDS `\r` from raw string
+  literals (the spec says so, and a genuinely CRLF source file compiled here
+  yielded `"line one\nline two"`), and text built with `\n` escapes in an
+  interpreted literal never reads a newline from the file at all. So the vm
+  engine's boot script and the EKS webhook kubeconfig (raw literals) and the
+  k3s mirror's `hosts.toml` and `registries.yaml` (escapes) all reach their
+  Linux containers as LF however the repo was checked out -- proven by running
+  the Docker-backed boot test on a CRLF tree, and again by an `aws-instance`
+  apply whose boot script really ran. `.gitattributes` now pins the working
+  tree to LF, so CI's gofmt step runs on all three legs instead of Linux only.
+  **This had been half-known and worked around in `ci.yml` with a comment,
+  which is what stopped anyone asking what else CRLF reached.**
+- **Smart App Control blocks unsigned Go binaries, unpredictably, and cannot
+  be excluded from.** It is ON and enforced by default on Windows 11 Home. It
+  blocked `go test` binaries out of the build cache intermittently, then one
+  package's tests persistently, and finally `nimbus.exe` itself -- after which
+  rebuilding, renaming, relocating out of `%TEMP%`, changing build flags to
+  alter the hash, and `Unblock-File` ALL failed. There is no exclusion
+  mechanism. The only remedy is turning it off, which Windows cannot undo
+  without a full reset. Budget for this on a fresh Windows machine; nothing in
+  this repo can fix it, and a workaround that appears to work (building to a
+  normal path) is coincidence rather than a rule.
+- **Go on Windows reads `Cert:\CurrentUser\Root`**, so `nimbus cert`'s "no
+  admin needed" advice is correct. Verified with a one-request Go probe rather
+  than inferred from a passing apply, because Go's `crypto/x509` is what
+  azurerm, the aws provider and the google provider all use, while `curl`
+  carries its own bundle and would answer a different question.
+- **Go on Windows also honours `SSL_CERT_FILE`**, which the README offers only
+  to Linux users: pointing it at the CA ran an entire `azure-basic` apply with
+  NOTHING in the trust store. It REPLACES the system roots rather than adding
+  to them -- measured against a public site -- exactly as `REQUESTS_CA_BUNDLE`
+  does for `az`, so it belongs in one shell and never globally. `terraform
+  init` still reaches the public registry through it, which was checked
+  specifically, because advice that silently broke provider downloads would be
+  worse than no advice.
+- **Windows's bundled `curl` is schannel, not OpenSSL, and refuses a local CA
+  for revocation.** `--cacert nimbus-ca.pem` fails with `schannel: the
+  revocation status is unknown`, which sounds like a bad certificate and means
+  only that there is no CRL or OCSP to check -- as there never is for a local
+  CA. `--ssl-no-revoke` is the way through. Go, the browser and `az` are all
+  unaffected.
+- **Git Bash rewrites anything shaped like a Unix path, and the error names
+  the wrong cause.** MSYS path conversion turned `--log-group-name
+  /aws/lambda/nimbus-writer` into `C:/Program Files/Git/aws/lambda/...`, and
+  the CLI answered "The specified log group does not exist" -- true, and
+  nothing to do with the real problem. The same hit `docker exec … /var/task`,
+  and `cmd.exe /c` swallowed a command entirely. `MSYS_NO_PATHCONV=1` fixes
+  it and PowerShell never has the problem. It distorted three separate
+  measurements in one session, so suspect it FIRST when a Windows result is
+  strange.
+- **Docker Desktop on Windows is WSL2 and needs nothing special.** A bind
+  mount takes a raw `C:\…` path in `-v`, and presents the files as `0777` --
+  which also makes the missing-executable-bit question moot for a Lambda's
+  mounted code. `host.docker.internal` resolves, and the unconditional
+  `--add-host host.docker.internal:host-gateway` neither conflicts nor is
+  needed there; it is simply harmless. The k3s token-webhook kubeconfig
+  bind-mounts from a Windows path into the API server and `kubectl get nodes`
+  authenticates through it -- the sharpest thing this milestone expected to
+  break, and it did not.
+- **`exec.Command("az", …)` runs `az.cmd`**, because Go's `LookPath` honours
+  PATHEXT, and `REQUESTS_CA_BUNDLE` reaches the Python process through the
+  shim. Proven rather than assumed: `az cloud register` fetches the metadata
+  document over TLS as its first act and could not have succeeded without it.
+- **The nested `*.localhost` claim is now proven END TO END on Windows**, not
+  only at the resolver as Milestone 2 left it:
+  `stnimbusdata.blob.storage.nimbus.localhost` resolved to loopback with
+  nothing installed, matched the five-label wildcard SAN, and served real blob
+  bytes to Go, to `curl` and to `az storage blob download`.
+- **`nimbus ssh` works from Git Bash, PowerShell and cmd.exe** for the command
+  form. The interactive form allocates a TTY and cannot be driven from a tool,
+  so it is the one thing here a person has to try by hand.
+- **Terraform lock files need a `windows_amd64` hash.** Written on macOS they
+  record no Windows platform, so every Windows user's first `terraform init`
+  silently modifies four example lock files -- which looks like local damage.
+
+The three real bugs, none of them Windows-only:
+
+- **A case-insensitive filesystem merged two object keys into one file.** NTFS
+  and APFS are both case-insensitive by default, so only the Linux CI leg was
+  ever immune, and nothing said so for ten milestones. The two stores then
+  failed DIFFERENTLY, because S3 walks the directory and rebuilds each key
+  from the path while the blob store reads a manifest that already holds the
+  name: S3 listed a key that 404'd while the key that worked was not listed,
+  and Azure returned the same content under both names. Loss on one side,
+  silent corruption on the other. `:` opened an NTFS alternate data stream and
+  `?`, `*` and `|` failed the write outright, with the error SWALLOWED in both
+  stores. `internal/fsname` percent-encodes anything that is not a lowercase
+  letter, a digit, `-`, `_` or `.`, which is the identity for every key in
+  every example here. **Encoding uppercase is what makes it provable**: an
+  encoded name contains none, so comparing case-insensitively is the same as
+  comparing exactly, and percent-encoding is injective. GCP's objectstore had
+  hashed from the start and was never affected.
+- **Every S3 key ending in `.json` was lost on restart, on every platform.**
+  `load` skipped all `.json` paths as metadata sidecars, including the
+  object's own data file; a bucket holding one `config.json` came back empty.
+  The sidecar is now `.meta%`, collision-proof because `fsname.Encode` can
+  never produce a name ending in `%`.
+- **`--persist` is about shutdown, not about delete.** `funcs.Engine.Stop` and
+  `run.Engine.Stop` both checked `KeepRunning` themselves, one level below the
+  only caller that should, so a destroyed Lambda, Container App or Cloud Run
+  service left its container running for ever. Every `Shutdown` already
+  returns early on the flag before reaching them, so the check was unreachable
+  for its stated purpose and wrong everywhere else. `vm.Engine.Delete` and
+  `k3s.Engine.Stop` had always removed unconditionally, which is what made the
+  shape obvious.
+
 ## Authorization facts (the decision engine, and all three clouds)
 
 - **Enforcement is opt-in and an unmapped caller is the account ROOT.** `--enforce-iam` turns it on; with it off nothing is ever refused. The default caller is root, which in real AWS carries no policies and can do anything — so it is the faithful answer AND the one that costs nothing: `aws-basic`, which knows nothing about IAM, applies, plans clean and destroys against an enforcing server unchanged. A denial is something you opt into by claiming a limited identity. Deny-by-default still governs policy evaluation; root short-circuits before it.

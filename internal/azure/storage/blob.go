@@ -24,6 +24,18 @@ func (h *Handler) serveBlob(w http.ResponseWriter, r *http.Request, a *Account) 
 	restype, comp := q.Get("restype"), q.Get("comp")
 	container, blob := splitBlobPath(r.URL.Path)
 
+	// A name that will become a path is judged here, once, in front of every
+	// blob operation. One enforcement point rather than a check inside each
+	// handler, for the reason the AWS authorization work wrote down: a check
+	// each operation performs for itself is a silent grant the moment one
+	// forgets to ask. Both segments are checked, because a CONTAINER named
+	// ".." escapes just as surely as a blob named "../..".
+	if (container != "" && !blobNameIsSafe(container)) || (blob != "" && !blobNameIsSafe(blob)) {
+		WriteError(w, 400, "InvalidResourceName",
+			"The specified resource name contains invalid characters.")
+		return "blob: unsafe resource name"
+	}
+
 	switch {
 	case container == "" && restype == "service":
 		return h.serviceProperties(w, r, a, ServiceBlob, comp)

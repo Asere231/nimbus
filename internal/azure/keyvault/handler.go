@@ -26,6 +26,12 @@ type Handler struct {
 	Audience string
 	// BaseURI builds a vault's data-plane URI, used to construct secret IDs.
 	BaseURI func(vault string) string
+	// Authorize, when set, decides whether a data-plane request may
+	// proceed. A CALLBACK rather than an import, because this package
+	// knows Key Vault's paths and nothing about role assignments, and
+	// the evaluator knows the reverse. nil means no enforcement, which
+	// is what --enforce-iam being off looks like from here.
+	Authorize func(r *http.Request, vault, action string) *Denial
 }
 
 // NewHandler creates the data-plane handler over the given store.
@@ -85,6 +91,20 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, vaultName string
 		WriteError(w, 404, "VaultNotFound",
 			"The vault '%s' does not exist. Create it through the Resource Manager first.", vaultName)
 		return "unknown vault: " + vaultName
+	}
+
+	// Authorization sits AFTER the challenge and the vault lookup, and
+	// that order is load-bearing. A request with no token must get the
+	// 401 that starts the dance, not a 403: every Key Vault SDK is
+	// written to expect the challenge, and being told "refused" where
+	// it expected "authenticate" stops it before it has tried.
+	if h.Authorize != nil {
+		if action := DataActionFor(r, r.URL.Path); action != "" {
+			if d := h.Authorize(r, vaultName, action); d != nil {
+				WriteError(w, d.Status, d.Code, "%s", d.Message)
+				return d.Note
+			}
+		}
 	}
 
 	seg := splitPath(r.URL.Path)
@@ -562,4 +582,108 @@ func unixPtr(v *int64) *time.Time {
 	}
 	t := time.Unix(*v, 0).UTC()
 	return &t
+}
+
+// --- authorization --------------------------------------------------------
+
+// Denial is a refusal handed back by the Authorize hook: Key Vault's own
+// error shape, plus a note for the activity feed.
+type Denial struct {
+	Status  int
+	Code    string
+	Message string
+	Note    string
+}
+
+// DataActionFor names the Azure RBAC data action a request needs, or ""
+// for a path that grants nothing and can be left to answer for itself.
+//
+// It lives HERE, beside the routing it mirrors, for the reason AWS's
+// classifier records: if the two disagree, a request is authorized as
+// one thing and served as another. Every path Serve dispatches has an
+// action; the 501 paths do not, because refusing a path that does
+// nothing with a 403 tells a client less than the 501 does.
+//
+// The distinction the whole thing exists to draw is `getSecret` versus
+// `readMetadata`. Key Vault Reader holds the second and not the first,
+// which is what lets a role see that a secret called `db-password`
+// exists without seeing what it is.
+func DataActionFor(r *http.Request, path string) string {
+	seg := splitPath(path)
+	if len(seg) == 0 {
+		return ""
+	}
+	const prefix = "Microsoft.KeyVault/vaults/"
+	named := len(seg) > 1 && seg[1] != ""
+
+	switch strings.ToLower(seg[0]) {
+	case "secrets":
+		switch r.Method {
+		case http.MethodGet:
+			// A list, or a secret's versions, is metadata. Only
+			// fetching one secret is getSecret.
+			if !named || (len(seg) > 2 && strings.EqualFold(seg[2], "versions")) {
+				return prefix + "secrets/readMetadata/action"
+			}
+			return prefix + "secrets/getSecret/action"
+		case http.MethodPut, http.MethodPatch:
+			return prefix + "secrets/setSecret/action"
+		case http.MethodDelete:
+			return prefix + "secrets/delete"
+		case http.MethodPost:
+			if len(seg) > 2 && strings.EqualFold(seg[2], "backup") {
+				return prefix + "secrets/backup/action"
+			}
+			return prefix + "secrets/restore/action"
+		}
+	case "deletedsecrets":
+		switch {
+		case r.Method == http.MethodDelete:
+			return prefix + "secrets/purge"
+		case r.Method == http.MethodPost:
+			return prefix + "secrets/recover/action"
+		case r.Method == http.MethodGet:
+			return prefix + "secrets/readMetadata/action"
+		}
+	case "certificates":
+		// Contacts, which azurerm reads straight after every vault
+		// read. A plain read action, so anything that can read the
+		// vault's contents can read it -- a 403 here crashes the
+		// provider's Key Vault client, which is why it matters that
+		// this is not accidentally stricter than the vault itself.
+		return prefix + "certificatecontacts/read"
+	}
+	return ""
+}
+
+// DataActions is every data action this data plane can require.
+//
+// Exported so that the explainer can tell a data action from a
+// control-plane one EXACTLY, rather than by guessing from its shape --
+// `Microsoft.KeyVault/vaults/secrets/delete` is a data action while
+// `Microsoft.KeyVault/vaults/delete` is not, and no pattern separates
+// those two reliably. Deriving the set from DataActionFor, the same
+// function the enforcement point uses, means the explanation cannot
+// classify an action differently from the way it is enforced.
+func DataActions() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, probe := range []struct{ method, path string }{
+		{http.MethodGet, "/secrets"},
+		{http.MethodGet, "/secrets/x"},
+		{http.MethodPut, "/secrets/x"},
+		{http.MethodDelete, "/secrets/x"},
+		{http.MethodPost, "/secrets/x/backup"},
+		{http.MethodPost, "/secrets/x/restore"},
+		{http.MethodDelete, "/deletedsecrets/x"},
+		{http.MethodPost, "/deletedsecrets/x/recover"},
+		{http.MethodGet, "/certificates/contacts"},
+	} {
+		r, _ := http.NewRequest(probe.method, probe.path, nil)
+		if a := DataActionFor(r, probe.path); a != "" && !seen[a] {
+			seen[a] = true
+			out = append(out, a)
+		}
+	}
+	return out
 }

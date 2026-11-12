@@ -96,6 +96,21 @@ variable "grant" {
   EOT
 }
 
+variable "secrets_user" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Which Key Vault role the principal holds. false grants Key Vault
+    Reader, which can list secrets and NOT read their values: ../app's
+    data source fails with Forbidden. true grants Key Vault Secrets
+    User and the same apply succeeds.
+
+    Neither role is Contributor, and that is the lesson: Contributor
+    passes every control-plane check on this vault and reads nothing
+    inside it.
+  EOT
+}
+
 resource "azurerm_resource_group" "rg" {
   name     = "rg-nimbus-rbac"
   location = "eastus"
@@ -131,6 +146,57 @@ resource "azurerm_role_assignment" "write" {
   principal_id         = var.app_principal_id
 
   skip_service_principal_aad_check = true
+}
+
+# --- Azure's OTHER action axis ---------------------------------------------
+#
+# Milestone 17. Everything above is about `actions`, which govern the
+# RESOURCE. `dataActions` govern what is INSIDE it, and the two do not
+# mix: Owner and Contributor hold Actions ["*"] and no data actions at
+# all, so a Contributor can DELETE this vault and cannot read a secret
+# out of it. Almost nobody expects that the first time.
+#
+# Only Key Vault's data plane is enforced, because a data action needs a
+# principal and Key Vault's is the one that has one: its clients send a
+# bearer token after a 401 challenge. Azure Storage's Shared Key carries
+# no principal at all, so a "Storage Blob Data Reader" assignment still
+# governs nothing -- stated in docs/ROADMAP.md rather than half-done.
+
+resource "azurerm_key_vault" "kv" {
+  name                       = "kv-nimbus-rbac"
+  location                   = azurerm_resource_group.rg.location
+  resource_group_name        = azurerm_resource_group.rg.name
+  tenant_id                  = "00000000-0000-0000-0000-000000000001"
+  sku_name                   = "standard"
+  rbac_authorization_enabled = true
+}
+
+# Written by the unrestricted admin, so it is there whatever the app may
+# or may not read.
+resource "azurerm_key_vault_secret" "db" {
+  name         = "db-password"
+  value        = "hunter2"
+  key_vault_id = azurerm_key_vault.kv.id
+}
+
+# Key Vault Reader sees that `db-password` EXISTS and not what it is;
+# Key Vault Secrets User sees the value. That distinction is the whole
+# point of the data-action axis, and it is invisible from the vault's
+# control-plane permissions -- both roles can read the vault resource.
+resource "azurerm_role_assignment" "secret" {
+  scope                = azurerm_key_vault.kv.id
+  role_definition_name = var.secrets_user ? "Key Vault Secrets User" : "Key Vault Reader"
+  principal_id         = var.app_principal_id
+
+  skip_service_principal_aad_check = true
+}
+
+output "vault_name" {
+  value = azurerm_key_vault.kv.name
+}
+
+output "secret_role" {
+  value = var.secrets_user ? "Key Vault Secrets User" : "Key Vault Reader"
 }
 
 output "resource_group" {

@@ -49,6 +49,12 @@ variable "app_principal_id" {
   default = "22222222-2222-2222-2222-222222222222"
 }
 
+variable "vault_name" {
+  type        = string
+  default     = "kv-nimbus-rbac"
+  description = "The vault ../platform created. Reading it is a control-plane permission; reading what is in it is not."
+}
+
 variable "resource_group" {
   type    = string
   default = "rg-nimbus-rbac"
@@ -71,6 +77,28 @@ resource "azurerm_virtual_network" "vnet" {
   address_space       = ["10.40.0.0/16"]
 }
 
+# Reading a secret's VALUE, which is a data action.
+#
+# Nothing here says "data action" and nothing says which role is needed.
+# The vault reads fine either way -- that is a control-plane permission,
+# and both Key Vault Reader and Key Vault Secrets User have it. Only the
+# value below depends on the data-action axis, which is exactly how it
+# surprises people in real Azure.
+data "azurerm_key_vault" "kv" {
+  name                = var.vault_name
+  resource_group_name = var.resource_group
+}
+
+data "azurerm_key_vault_secret" "db" {
+  name         = "db-password"
+  key_vault_id = data.azurerm_key_vault.kv.id
+}
+
 output "vnet_id" {
   value = azurerm_virtual_network.vnet.id
+}
+
+output "secret" {
+  value     = data.azurerm_key_vault_secret.db.value
+  sensitive = true
 }

@@ -168,6 +168,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	s.keyvault.Login = cfg.PublicURL + "/" + cfg.TenantID
 	s.keyvault.Audience = keyVaultAudience
 	s.keyvault.BaseURI = s.vaultURI
+	s.keyvault.Authorize = s.authorizeDataAction
 	if cfg.DataDir != "" {
 		if err := s.storage.Store().Persist(filepath.Join(cfg.DataDir, "storage")); err != nil {
 			log.Printf("nimbus: storage persistence disabled: %v", err)

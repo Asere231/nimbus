@@ -64,12 +64,24 @@ var builtInRoles = []builtInRole{
 	{"b86a8fe4-44ce-4948-aee5-eccb2c155cd7", "Key Vault Secrets Officer",
 		"Perform any action on the secrets of a key vault, except manage permissions.",
 		[]string{"Microsoft.KeyVault/*/read"}, []string{"Microsoft.KeyVault/vaults/secrets/*"}},
+	// These two draw the distinction the whole data-action axis exists
+	// for, so `readMetadata/action` is spelled out in both rather than
+	// left to a `*/read` wildcard that cannot match it. Key Vault
+	// Reader's own description -- Microsoft's wording, above -- says
+	// metadata yes and values no, and without readMetadata the role
+	// cannot even list a secret, which is not what it says it does.
 	{"4633458b-17de-408a-b874-0445c86b69e6", "Key Vault Secrets User",
 		"Read secret contents.",
-		[]string{"Microsoft.KeyVault/*/read"}, []string{"Microsoft.KeyVault/vaults/secrets/getSecret/action"}},
+		[]string{"Microsoft.KeyVault/*/read"}, []string{
+			"Microsoft.KeyVault/vaults/secrets/getSecret/action",
+			"Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+		}},
 	{"21090545-7ca7-4776-b22c-e363652d74d2", "Key Vault Reader",
 		"Read metadata of key vaults and its certificates, keys, and secrets, but not their values.",
-		[]string{"Microsoft.KeyVault/*/read"}, []string{"Microsoft.KeyVault/vaults/*/read"}},
+		[]string{"Microsoft.KeyVault/*/read"}, []string{
+			"Microsoft.KeyVault/vaults/*/read",
+			"Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+		}},
 
 	{"7f951dda-4ed3-4680-a7ca-43fe172d538d", "AcrPull", "acr pull",
 		[]string{"Microsoft.ContainerRegistry/registries/pull/read"}, nil},

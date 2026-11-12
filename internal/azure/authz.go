@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Asere231/nimbus/internal/authz"
+	"github.com/Asere231/nimbus/internal/azure/keyvault"
 	"github.com/Asere231/nimbus/internal/core"
 )
 
@@ -43,11 +44,19 @@ import (
 
 // assignmentRule is one role assignment, ready to evaluate.
 type assignmentRule struct {
-	source      string
-	scope       string
-	actions     []string
-	notActions  []string
-	unsupported error
+	source     string
+	scope      string
+	actions    []string
+	notActions []string
+	// Azure's OTHER action axis, and the one people are surprised by.
+	// `actions` govern the RESOURCE -- creating a vault, reading its
+	// properties -- and `dataActions` govern what is INSIDE it. They do
+	// not mix: Owner and Contributor hold Actions ["*"] and no data
+	// actions at all, so a Contributor can delete a key vault and
+	// cannot read a secret out of it.
+	dataActions    []string
+	notDataActions []string
+	unsupported    error
 }
 
 func (a *assignmentRule) Effect() authz.Effect { return authz.Allow }
@@ -63,8 +72,22 @@ func (a *assignmentRule) Applies(req authz.Request) (bool, error) {
 	if a.unsupported != nil {
 		return false, a.unsupported
 	}
+	// Which axis, from the request rather than from the action's shape:
+	// a data action is spelled like any other and only the caller knows
+	// which plane it arrived on. Carried in Context, so `internal/authz`
+	// needed no change for this either.
+	if req.Context[PlaneKey] == DataPlane {
+		return grantsAction(a.dataActions, a.notDataActions, req.Action), nil
+	}
 	return grantsAction(a.actions, a.notActions, req.Action), nil
 }
+
+// PlaneKey and DataPlane mark a request as a data-plane one, which
+// decides whether an assignment's actions or its dataActions apply.
+const (
+	PlaneKey  = "azure:plane"
+	DataPlane = "data"
+)
 
 // grantsAction is Azure's own rule: an action is granted when some pattern
 // in actions matches it and no pattern in notActions does. The patterns
@@ -231,6 +254,7 @@ func compileAssignment(name string, props map[string]any) authz.Rule {
 	rule.source = fmt.Sprintf("role assignment %s (%s) at %s", name, role.Name, scope)
 	rule.actions = lowerAll(role.Actions)
 	rule.notActions = lowerAll(notActionsFor(role.GUID))
+	rule.dataActions = lowerAll(role.DataActions)
 	return rule
 }
 
@@ -327,14 +351,60 @@ func (s *Server) ExplainAccess(principal, resourceID, resourceType string) authz
 		resourceType + "/write",
 		resourceType + "/delete",
 	}
-	report.Checks = authz.Explain(p, resourceID, actions, s.rulesFor(p.ID))
+	rules := s.rulesFor(p.ID)
+	report.Checks = authz.Explain(p, resourceID, actions, rules)
+
+	// A key vault's DATA actions, which are the interesting ones and
+	// are invisible from its control-plane permissions: a Contributor
+	// passes all three checks above and can read nothing inside. This
+	// is the Milestone 14 lesson about a bucket's contents, one cloud
+	// over -- a container's own permissions are not what people want to
+	// know about it.
+	if eq(resourceType, typeKeyVault) {
+		for _, action := range keyvault.DataActions() {
+			report.Checks = append(report.Checks,
+				explainOnPlane(p, resourceID, action, rules))
+		}
+	}
 	return report
 }
 
 // ExplainOne answers a single question, which is what `nimbus can` asks.
 func (s *Server) ExplainOne(principal, action, resource string) authz.Check {
 	p := s.principalFor(principal)
-	return authz.Explain(p, resource, []string{action}, s.rulesFor(p.ID))[0]
+	return explainOnPlane(p, resource, action, s.rulesFor(p.ID))
+}
+
+// explainOnPlane evaluates one action on whichever axis it belongs to.
+//
+// Getting this wrong would be worse than not answering: asked whether a
+// Contributor may read a secret, a control-plane evaluation says YES,
+// because Contributor holds `Actions: ["*"]`. That is precisely the
+// confusion dataActions exist to remove, so the explainer would be
+// teaching the thing the enforcement just stopped.
+func explainOnPlane(p authz.Principal, resource, action string, rules []authz.Rule) authz.Check {
+	req := authz.Request{Principal: p, Action: action, Resource: resource}
+	if isDataAction(action) {
+		req.Context = map[string]string{PlaneKey: DataPlane}
+	}
+	d := authz.Evaluate(req, rules)
+	return authz.Check{
+		Action: action, Allowed: d.Allowed, Rule: d.Source,
+		Reason: d.Reason, Unevaluated: d.Unevaluated,
+	}
+}
+
+// isDataAction asks the data plane itself, rather than guessing from the
+// action's shape: `Microsoft.KeyVault/vaults/secrets/delete` is a data
+// action and `Microsoft.KeyVault/vaults/delete` is not, and no pattern
+// separates those two.
+func isDataAction(action string) bool {
+	for _, a := range keyvault.DataActions() {
+		if eq(a, action) {
+			return true
+		}
+	}
+	return false
 }
 
 // principalFor resolves a named principal, or the default identity when

@@ -159,7 +159,6 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		NamePrefix:   "nimbus-aca",
 		PortBase:     DefaultContainerAppPortBase,
 		StartTimeout: cfg.ClusterTimeout,
-		KeepRunning:  cfg.KeepClusters,
 	}, s.docker)
 	s.logs = newLogStore()
 	// The challenge a Key Vault client gets points at our own login endpoint,

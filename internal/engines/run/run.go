@@ -59,8 +59,6 @@ type Config struct {
 	// StartTimeout bounds how long a container may take to answer. It
 	// includes pulling the image, which on a first run is most of it.
 	StartTimeout time.Duration
-	// KeepRunning leaves containers up when Nimbus stops.
-	KeepRunning bool
 }
 
 func (c Config) withDefaults() Config {
@@ -306,15 +304,21 @@ func (e *Engine) Logs(ctx context.Context, svc *Service, since time.Time) ([]byt
 	return e.docker.Logs(ctx, svc.Container, since)
 }
 
-// Stop removes a service's container, unless it is meant to outlive us.
+// Stop removes a service's container.
+//
+// ALWAYS -- KeepRunning is deliberately not consulted here, for the reason
+// funcs.Engine.Stop spells out: it means "leave containers up when NIMBUS
+// stops", not "ignore a client that deleted the service". Both callers that
+// really should respect the flag, azure.Server.Shutdown and
+// gcp.Server.Shutdown, already return early on it before reaching this, so
+// the check was redundant there and wrong on the delete paths -- with
+// --persist, destroying a Container App or a Cloud Run service left its
+// container running for ever.
 func (e *Engine) Stop(ctx context.Context, svc *Service) {
 	e.mu.Lock()
 	delete(e.svcs, svc.ResourceID)
 	delete(e.proxy, svc.ResourceID)
 	e.mu.Unlock()
-	if e.cfg.KeepRunning {
-		return
-	}
 	_ = e.docker.Remove(ctx, svc.Container)
 }
 

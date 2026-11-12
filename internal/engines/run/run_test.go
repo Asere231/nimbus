@@ -224,19 +224,40 @@ func TestStopForgetsTheServiceAndRemovesItsContainer(t *testing.T) {
 	}
 }
 
-// KeepRunning is what --persist means: the container outlives Nimbus so a
-// restart finds it still there.
-func TestStopLeavesTheContainerWhenItIsMeantToOutliveUs(t *testing.T) {
+// Stop ALWAYS removes the container, and this test replaces one that
+// asserted the opposite.
+//
+// The old test was TestStopLeavesTheContainerWhenItIsMeantToOutliveUs, and
+// its reasoning was "KeepRunning is what --persist means: the container
+// outlives Nimbus so a restart finds it still there". The first half is
+// right and the second does not follow, because Stop is NEVER REACHED on
+// the path that sentence describes: azure.Server.Shutdown and
+// gcp.Server.Shutdown both `return` on KeepClusters before they iterate
+// services. So the check inside Stop could only ever fire on the OTHER
+// callers -- azure/containerapp.go and gcp/run.go, which are deletes -- and
+// there it meant a destroyed Container App or Cloud Run service left its
+// container running for ever.
+//
+// Measured on Windows as the Lambda version of the same conflation:
+// `terraform destroy` reported success and the container was still Up a
+// minute later. vm.Engine.Delete and k3s.Engine.Stop have always removed
+// unconditionally; funcs and run were the two that did not.
+//
+// KeepRunning is gone from this engine's Config rather than left unread,
+// so nothing can set a flag that does nothing.
+func TestStopAlwaysRemovesTheContainerEvenUnderPersist(t *testing.T) {
 	f := docker.NewFake()
-	e := New(Config{NamePrefix: "nimbus-run", KeepRunning: true}, f)
+	e := New(Config{NamePrefix: "nimbus-run"}, f)
 	svc := &Service{ResourceID: "id", Name: "hello", Container: "nimbus-run-hello"}
 	e.Put(svc)
 	e.Stop(context.Background(), svc)
 
+	removed := false
 	for _, c := range f.Calls {
-		if strings.Contains(c, "remove") {
-			t.Errorf("the container was removed despite KeepRunning: %v", f.Calls)
-		}
+		removed = removed || strings.Contains(c, "remove nimbus-run-hello")
+	}
+	if !removed {
+		t.Errorf("the container was not removed: %v", f.Calls)
 	}
 }
 

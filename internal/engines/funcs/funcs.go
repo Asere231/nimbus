@@ -47,8 +47,6 @@ type Config struct {
 	PortBase int
 	// StartTimeout bounds how long a container may take to answer.
 	StartTimeout time.Duration
-	// KeepRunning leaves containers up when Nimbus stops.
-	KeepRunning bool
 	// Dir is where unpacked function code is kept. Required: a bind mount
 	// needs a real directory on the host.
 	Dir string
@@ -310,9 +308,18 @@ func (e *Engine) Stop(ctx context.Context, fn *Function) {
 	e.mu.Lock()
 	delete(e.funcs, fn.ResourceID)
 	e.mu.Unlock()
-	if e.cfg.KeepRunning {
-		return
-	}
+	// The container goes, ALWAYS -- KeepRunning is deliberately not consulted
+	// here. It means "leave containers up when NIMBUS stops", which is what
+	// --persist asks for; it does not mean "ignore a client that deleted the
+	// function". The one caller that really should respect the flag,
+	// aws.Server.Shutdown, already returns early on it before reaching this,
+	// so the check was redundant there and wrong everywhere else: with
+	// --persist, a `terraform destroy` reported success and left the
+	// function's container running for ever, and an update-code replaced
+	// nothing.
+	//
+	// vm.Engine.Delete and k3s.Engine.Stop have always removed
+	// unconditionally. This engine was the odd one out.
 	_ = e.docker.Remove(ctx, fn.Container)
 }
 

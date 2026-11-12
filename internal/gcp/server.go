@@ -183,7 +183,6 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	s.services = run.New(run.Config{
 		NamePrefix:   "nimbus-run",
 		PortBase:     cfg.ServicePortBase,
-		KeepRunning:  cfg.KeepClusters,
 		StartTimeout: cfg.ClusterTimeout,
 	}, docker.NewCLI())
 

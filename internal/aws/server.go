@@ -130,7 +130,6 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	s.lambda = funcs.New(funcs.Config{
 		NamePrefix:   "nimbus-lambda",
 		PortBase:     orZero(cfg.FunctionPortBase, DefaultFunctionPortBase),
-		KeepRunning:  cfg.KeepClusters,
 		StartTimeout: cfg.ClusterTimeout,
 		Dir:          lambdaDir(cfg.DataDir),
 	}, docker.NewCLI())

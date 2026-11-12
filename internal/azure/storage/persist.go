@@ -2,10 +2,13 @@ package storage
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Asere231/nimbus/internal/fsname"
 )
 
 // Persistence for the storage data plane.
@@ -105,12 +108,26 @@ func (s *Store) save(a *Account) {
 			ETag: c.ETag, Modified: c.Modified,
 		})
 		for _, b := range c.Blobs("") {
-			rel := filepath.Join("blobs", c.Name, b.Name)
+			// Both names go through fsname.Encode, which is the identity
+			// for an ordinary lowercase name and escapes what a filesystem
+			// cannot hold. The manifest keeps the REAL name beside this
+			// path, so load never has to decode it -- but the path still
+			// has to be one every machine can write, and the same one on
+			// each, or a persisted account stops being portable.
+			rel := filepath.Join("blobs",
+				fsname.Encode(c.Name), filepath.FromSlash(fsname.Encode(b.Name)))
+			// A failed write is REPORTED, not swallowed. It used to `continue`
+			// in silence, so a blob whose name the filesystem refused served
+			// perfectly from memory and was gone after a restart with nothing
+			// saying why. With fsname.Encode in front, a failure here means
+			// something real rather than an awkward name.
 			full := filepath.Join(acctDir, rel)
 			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				log.Printf("nimbus: could not persist blob %s/%s: %v", c.Name, b.Name, err)
 				continue
 			}
 			if err := os.WriteFile(full, b.Content, 0o644); err != nil {
+				log.Printf("nimbus: could not persist blob %s/%s: %v", c.Name, b.Name, err)
 				continue
 			}
 			f.Blobs = append(f.Blobs, persistedBlob{

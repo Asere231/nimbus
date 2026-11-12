@@ -4,13 +4,30 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Asere231/nimbus/internal/fsname"
 )
+
+// metaSuffix names an object's metadata file.
+//
+// It ends in "%" because fsname.Encode can never produce a name that does:
+// every "%" it emits is followed by two hex digits. So no key, whatever it is
+// called, can collide with a metadata file -- and fsname.Decode refuses the
+// name, which is a second reason load skips it.
+//
+// The old suffix was ".json", and that was a silent data-loss bug with
+// nothing to do with any platform: load skipped every path ending in ".json",
+// which is the object's OWN file whenever a key ends in ".json". Measured, on
+// a bucket holding one object called config.json -- after a restart the
+// bucket was empty and the key 404'd.
+const metaSuffix = ".meta%"
 
 // Where S3 object bytes live.
 //
@@ -116,7 +133,7 @@ func (s *objectStore) delete(bucket, key string) bool {
 	if s.dir != "" {
 		path := s.pathFor(bucket, key)
 		_ = os.Remove(path)
-		_ = os.Remove(path + ".json")
+		_ = os.Remove(path + metaSuffix)
 	}
 	return true
 }
@@ -127,7 +144,7 @@ func (s *objectStore) deleteBucket(bucket string) {
 	defer s.mu.Unlock()
 	delete(s.mem, bucket)
 	if s.dir != "" {
-		_ = os.RemoveAll(filepath.Join(s.dir, bucket))
+		_ = os.RemoveAll(filepath.Join(s.dir, fsname.Encode(bucket)))
 	}
 }
 
@@ -157,23 +174,39 @@ func (s *objectStore) count(bucket string) int {
 // pathFor keeps the key's own shape on disk, so "img/logo.svg" is a file in
 // a directory rather than a file with a slash in its name. A key that tries
 // to climb out with ".." is refused by cleanKey before it ever gets here.
+//
+// The name goes through fsname.Encode, which is the identity for an ordinary
+// lowercase key and escapes what a filesystem cannot hold. Without it, NTFS
+// and APFS -- both case-insensitive by default -- merged two keys differing
+// only in case onto one file, ":" opened an alternate data stream, and "?",
+// "*" and "|" failed the write entirely. See internal/fsname.
 func (s *objectStore) pathFor(bucket, key string) string {
-	return filepath.Join(s.dir, bucket, filepath.FromSlash(key))
+	return filepath.Join(s.dir, fsname.Encode(bucket), filepath.FromSlash(fsname.Encode(key)))
 }
 
 func (s *objectStore) writeThrough(bucket, key string, data []byte, info objectInfo) {
 	if s.dir == "" {
 		return
 	}
+	// A failed write is REPORTED, not swallowed. It used to return quietly,
+	// so an object whose name the filesystem refused served perfectly from
+	// memory and then was simply gone after a restart, with nothing anywhere
+	// saying why. fsname.Encode should mean this no longer happens for a
+	// name's sake, which is exactly why a failure now means something real --
+	// a full disk, a permission -- and is worth saying out loud.
 	path := s.pathFor(bucket, key)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		log.Printf("nimbus: could not persist s3://%s/%s: %v", bucket, key, err)
 		return
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
+		log.Printf("nimbus: could not persist s3://%s/%s: %v", bucket, key, err)
 		return
 	}
 	if meta, err := json.Marshal(info); err == nil {
-		_ = os.WriteFile(path+".json", meta, 0o644)
+		if err := os.WriteFile(path+metaSuffix, meta, 0o644); err != nil {
+			log.Printf("nimbus: could not persist metadata for s3://%s/%s: %v", bucket, key, err)
+		}
 	}
 }
 
@@ -185,7 +218,7 @@ func (s *objectStore) load() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_ = filepath.WalkDir(s.dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || strings.HasSuffix(path, ".json") {
+		if err != nil || d.IsDir() || strings.HasSuffix(path, metaSuffix) {
 			return nil
 		}
 		rel, err := filepath.Rel(s.dir, path)
@@ -196,13 +229,24 @@ func (s *objectStore) load() {
 		if len(parts) != 2 {
 			return nil
 		}
-		bucket, key := parts[0], parts[1]
+		// The path is an ENCODED name, so the key is what it decodes back
+		// to. A file that does not decode is not one we wrote -- something
+		// a person dropped in the data directory -- and is skipped rather
+		// than loaded under an invented name.
+		bucket, ok := fsname.Decode(parts[0])
+		if !ok {
+			return nil
+		}
+		key, ok := fsname.Decode(parts[1])
+		if !ok {
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
 		info := objectInfo{Key: key, Size: int64(len(data))}
-		if meta, err := os.ReadFile(path + ".json"); err == nil {
+		if meta, err := os.ReadFile(path + metaSuffix); err == nil {
 			_ = json.Unmarshal(meta, &info)
 		}
 		if s.mem[bucket] == nil {

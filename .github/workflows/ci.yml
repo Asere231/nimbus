@@ -1171,12 +1171,42 @@ jobs:
       # are proven on a person's machine instead. These two need nothing but
       # the binary: azure-basic covers ARM over TLS and so the certificate
       # path, aws-basic covers SigV4 routing, EC2, IAM and S3 on NTFS.
-      - name: Start Nimbus
+      - name: Build Nimbus and write its CA
         shell: bash
         run: |
           set -euo pipefail
           go build -o bin/nimbus.exe ./cmd/nimbus
           ./bin/nimbus.exe cert
+
+      # The CA goes into the certificate store, which is what `nimbus cert`
+      # tells a person to do -- so this step VERIFIES that advice on every
+      # run rather than taking a shortcut around it.
+      #
+      # The shortcut was tried first and does not work: SSL_CERT_FILE. Go's
+      # own net/http honours it on Windows (measured), but the azurerm
+      # PROVIDER does not -- proven by pointing it at a nonexistent file and
+      # watching a plan succeed anyway, which it could only do by reading the
+      # trust store. The provider is a separate binary built with its own Go
+      # version, and whatever it honours is not ours to choose. On Windows
+      # the trust store is the mechanism that matters.
+      #
+      # CurrentUser\Root needs no elevation, which is the whole reason
+      # `nimbus cert` names that store.
+      - name: Trust the CA (CurrentUser\Root, no admin)
+        shell: pwsh
+        run: |
+          $ca = Join-Path $env:USERPROFILE ".nimbus\certs\nimbus-ca.pem"
+          Write-Host "importing $ca"
+          Import-Certificate -FilePath $ca -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
+          $found = Get-ChildItem Cert:\CurrentUser\Root |
+            Where-Object { $_.Subject -like '*Nimbus*' }
+          if (-not $found) { throw "the Nimbus CA is not in CurrentUser\Root after importing it" }
+          Write-Host "trusted: $($found.Subject)"
+
+      - name: Start Nimbus
+        shell: bash
+        run: |
+          set -euo pipefail
           ./bin/nimbus.exe start --clouds azure,aws,gcp &
           for i in $(seq 1 30); do
             curl -sf http://localhost:4700/api/info >/dev/null && break
@@ -1189,18 +1219,6 @@ jobs:
         working-directory: examples/terraform
         run: |
           set -euo pipefail
-          # Go on Windows honours SSL_CERT_FILE, measured in Milestone 18 --
-          # which the README had only ever offered to Linux users. It means
-          # CI needs nothing in the Windows certificate store, and so no
-          # elevation. It REPLACES the system roots rather than adding to
-          # them, but `terraform init` reaches the registry through it
-          # regardless, which was checked specifically.
-          #
-          # $USERPROFILE rather than $HOME: in Git Bash $HOME is a POSIX path
-          # like /c/Users/runneradmin, which a Go program cannot open. Mixed
-          # separators are fine on Windows, so this stays readable.
-          export SSL_CERT_FILE="$USERPROFILE/.nimbus/certs/nimbus-ca.pem"
-
           for example in azure-basic aws-basic; do
             echo "::group::$example"
             cd "$GITHUB_WORKSPACE/examples/terraform/$example"

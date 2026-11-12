@@ -267,14 +267,20 @@ bugs it turned up were none of them Windows-only.
   than inferred from a passing apply, because Go's `crypto/x509` is what
   azurerm, the aws provider and the google provider all use, while `curl`
   carries its own bundle and would answer a different question.
-- **Go on Windows also honours `SSL_CERT_FILE`**, which the README offers only
-  to Linux users: pointing it at the CA ran an entire `azure-basic` apply with
-  NOTHING in the trust store. It REPLACES the system roots rather than adding
-  to them -- measured against a public site -- exactly as `REQUESTS_CA_BUNDLE`
-  does for `az`, so it belongs in one shell and never globally. `terraform
-  init` still reaches the public registry through it, which was checked
-  specifically, because advice that silently broke provider downloads would be
-  worse than no advice.
+- **`SSL_CERT_FILE` is NOT a way round the trust store on Windows, and
+  believing it was cost a red CI job.** Go's own `net/http` does honour it
+  there -- a probe with an empty store fetched ARM over TLS, and pointing it
+  at one CA replaces the system roots exactly as `REQUESTS_CA_BUNDLE` does for
+  `az`. But the **azurerm PROVIDER ignores it**: setting it to a nonexistent
+  file and watching `terraform plan` succeed anyway proves the provider read
+  the trust store instead, because a honoured-but-missing file would have left
+  it with no roots at all. A provider is a separate binary built with its own
+  Go version, and what it honours is not ours to choose. The apply that seemed
+  to prove otherwise had the CA in the store already. **On Windows the
+  certificate store is the mechanism that matters**, which is what makes
+  `nimbus cert`'s advice load-bearing rather than a convenience -- and why the
+  Windows CI job imports the CA exactly as that advice says, so every run
+  checks it.
 - **Windows's bundled `curl` is schannel, not OpenSSL, and refuses a local CA
   for revocation.** `--cacert nimbus-ca.pem` fails with `schannel: the
   revocation status is unknown`, which sounds like a bad certificate and means

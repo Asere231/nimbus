@@ -180,6 +180,7 @@ Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualize
 - **A startup script is METADATA** (`metadata.items`, an array of key/value pairs), where EC2 has a separate `UserData` parameter and Azure has base64 `customData`. And GCE `tags` are NETWORK tags a firewall matches on, not the key/value pairs EC2 calls tags — those are `labels`.
 - **An instance's lifecycle verbs are TRAILING PATH SEGMENTS**: `POST .../instances/{name}/stop`. Not the colon verbs GKE's `setSize` and Pub/Sub's `publish` use. Three conventions for "do a thing to a resource" in one cloud.
 - **gcloud and the provider use different paths for the same thing, twice over.** `gcloud compute instances list` reads `aggregated/instances` — a MAP keyed by scope, not a list — where the provider reads the zonal collection; and `gcloud` waits for an operation with `POST .../operations/{name}/wait` where the provider polls with GET. The second failed with "Nimbus does not implement the Compute collection operations", naming the collection it was already being served.
+- **EVERY collection has an aggregated form, not just instances.** Handling `aggregated/instances` alone left `gcloud compute networks subnets list` answering "Nimbus does not implement the Compute collection \"aggregated\" yet" — which names `aggregated` as the collection, itself the clue that the path was not being read properly. Found with gcloud 593.0.0 on Windows and platform-independent. `docs/GCLOUD.md` documents the command WITH `--regions us-central1`, which works and probably always did, so the gap was only ever in the bare form — a reminder that a documented incantation proves only itself, and the obvious way to type a command is the one a person will actually use. `serveAggregatedCompute` now answers any kind in the table, keyed `regions/` for a regional kind and `zones/` otherwise — one hard-coded prefix would be wrong for one of them — with `kind` per collection (`compute#subnetworkAggregatedList`), since a client parsing with the wrong one sees an empty document rather than an error.
 - **An instance DELETE must remove its container synchronously.** Answering a pending operation and doing it in the background let `terraform destroy` return with the container still up — reproducibly, one container the instant destroy exited and none three seconds later. A create has to be asynchronous because it pulls an image; a delete has nothing slow in it.
 - **Push delivery is the first thing Nimbus does OUTBOUND.** Everything else answers requests; a push subscription makes Nimbus an HTTP client against a URL that came out of a config. The endpoint is resolved and refused unless it is on this machine, retries are bounded, and every delivery is published to the bus — so the feed shows publish, push and the service's own request as one chain.
 
@@ -320,6 +321,23 @@ bugs it turned up were none of them Windows-only.
 - **Terraform lock files need a `windows_amd64` hash.** Written on macOS they
   record no Windows platform, so every Windows user's first `terraform init`
   silently modifies four example lock files -- which looks like local damage.
+- **`gcloud` in Git Bash finds the Microsoft Store's Python stub and dies.**
+  Windows ships `python.exe` in `WindowsApps` as a symlink to
+  `AppInstallerPythonRedirector.exe`, which only prints "Python was not
+  found; run without arguments to install from the Microsoft Store". The
+  Cloud SDK's bash wrapper looks for `python` on PATH and finds it, so every
+  `gcloud` command fails with that message and nothing about gcloud. **Use
+  `gcloud.cmd`**, which uses the SDK's bundled interpreter, or set
+  `CLOUDSDK_PYTHON` to it. PowerShell and cmd are unaffected, because they
+  resolve `gcloud.ps1`/`gcloud.cmd` -- which is also why `nimbus gcp register
+  --run` works: Go's `LookPath` honours PATHEXT and finds `gcloud.cmd`.
+- **Adding a certificate to CurrentUser\Root raises a confirmation dialog**,
+  which is fine for a person and fatal in CI: the Windows job hung there
+  until it was cancelled, having printed nothing. A runner is already an
+  administrator, and an admin writing to `LocalMachine\Root` is taken as
+  consent and completes silently, so that is what CI does. `nimbus cert`
+  still names CurrentUser\Root, because a person CAN answer the dialog and
+  that store needs no elevation.
 
 The three real bugs, none of them Windows-only:
 

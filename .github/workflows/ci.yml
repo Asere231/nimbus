@@ -1190,17 +1190,28 @@ jobs:
       # version, and whatever it honours is not ours to choose. On Windows
       # the trust store is the mechanism that matters.
       #
-      # CurrentUser\Root needs no elevation, which is the whole reason
-      # `nimbus cert` names that store.
-      - name: Trust the CA (CurrentUser\Root, no admin)
+      # LocalMachine rather than the CurrentUser\Root that `nimbus cert`
+      # advises, and the difference is about CI rather than about Windows.
+      # Adding to the CURRENT USER's Root store raises a trust confirmation
+      # dialog, which on a runner has nothing to answer it: the first
+      # attempt hung until the run was cancelled, having printed nothing.
+      # A runner is already an administrator, and an admin writing to
+      # LocalMachine\Root is taken as consent, so it completes silently.
+      #
+      # So what CI checks here is that the CERTIFICATE works, not the exact
+      # store `nimbus cert` names. The CurrentUser path was verified by hand
+      # on a real Windows machine in Milestone 18 -- a person clicks the
+      # dialog, which is the whole reason that store needs no elevation.
+      - name: Trust the CA
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $ca = Join-Path $env:USERPROFILE ".nimbus\certs\nimbus-ca.pem"
           Write-Host "importing $ca"
-          Import-Certificate -FilePath $ca -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
-          $found = Get-ChildItem Cert:\CurrentUser\Root |
+          Import-Certificate -FilePath $ca -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          $found = Get-ChildItem Cert:\LocalMachine\Root |
             Where-Object { $_.Subject -like '*Nimbus*' }
-          if (-not $found) { throw "the Nimbus CA is not in CurrentUser\Root after importing it" }
+          if (-not $found) { throw "the Nimbus CA is not in LocalMachine\Root after importing it" }
           Write-Host "trusted: $($found.Subject)"
 
       - name: Start Nimbus

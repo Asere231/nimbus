@@ -212,6 +212,14 @@ func (s *Server) serveCompute(w http.ResponseWriter, r *http.Request, parts []st
 	if collection == "aggregated" && name == "instances" {
 		return s.serveAggregatedInstances(w, r)
 	}
+	// Every OTHER aggregated collection, which is how `gcloud compute
+	// networks subnets list` reads subnetworks. Milestone 10 handled
+	// instances and stopped there, so everything else fell through to the
+	// error below -- which named `aggregated` as the collection, itself the
+	// clue that the path was never being read properly.
+	if collection == "aggregated" && name != "" {
+		return s.serveAggregatedCompute(w, r, name)
+	}
 
 	kind := kindFor(collection)
 	if kind == nil {
@@ -668,4 +676,83 @@ func maskFields(raw string) updateMask {
 
 func (m updateMask) allows(field string) bool {
 	return m.all || m.fields[field]
+}
+
+// serveAggregatedCompute answers `aggregated/{collection}` for anything in
+// the kind table, which is how gcloud lists a regional or zonal resource
+// across every scope at once.
+//
+// The provider never asks for this -- it reads the scoped collection -- so
+// the whole path exists for the CLI, the same split Milestone 10 found for
+// instances and for operations. Instances keep their own handler because
+// they are not in the kind table at all.
+//
+// Two details a client notices. The `kind` is per collection
+// (`compute#subnetworkAggregatedList`), and one parsing with the wrong one
+// sees an empty document rather than an error. And the scope prefix differs
+// per resource: `regions/` for a regional kind, `zones/` otherwise, so a
+// single hard-coded prefix would be wrong for one of them.
+func (s *Server) serveAggregatedCompute(w http.ResponseWriter, r *http.Request, collection string) string {
+	if r.Method != http.MethodGet {
+		writeError(w, notFound("Nimbus does not implement %s %s yet", r.Method, r.URL.Path))
+		return "aggregated " + collection + " " + r.Method
+	}
+	kind := kindFor(collection)
+	if kind == nil {
+		writeError(w, notFound("Nimbus does not implement the Compute collection %q yet", collection))
+		return "aggregated collection " + collection
+	}
+
+	scopeField, scopePrefix, emptyScope := "zone", "zones/", "zones/"+s.cfg.Zone
+	if kind.regional {
+		scopeField, scopePrefix, emptyScope = "region", "regions/", "regions/"+s.cfg.Region
+	}
+
+	byScope := map[string][]any{}
+	for _, res := range s.store.List(func(res *core.Resource) bool {
+		return res.Cloud == "gcp" && res.Type == kind.resourceType
+	}) {
+		var body map[string]any
+		if json.Unmarshal(res.Body, &body) != nil {
+			continue
+		}
+		// The field holds a full self link; the scope is its last segment.
+		// A global resource has neither, and falls into "global".
+		scope := lastSegment(str(body[scopeField]))
+		switch {
+		case scope != "":
+			scope = scopePrefix + scope
+		case res.Location != "":
+			scope = scopePrefix + res.Location
+		default:
+			scope = "global"
+		}
+		byScope[scope] = append(byScope[scope], body)
+	}
+
+	items := map[string]any{}
+	for scope, list := range byScope {
+		items[scope] = map[string]any{collection: list}
+	}
+	// A scope with nothing in it carries a warning rather than an empty
+	// list, which is what real Compute answers and what gcloud prints as
+	// "Listed 0 items". An empty `items` would make "none exist" and "not
+	// implemented" produce the same output.
+	if len(items) == 0 {
+		items[emptyScope] = map[string]any{
+			"warning": map[string]any{
+				"code":    "NO_RESULTS_ON_PAGE",
+				"message": "There are no results for scope '" + emptyScope + "' on this page.",
+			},
+		}
+	}
+
+	path := "/compute/v1/projects/" + s.cfg.ProjectID + "/aggregated/" + collection
+	writeJSON(w, http.StatusOK, map[string]any{
+		"kind":     kind.kind + "AggregatedList",
+		"id":       "projects/" + s.cfg.ProjectID + "/aggregated/" + collection,
+		"items":    items,
+		"selfLink": s.base() + path,
+	})
+	return ""
 }

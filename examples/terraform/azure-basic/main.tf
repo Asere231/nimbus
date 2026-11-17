@@ -5,8 +5,9 @@
 #   3. terraform apply         and watch http://localhost:4700
 #   4. terraform destroy
 #
-# Only control-plane resources are used here. Storage accounts, Key Vault and
-# AKS also call data-plane endpoints, which arrive in Milestones 2 and 3.
+# Only control-plane resources are used here, which is what makes this the
+# smallest example. Storage accounts, Key Vault, AKS and the rest also call
+# DATA-plane endpoints; see azure-storage, azure-app and azure-containerapp.
 
 terraform {
   required_version = ">= 1.5"

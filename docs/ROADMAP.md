@@ -314,11 +314,20 @@ the work and Azure simply was not using it, and
   0.49.2), outputs resolving and a second what-if reporting `NoChange` for
   every resource; and **`gcp-gke`**, where `nimbus gcp kubeconfig` wrote a
   config `kubectl` used to see both nodes Ready.
-  **What is still NOT exercised on Windows**: the `azure-aks` and
-  `azure-app` examples, the `test/storage-sdk` Python harness (it needs a
-  real Python; the one on PATH is the Microsoft Store stub), and the
-  interactive form of `nimbus ssh`, which allocates a TTY and so cannot be
-  driven by a tool. None is believed broken; none has been run.
+  Also verified: **`azure-aks`** — applies, the kubeconfig Terraform writes
+  drives `kubectl get nodes` to two Ready nodes, destroys clean; and the
+  **`test/storage-sdk` Python harness**, which passes in full against
+  Python 3.15 and the pinned Azure SDKs — blob including a 2 MB block
+  upload, a ranged read and metadata casing, queue including visibility
+  timeouts and pop receipts, and table including an OData filter and a
+  merge. Note `run.sh` is **Unix-only** (`$VENV/bin/python`); on Windows a
+  venv puts the interpreter in `Scripts/`, so run `check.py` directly:
+  `.venv/Scripts/python.exe check.py --account stnimbusdata`.
+  **What is still NOT exercised on Windows**: the `azure-app` example,
+  `az aks get-credentials` (the kubectl path above is covered; only the az
+  route is untried), and the interactive form of `nimbus ssh`, which
+  allocates a TTY and so cannot be driven by a tool. None is believed
+  broken; none has been run.
 
 ## Later
 

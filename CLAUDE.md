@@ -387,6 +387,47 @@ The three real bugs, none of them Windows-only:
   `k3s.Engine.Stop` had always removed unconditionally, which is what made the
   shape obvious.
 
+### Surviving a restart (Milestone 19)
+
+CI now restarts Nimbus and proves the resource still WORKS —
+`restart-control-plane` requires a clean plan afterwards, and
+`restart-docker` requires the Lambda to answer and leaves no container
+behind. Until these existed, every Terraform job was apply, verify and
+destroy inside ONE process, which is why four of Milestone 18's six bugs
+lived in the reload path and all four were found by hand.
+
+- **A clean plan after a reload is the assertion worth making**, not "the
+  resource is still listed". A clean `plan -detailed-exitcode` means every
+  field round-tripped through disk exactly as sent, so anything re-typed,
+  dropped or re-generated on load surfaces as a diff. A listing check would
+  have passed while all four of those bugs were present.
+- **Two restarts are no different from one** — measured, and the suspicion
+  was that the second would read a store a reattach had already touched.
+  Clean plan and an unchanged resource count after both.
+- **A restart does NOT invent runs in the journal.** The run count was
+  identical across three restarts (15 → 15), so the startup snapshots are
+  correctly excluded from the feed and from run grouping. This is the thing
+  the snapshot machinery was built for in Milestone 12, now checked rather
+  than assumed.
+- **A stray file in the data directory is ignored, silently.** A junk file
+  at the top level, a pre-`fsname` uppercase name and a name `fsname.Decode`
+  refuses all left the server starting normally. Nothing is said about them,
+  which is the right trade — refusing to start over a file nobody asked
+  about would be worse — but it does mean an orphan sits there unmentioned.
+  Note that object files alone do not resurrect a bucket: the bucket is
+  control-plane state in `state.json`, so objects without it answer
+  `NoSuchBucket` rather than reappearing.
+- **A restart on a different port breaks the CLIENT, not the state, and says
+  so.** Azure ARM ids carry no port, so the store loads unchanged; what
+  fails is the example's own hardcoded `metadata_host`, and the error names
+  the endpoint it could not reach. **GCP is the exception and it is worse
+  than "ids are stale":** an id IS the self link, so a port change
+  accumulates a DUPLICATE of the same logical resource — after running on
+  4703 and then 4803 the store held
+  `http://localhost:4703/v1/projects/nimbus-local` AND
+  `http://localhost:4803/...`, the same project twice. Keep the port stable,
+  or start from a fresh data directory.
+
 ## Authorization facts (the decision engine, and all three clouds)
 
 - **Enforcement is opt-in and an unmapped caller is the account ROOT.** `--enforce-iam` turns it on; with it off nothing is ever refused. The default caller is root, which in real AWS carries no policies and can do anything — so it is the faithful answer AND the one that costs nothing: `aws-basic`, which knows nothing about IAM, applies, plans clean and destroys against an enforcing server unchanged. A denial is something you opt into by claiming a limited identity. Deny-by-default still governs policy evaluation; root short-circuits before it.

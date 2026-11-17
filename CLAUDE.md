@@ -417,6 +417,20 @@ lived in the reload path and all four were found by hand.
   Note that object files alone do not resurrect a bucket: the bucket is
   control-plane state in `state.json`, so objects without it answer
   `NoSuchBucket` rather than reappearing.
+- **An apply SURVIVES Nimbus being killed mid-flight, provided it comes
+  back.** The expectation was a quick failure — CLAUDE.md already notes a
+  poll against a closed port reporting `unimplemented polling status
+  "Unknown"` — and what actually happens is better: the aws provider does
+  not fail fast, it RETRIES. Measured by force-killing the process seven
+  seconds into an `aws-serverless` apply, while the Lambda's container was
+  starting: terraform sat in "Still creating" for over a minute, the server
+  was restarted about ninety seconds later, the apply completed, and the
+  function then really ran (`{"written": "mid-apply"}`). The destroy
+  afterwards took all four resources and left no container. **No
+  half-created resource, nothing unremovable** — which was the bad outcome
+  this was looking for. Note the flip side: a client will hang retrying
+  rather than tell you the emulator is gone, so a seemingly stuck apply is
+  worth checking against the server being up.
 - **A container removed behind Nimbus's back is handled correctly, and the
   ERROR was wrong.** Reattach rightly does not invent a ghost, and a destroy
   afterwards still succeeds — but an invoke answered `The function

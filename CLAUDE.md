@@ -417,6 +417,16 @@ lived in the reload path and all four were found by hand.
   Note that object files alone do not resurrect a bucket: the bucket is
   control-plane state in `state.json`, so objects without it answer
   `NoSuchBucket` rather than reappearing.
+- **A container removed behind Nimbus's back is handled correctly, and the
+  ERROR was wrong.** Reattach rightly does not invent a ghost, and a destroy
+  afterwards still succeeds — but an invoke answered `The function
+  nimbus-writer is still starting. State: Active`, which contradicts itself
+  in one sentence and tells you to wait for something that will never
+  happen. The branch was written for Pending, a container genuinely coming
+  up, and Active-with-nothing-registered fell through it. **Active and
+  unregistered means the container is GONE**, so the message now says that
+  and what to do about it. The behaviour was right and only the explanation
+  was wrong, which is the kind of bug that survives because nothing fails.
 - **A restart on a different port breaks the CLIENT, not the state, and says
   so.** Azure ARM ids carry no port, so the store loads unchanged; what
   fails is the example's own hardcoded `metadata_host`, and the error names

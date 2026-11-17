@@ -2,6 +2,7 @@ package aws
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,5 +79,47 @@ func TestDeletingAFunctionRemovesItsContainerWithPersist(t *testing.T) {
 
 	if got := f.Containers(); len(got) != 0 {
 		t.Errorf("the function's container survived the delete: %v", got)
+	}
+}
+
+// A function whose container is gone says so, rather than "still starting".
+//
+// Measured in Milestone 19 by removing a Lambda's container with `docker
+// rm` and restarting Nimbus: the invoke answered
+//
+//	ResourceNotReadyException: The function nimbus-writer is still
+//	starting. State: Active
+//
+// which contradicts itself in one sentence and tells you to wait for
+// something that will never happen. The branch was written for Pending --
+// a container genuinely coming up -- and Active with nothing registered
+// falls through it.
+//
+// Active and unregistered means the container is GONE: removed outside
+// Nimbus, or not adopted because it no longer existed when the server
+// restarted. Reattach is right not to invent one; the message just has to
+// say which case this is.
+func TestInvokingAFunctionWhoseContainerIsGoneSaysSo(t *testing.T) {
+	s, _ := newLambdaTestServer(t)
+	createWriter(t, s)
+
+	// Stand the function in as Active with nothing registered, which is
+	// exactly what a restart leaves behind when the container is gone.
+	// createWriter's own start never registers it: the readiness probe
+	// cannot succeed against the Fake.
+	_ = s.store.Update(s.lambdaARN("writer"), func(body map[string]any) error {
+		body["State"] = "Active"
+		return nil
+	})
+
+	rec, _ := lambdaCall(t, s, http.MethodPost,
+		"/2015-03-31/functions/writer/invocations", `{"id":"1"}`)
+
+	body := rec.Body.String()
+	if strings.Contains(body, "still starting") {
+		t.Errorf("a function with no container still claims to be starting: %s", body)
+	}
+	if !strings.Contains(body, "no running container") {
+		t.Errorf("the error does not say the container is gone: %s", body)
 	}
 }

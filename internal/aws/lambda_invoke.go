@@ -45,6 +45,19 @@ func (s *Server) invokeFunction(w http.ResponseWriter, r *http.Request, name str
 			return &apiError{Status: 400, Code: "ResourceConflictException",
 				Message: "The function " + fn.FunctionName + " could not be started: " + fn.StateReason}
 		}
+		// Active with nothing registered means the container is GONE, not
+		// coming up: a restart found it already removed, or someone ran
+		// `docker rm` behind Nimbus's back. Saying "still starting" there
+		// is self-contradictory -- it reported `is still starting. State:
+		// Active` in one sentence -- and tells you to wait for something
+		// that will never happen. Measured in Milestone 19 by removing a
+		// function's container and restarting.
+		if fn.State == "Active" {
+			return &apiError{Status: 409, Code: "ResourceNotReadyException",
+				Message: "The function " + fn.FunctionName + " has no running container. " +
+					"It was removed outside Nimbus, or did not survive a restart. " +
+					"Re-apply the function, or update its configuration, to start it again."}
+		}
 		return &apiError{Status: 409, Code: "ResourceNotReadyException",
 			Message: "The function " + fn.FunctionName + " is still starting. State: " + fn.State}
 	}

@@ -1249,6 +1249,177 @@ jobs:
             echo "::endgroup::"
           done
 
+  # --- surviving a restart (Milestone 19) ----------------------------------
+  #
+  # Every other Terraform job is apply, verify and destroy inside ONE
+  # process, so until these existed the whole persistence and adoption path
+  # was exercised only when somebody happened to restart at the right
+  # moment. Four of Milestone 18's six bugs lived there, and all four were
+  # found by hand.
+  #
+  # Two jobs rather than one: this cheap one gives fast feedback with no
+  # Docker at all, and restart-docker below pays for a daemon to prove the
+  # harder half -- that a container which outlived the process is adopted
+  # and still WORKS.
+  restart-control-plane:
+    name: restart with --persist (no Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Start Nimbus with --persist
+        run: |
+          set -euo pipefail
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus cert
+          ./bin/nimbus start --clouds azure,aws --persist &
+          echo $! > /tmp/nimbus.pid
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, RESTART, plan clean, destroy
+        run: |
+          set -euo pipefail
+          export SSL_CERT_FILE="$HOME/.nimbus/certs/nimbus-ca.pem"
+
+          for example in azure-basic aws-basic; do
+            cd "$GITHUB_WORKSPACE/examples/terraform/$example"
+            terraform init -input=false
+            terraform apply -auto-approve -input=false
+          done
+
+          # The restart. SIGTERM, wait for the port to close, start again
+          # over the same --home so the state on disk is what it reads.
+          echo "::group::restarting Nimbus"
+          kill "$(cat /tmp/nimbus.pid)"
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null || break
+            sleep 1
+          done
+          cd "$GITHUB_WORKSPACE"
+          ./bin/nimbus start --clouds azure,aws --persist &
+          echo $! > /tmp/nimbus.pid
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+          echo "::endgroup::"
+
+          # A clean plan AFTER the restart is the real assertion. It means
+          # every field round-tripped through disk exactly as it was sent:
+          # anything re-typed, dropped or re-generated on load shows up here
+          # as a diff. "It is still listed" would pass while badly broken.
+          for example in azure-basic aws-basic; do
+            cd "$GITHUB_WORKSPACE/examples/terraform/$example"
+            set +e
+            terraform plan -detailed-exitcode -input=false
+            code=$?
+            set -e
+            if [ "$code" -ne 0 ]; then
+              echo "::error::$example: plan after a restart returned $code; expected 0 (no changes)"
+              exit 1
+            fi
+            terraform destroy -auto-approve -input=false
+          done
+
+  restart-docker:
+    name: restart with --persist (Lambda must still answer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Docker and the Lambda base image
+        run: docker pull public.ecr.aws/lambda/python:3.12
+
+      - name: Start Nimbus with --persist
+        run: |
+          set -euo pipefail
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus start --clouds aws --persist &
+          echo $! > /tmp/nimbus.pid
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, RESTART, invoke, destroy
+        working-directory: examples/terraform/aws-serverless
+        env:
+          AWS_ACCESS_KEY_ID: nimbus
+          AWS_SECRET_ACCESS_KEY: nimbus
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          set -euo pipefail
+          E="--endpoint-url http://localhost:4702"
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          # With --persist the container outlives the process deliberately,
+          # so after the restart it must be ADOPTED rather than forgotten.
+          echo "::group::restarting Nimbus"
+          kill "$(cat /tmp/nimbus.pid)"
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null || break
+            sleep 1
+          done
+          cd "$GITHUB_WORKSPACE"
+          ./bin/nimbus start --clouds aws --persist &
+          echo $! > /tmp/nimbus.pid
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          cd "$GITHUB_WORKSPACE/examples/terraform/aws-serverless"
+          echo "::endgroup::"
+
+          # THE assertion of this milestone: the function must still ANSWER.
+          #
+          # Before 0.18.1 this is exactly where it failed -- the store
+          # survived and the engine's registry did not, so the function read
+          # back Active and every invoke returned ResourceNotReadyException
+          # while its container sat plainly Up in `docker ps`. Checking that
+          # the resource is still listed would have passed throughout.
+          printf '{"id":"after-restart"}' > payload.json
+          aws $E lambda invoke --function-name nimbus-writer \
+            --payload fileb://payload.json out.json
+          cat out.json
+          grep -q "after-restart" out.json || {
+            echo "::error::the Lambda did not run after the restart"; exit 1; }
+
+          terraform destroy -auto-approve -input=false
+
+          # A delete must reach a container it only knows about through
+          # adoption. Before 0.18.1 this leaked one on every destroy.
+          left=$(docker ps -aq --filter "name=nimbus-" | wc -l)
+          if [ "$left" -ne 0 ]; then
+            echo "::error::destroy left $left nimbus container(s) behind"
+            docker ps -a --filter "name=nimbus-"
+            exit 1
+          fi
+
   iam-enforced:
     name: terraform *-enforced (--enforce-iam, all three clouds)
     runs-on: ubuntu-latest

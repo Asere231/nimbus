@@ -465,9 +465,12 @@ the work and Azure simply was not using it, and
   `system:masters` for everyone. A Lambda's execution role is recorded and
   the handler's own calls arrive as root, since Nimbus mints no instance or
   function credentials.
-- **Nothing is enforced on the Azure or GCP ports at all**, so
-  `--enforce-iam` on a multi-cloud server refuses AWS requests and lets
-  everything else through. The flag's name says IAM for that reason.
+- **All three clouds enforce**, since Milestones 14 and 17: AWS IAM, Azure
+  RBAC and GCP IAM, plus resource policies and Azure `dataActions`. This
+  entry used to say the opposite — that only AWS was enforced — and stayed
+  wrong for four milestones after that stopped being true. It was caught by
+  running the `--enforce-iam` examples rather than by reading, which is the
+  same lesson the rest of Milestone 18 kept teaching.
 
 - **An instance is a container, with everything that implies.** No kernel of
   its own, no block device, no systemd, no cloud-init and no guest agent, so

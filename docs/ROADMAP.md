@@ -323,11 +323,15 @@ the work and Azure simply was not using it, and
   merge. Note `run.sh` is **Unix-only** (`$VENV/bin/python`); on Windows a
   venv puts the interpreter in `Scripts/`, so run `check.py` directly:
   `.venv/Scripts/python.exe check.py --account stnimbusdata`.
-  **What is still NOT exercised on Windows**: the `azure-app` example,
+  **Interactive `nimbus ssh` works on Windows**, run by hand from
+  PowerShell because a TTY cannot be driven by a tool: the shell opens on
+  the container, Ctrl+C interrupts both at the bare prompt and during a
+  `sleep` without killing the terminal, and `exit` returns cleanly. Arrow
+  keys were not checked and are not a Nimbus property anyway — alpine's
+  busybox `sh` has no line editing compiled in.
+  **What is still NOT exercised on Windows**: the `azure-app` example, and
   `az aks get-credentials` (the kubectl path above is covered; only the az
-  route is untried), and the interactive form of `nimbus ssh`, which
-  allocates a TTY and so cannot be driven by a tool. None is believed
-  broken; none has been run.
+  route is untried). Neither is believed broken; neither has been run.
 
 ## Later
 

@@ -1,14 +1,25 @@
 # Roadmap
 
-**Current: Milestone 19 — surviving a restart
-(`docs/prompts/m19-restart-survival.md`).** `--persist` promises state
-survives stopping and starting Nimbus, and nothing in CI has ever checked
-it: every Terraform job is apply, verify and destroy inside ONE process.
-That is not a guess about where bugs hide — **four of Milestone 18's six
-bugs were in exactly that path**, and all four were found by hand. The
-sharpest of them is the shape to remember: the store survives a restart and
-the registry does not, so a resource reads back perfectly and does not
-work.
+**Current: nothing scheduled. Milestone 19 is done.** CI now restarts
+Nimbus and proves the resource still WORKS — `restart-control-plane`
+requires a clean plan afterwards, `restart-docker` requires the Lambda to
+answer and leaves no container behind. Until those existed, every Terraform
+job was apply, verify and destroy inside ONE process, which is why four of
+Milestone 18's six bugs lived in the reload path and all four were found by
+hand.
+
+Six suspicions were checked and **five were disproved**: two restarts are
+no different from one, a restart invents no runs in the journal, a stray
+file in the data directory is ignored rather than fatal, a container
+removed behind Nimbus's back is correctly not adopted, and an apply
+SURVIVES the process being killed mid-flight as long as it comes back. What
+the exercise actually found was one wrong error message — a function with
+no container claimed to be "still starting. State: Active" — and one
+divergence sharper than documented: a port change makes GCP accumulate a
+duplicate resource, because an id is the self link.
+
+Two milestones running, the pattern has held: **most suspicions are wrong,
+and the bugs you find are rarely the ones you went looking for.**
 
 **Milestone 18 is done.** Nimbus was run on
 Windows for the first time, and everything on the list was run rather than
@@ -233,7 +244,7 @@ to demonstrate once there are instances to refuse it to.
 | 16 | ~~**A network view for AWS and GCP**~~ **done** | An EC2 and a GCE instance each appear in the subnet they belong to |
 | 17 | ~~**Resource-level policies**~~ **done** | A principal reads a bucket ONLY because of the bucket policy, and an explicit deny in it wins |
 | 18 | ~~**Windows, properly**~~ **done** | Terraform, a data plane and a container all work on Windows, and what is different is written down |
-| 19 | **Surviving a restart** | CI applies, restarts Nimbus, and proves the resource still WORKS — then destroys it with nothing left behind |
+| 19 | ~~**Surviving a restart**~~ **done** | CI applies, restarts Nimbus, and proves the resource still WORKS — then destroys it with nothing left behind |
 
 Milestone 15 was first because Azure was the one cloud that could not run
 code, and it was indeed the cheapest: `internal/engines/run` already did

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.19.0 — 2026-11-17
+
+Milestone 19: surviving a restart. `--persist` promised that state
+outlives stopping and starting Nimbus, and nothing in CI had ever checked
+it — every Terraform job was apply, verify and destroy inside one process.
+That is where four of Milestone 18's six bugs lived.
+
+- **CI restarts Nimbus now.** `restart-control-plane` applies two
+  examples, restarts, and requires a **clean plan** — which means every
+  field round-tripped through disk exactly as sent, where "the resource
+  is still listed" would have passed while all four of those bugs were
+  present. `restart-docker` restarts and then **invokes the Lambda**,
+  requiring the handler's own output, and fails if a container is left
+  behind.
+- **Round-trip tests for the two stores that had none**, Cloud Storage
+  and DynamoDB. Both assert the wire shape: a 30-digit DynamoDB number
+  must survive byte for byte, `{"N":"5"}` and `{"S":"5"}` must stay
+  different items, and GCS objects must keep `md5Hash`, `crc32c` and
+  `generation`.
+- **A function with no running container says so.** It used to answer
+  `The function X is still starting. State: Active` — self-contradictory,
+  and advice to wait for something that would never happen. Found by
+  removing a container with `docker rm` and restarting.
+- **Five suspicions disproved and written down**: two restarts behave like
+  one, a restart invents no journal runs, a stray file is ignored rather
+  than fatal, a container removed externally is correctly not adopted, and
+  an apply survives the process being killed mid-flight as long as it
+  comes back.
+- **A port change is worse than documented on GCP**: an id is the self
+  link, so the store accumulates a duplicate of the same resource per port
+  used. Kept as a documented divergence; fixing it means rewriting ids on
+  load.
+
 ## 0.18.2 — 2026-11-17
 
 Milestone 18 closed. Every item on the Windows list has been run, and the

@@ -329,9 +329,19 @@ the work and Azure simply was not using it, and
   `sleep` without killing the terminal, and `exit` returns cleanly. Arrow
   keys were not checked and are not a Nimbus property anyway — alpine's
   busybox `sh` has no line editing compiled in.
-  **What is still NOT exercised on Windows**: the `azure-app` example, and
-  `az aks get-credentials` (the kubectl path above is covered; only the az
-  route is untried). Neither is believed broken; neither has been run.
+  **`az aks get-credentials` works** — the earlier failures were a wrong
+  resource group guessed by hand, not a bug; `az aks list` names it.
+  **`azure-app` works too, and found a real Windows bug**: its push
+  provisioner was a two-line `local-exec`, whose default interpreter is
+  `/bin/sh -c` on Unix but `cmd /C` on Windows, where a NEWLINE ends the
+  command. So `docker tag` ran, `docker push` silently did not, the
+  provisioner reported success, and the failure surfaced minutes later and
+  somewhere else as a pod in `ImagePullBackOff` with `localhost:5001/app:v1:
+  not found`. Joined with `&&` on one line, which both interpreters
+  understand, the whole chain works: image pushed to the emulated ACR, k3s
+  pulling it through the containerd mirror, pod `Running`, and
+  `DB_PASSWORD=hunter2` in its environment read from the emulated Key Vault.
+  **Every item on the Windows list has now been run.**
 
 ## Later
 

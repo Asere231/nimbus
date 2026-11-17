@@ -335,6 +335,19 @@ bugs it turned up were none of them Windows-only.
   `CLOUDSDK_PYTHON` to it. PowerShell and cmd are unaffected, because they
   resolve `gcloud.ps1`/`gcloud.cmd` -- which is also why `nimbus gcp register
   --run` works: Go's `LookPath` honours PATHEXT and finds `gcloud.cmd`.
+- **Terraform's `local-exec` runs under `cmd /C` on Windows, where a NEWLINE
+  ENDS THE COMMAND.** The default interpreter is `["/bin/sh", "-c"]` on Unix
+  and `["cmd", "/C"]` on Windows, so a two-line heredoc that works
+  everywhere else runs only its first line there. `azure-app`'s push
+  provisioner was exactly that: `docker tag` ran, `docker push` silently did
+  not, the provisioner reported SUCCESS and the apply completed. The failure
+  surfaced minutes later and in another system entirely -- a pod stuck in
+  `ImagePullBackOff` with `localhost:5001/app:v1: not found`, the registry
+  answering 404 for an image nobody had pushed. Join the commands with `&&`
+  on ONE line, which both interpreters understand, rather than setting a
+  per-OS `interpreter`. The diagnostic that settles it in one step: the image
+  is tagged locally (`docker images`) while the registry catalog is empty
+  (`/v2/_catalog`), which says tag ran and push did not.
 - **Adding a certificate to CurrentUser\Root raises a confirmation dialog**,
   which is fine for a person and fatal in CI: the Windows job hung there
   until it was cancelled, having printed nothing. A runner is already an

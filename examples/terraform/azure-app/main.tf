@@ -100,10 +100,20 @@ resource "terraform_data" "push" {
   triggers_replace = [azurerm_container_registry.app.login_server, var.source_image]
 
   provisioner "local-exec" {
-    command = <<-EOT
-      docker tag ${var.source_image} ${azurerm_container_registry.app.login_server}/app:v1
-      docker push ${azurerm_container_registry.app.login_server}/app:v1
-    EOT
+    # ONE line joined with &&, not two lines, and that is about Windows.
+    #
+    # local-exec's default interpreter is ["/bin/sh", "-c"] on Unix but
+    # ["cmd", "/C"] on Windows, where a NEWLINE ends the command -- so a
+    # two-line heredoc ran `docker tag` and silently never ran `docker
+    # push`. Nothing failed: tag exits 0, the provisioner reports success
+    # and the apply completes. The symptom surfaced minutes later and
+    # somewhere else entirely, as a pod stuck in ImagePullBackOff with
+    # `localhost:5001/app:v1: not found` -- the registry answering 404 for
+    # an image that had never been pushed to it.
+    #
+    # `&&` is understood by both interpreters, so one line needs no
+    # per-OS `interpreter` and behaves the same everywhere.
+    command = "docker tag ${var.source_image} ${azurerm_container_registry.app.login_server}/app:v1 && docker push ${azurerm_container_registry.app.login_server}/app:v1"
   }
 }
 

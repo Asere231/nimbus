@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.18.2 — 2026-11-17
+
+Milestone 18 closed. Every item on the Windows list has been run, and the
+last of them found the sixth bug of the milestone.
+
+- **`local-exec` is `cmd /C` on Windows, where a newline ends the
+  command.** `azure-app`'s push provisioner was a two-line heredoc, so
+  `docker tag` ran and `docker push` silently did not — the provisioner
+  reported success, the apply went green, and the failure surfaced
+  minutes later in another system as a pod in `ImagePullBackOff` saying
+  `localhost:5001/app:v1: not found`. Joined with `&&` on one line, which
+  both interpreters understand, so no per-OS `interpreter` is needed.
+- **Every Compute collection has an aggregated form**, not just
+  instances. `gcloud compute networks subnets list` — without the
+  `--regions` the docs happen to use — answered "Nimbus does not
+  implement the Compute collection `aggregated`". Found by running
+  gcloud on Windows; not a platform bug.
+- **Documentation for people who did not build it**: `INSTALL.md`,
+  `CLIENTS.md`, `CLI.md`, `IAM.md`, `TROUBLESHOOTING.md` and
+  `ARCHITECTURE.md`, plus a README whose status line had been announcing
+  "v0.1.0, Milestone 1" on the front page of a public repository.
+- **The rest of the Windows list run**: all four `--enforce-iam`
+  examples including Azure RBAC's five-step grant sequence, `az
+  deployment` with a real local Bicep compile, `gcp-gke`, `azure-aks`,
+  `az aks get-credentials`, the Python storage SDK harness, and
+  interactive `nimbus ssh` by hand at a TTY.
+
 ## 0.18.1 — 2026-11-12
 
 `--persist` now restores the running things, not just the store.

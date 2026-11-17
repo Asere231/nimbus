@@ -1,14 +1,26 @@
 # Roadmap
 
-**Current: nothing scheduled.** Milestone 18 ran Nimbus on Windows for the
-first time: eight examples apply, plan clean and destroy there, `az` drives
-the blob data plane, `kubectl` reaches an EKS cluster, and what is different
-about the platform is written down in CLAUDE.md under "Windows, actually
-run". Most of the prompt's suspicions were disproved — including the one it
-called sharpest — but the three bugs it did find were none of them
-Windows-only, and two of them had been losing data on every platform since
-the stores were written. The next milestone is unchosen; "Later" below is
-the list to pick from.
+**Current: nothing scheduled. Milestone 18 is done.** Nimbus was run on
+Windows for the first time, and everything on the list was run rather than
+reasoned about: every example applies, plans clean and destroys there;
+Terraform, `az`, `aws`, `gcloud` and `kubectl` all drive it; Lambda,
+Container Apps and all three k3s clouds work; `az deployment` compiles real
+Bicep; Microsoft's Python SDKs drive the storage data plane; and interactive
+`nimbus ssh` was checked by hand at a TTY. What differs about the platform
+is in CLAUDE.md under "Windows, actually run", including the suspicions that
+were checked and **disproved** — among them the one the prompt called
+sharpest.
+
+The lesson worth keeping is what the bugs turned out to be. Six were found,
+and only two were about Windows: a case-insensitive filesystem merging two
+object keys into one file (also true on macOS, silently, for ten
+milestones), every S3 key ending in `.json` lost on restart, `--persist`
+leaking a container on every delete, a blob name escaping its container,
+only `aggregated/instances` implemented, and a `local-exec` truncated by
+`cmd /C`. **Running real clients on an untried platform is what found them;
+most were not platform bugs at all.**
+
+The next milestone is unchosen; "Later" below is the list to pick from.
 
 **Phase 4 is complete.** Milestone 11 gave all three clouds instances that
 really boot, Milestone 12 cleared the defects that made Nimbus quietly

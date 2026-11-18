@@ -23,3 +23,8 @@ kubeconfig
 *-kubeconfig
 # The Lambda example's packaged handler, built by terraform on apply.
 examples/terraform/aws-serverless/handler.zip
+
+# A function app deploy directory, if Nimbus is ever run from the repo
+# root without --persist. The path is absolute now, so this is belt and
+# braces -- it was committed once, with 157 files of vendored packages.
+/functions/

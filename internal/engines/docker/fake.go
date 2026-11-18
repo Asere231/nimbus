@@ -325,3 +325,21 @@ func (f *Fake) Networks() []string {
 
 // Fake must satisfy Client.
 var _ Client = (*Fake)(nil)
+
+// RunOptionsFor returns the options one container was started with.
+//
+// Runs holds every call in order, which answers "what was started"; this
+// answers "how was THIS one started", which is what an assertion about a
+// particular container's network or environment needs. Without it a test
+// has to scan the slice itself, which is how an assertion ends up checking
+// the wrong container and passing.
+func (f *Fake) RunOptionsFor(name string) (RunOptions, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, opts := range f.Runs {
+		if opts.Name == name {
+			return opts, true
+		}
+	}
+	return RunOptions{}, false
+}

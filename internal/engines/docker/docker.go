@@ -261,7 +261,16 @@ func runArgs(opts RunOptions) []string {
 	// field on RunOptions, because a per-cloud opt-in is exactly what was
 	// forgotten: the name worked on a Mac and every Linux CI job that
 	// depended on it failed. Needs Docker 20.10+ for host-gateway.
-	args = append(args, "--add-host", "host.docker.internal:host-gateway")
+	//
+	// The one exception is a container that SHARES another's network
+	// namespace, which is what a Container Apps sidecar is. Docker refuses
+	// the combination -- "conflicting options: custom host-to-IP mapping
+	// and the network mode" -- because an --add-host writes into an
+	// /etc/hosts this container does not own. It needs no mapping either:
+	// it already has the main container's, which was started with one.
+	if !sharesNamespace(opts.Network) {
+		args = append(args, "--add-host", "host.docker.internal:host-gateway")
+	}
 
 	if opts.Privileged {
 		args = append(args, "--privileged")
@@ -472,3 +481,17 @@ func (c *CLI) Pull(ctx context.Context, image string) error {
 	_, err := c.run(ctx, "pull", image)
 	return err
 }
+
+// sharesNamespace reports whether a network mode joins another container's
+// network namespace rather than a network of its own.
+//
+// `--network container:<name>` is how two containers come to share
+// localhost, which is what a Container Apps sidecar group is. A named
+// network ("k3s-net") or a built-in mode ("host", "none") is not this.
+func sharesNamespace(network string) bool {
+	return strings.HasPrefix(network, "container:")
+}
+
+// NamespaceOf is the network mode that joins a container's namespace.
+// Spelled once here so a caller does not compose the string itself.
+func NamespaceOf(container string) string { return "container:" + container }

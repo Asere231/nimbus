@@ -33,6 +33,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -87,6 +88,14 @@ type Service struct {
 	Env     map[string]string
 	// ContainerPort is what the image listens on inside the container.
 	ContainerPort int
+	// Sidecars are the other containers in the same template.
+	//
+	// Azure Container Apps and Cloud Run both define a service as a GROUP
+	// of containers sharing one network namespace, so they reach each
+	// other on localhost. Only the first one's port is published; the
+	// rest are reachable from inside the group and from nowhere else,
+	// which is exactly what the two clouds do.
+	Sidecars []Sidecar
 
 	Container string
 	// Port is the host port it was published on. It changes every time the
@@ -94,6 +103,23 @@ type Service struct {
 	// in a URL a client stores; see the proxy in the GCP plugin.
 	Port    int
 	Started time.Time
+}
+
+// Sidecar is another container in the same service.
+//
+// It has no port of its own, by design and not by omission: it shares the
+// main container's network namespace, so it listens on whatever it likes
+// and the main container reaches it on localhost. Docker refuses to
+// publish a port for a container that does not own its namespace, which is
+// the same rule said in the other direction.
+type Sidecar struct {
+	Name    string
+	Image   string
+	Command []string
+	Args    []string
+	Env     map[string]string
+	// Container is the name Nimbus gave it, filled in by Start.
+	Container string
 }
 
 // Engine starts, proxies to and stops services for one cloud.
@@ -152,10 +178,15 @@ func (e *Engine) Start(ctx context.Context, svc *Service) error {
 		return fmt.Errorf("%w\n\nNimbus runs services as containers, so Docker must be "+
 			"running. Start Docker Desktop (or your runtime) and try again.", err)
 	}
-	if present, err := e.docker.ImagePresent(ctx, svc.Image); err == nil && !present {
-		if err := e.docker.Pull(ctx, svc.Image); err != nil {
-			return fmt.Errorf("pulling %s: %w\n\nPre-pull it while online: docker pull %s",
-				svc.Image, err, svc.Image)
+	// Every image in the group, not just the first: an app whose cache
+	// image is not local must fail on the pull rather than on a container
+	// that cannot start.
+	for _, image := range svc.images() {
+		if present, err := e.docker.ImagePresent(ctx, image); err == nil && !present {
+			if err := e.docker.Pull(ctx, image); err != nil {
+				return fmt.Errorf("pulling %s: %w\n\nPre-pull it while online: docker pull %s",
+					image, err, image)
+			}
 		}
 	}
 	if svc.ContainerPort == 0 {
@@ -171,8 +202,10 @@ func (e *Engine) Start(ctx context.Context, svc *Service) error {
 
 	// A container left from a previous deployment is removed rather than
 	// reused: a new revision means a new image or a new environment, and
-	// the whole point of deploying is that the next request hits it.
-	_ = e.docker.Remove(ctx, svc.Container)
+	// the whole point of deploying is that the next request hits it. The
+	// sidecars go too, or the previous revision's would sit beside the new
+	// ones inside the same namespace.
+	e.removeGroup(ctx, svc)
 
 	env := map[string]string{}
 	for k, v := range svc.Env {
@@ -197,6 +230,14 @@ func (e *Engine) Start(ctx context.Context, svc *Service) error {
 		},
 	}); err != nil {
 		return fmt.Errorf("starting the service container: %w", err)
+	}
+
+	// The sidecars join the main container's namespace, which is what
+	// makes them reachable on localhost from it -- the thing a sidecar is
+	// FOR. They are started before the readiness probe, because the main
+	// container may well be waiting for one of them.
+	if err := e.startSidecars(ctx, svc); err != nil {
+		return err
 	}
 	svc.Started = time.Now()
 
@@ -319,7 +360,10 @@ func (e *Engine) Stop(ctx context.Context, svc *Service) {
 	delete(e.svcs, svc.ResourceID)
 	delete(e.proxy, svc.ResourceID)
 	e.mu.Unlock()
-	_ = e.docker.Remove(ctx, svc.Container)
+	// The whole group. A sidecar outliving its app is the --persist leak
+	// one layer down: the store forgets the app while its containers keep
+	// running, with nothing left that knows about them.
+	e.removeGroup(ctx, svc)
 }
 
 // Forget drops a service from the registry without touching its container.
@@ -328,4 +372,101 @@ func (e *Engine) Forget(resourceID string) {
 	defer e.mu.Unlock()
 	delete(e.svcs, resourceID)
 	delete(e.proxy, resourceID)
+}
+
+// --- sidecars --------------------------------------------------------------
+
+// images is every image the service needs, main container first.
+func (svc *Service) images() []string {
+	out := []string{svc.Image}
+	for _, s := range svc.Sidecars {
+		if s.Image != "" {
+			out = append(out, s.Image)
+		}
+	}
+	return out
+}
+
+// sidecarName is what a sidecar's container is called.
+//
+// Derived from the service's resource id and the sidecar's own name, so
+// two apps each with a "cache" sidecar do not collide and a restart can
+// find the same container again -- the same reason docker.Name exists for
+// the main one.
+func sidecarName(prefix string, svc *Service, sidecar string) string {
+	return docker.Name(prefix, svc.ResourceID+"/"+sidecar, sidecar)
+}
+
+// startSidecars runs the rest of the template's containers inside the main
+// container's network namespace.
+//
+// No ports are published for them: Docker refuses that for a container
+// that does not own its namespace, and it would be wrong anyway -- a
+// sidecar in Azure is reachable from its app and from nowhere else. PORT
+// is still set, because an image written for Container Apps reads it
+// whichever container it is.
+func (e *Engine) startSidecars(ctx context.Context, svc *Service) error {
+	for i := range svc.Sidecars {
+		s := &svc.Sidecars[i]
+		s.Container = sidecarName(e.cfg.NamePrefix, svc, s.Name)
+		_ = e.docker.Remove(ctx, s.Container)
+
+		env := map[string]string{}
+		for k, v := range s.Env {
+			env[k] = v
+		}
+		if _, ok := env["PORT"]; !ok {
+			env["PORT"] = fmt.Sprintf("%d", svc.ContainerPort)
+		}
+
+		if _, err := e.docker.Run(ctx, docker.RunOptions{
+			Name:    s.Container,
+			Image:   s.Image,
+			Args:    append(append([]string{}, s.Command...), s.Args...),
+			Network: docker.NamespaceOf(svc.Container),
+			Env:     env,
+			Labels: map[string]string{
+				docker.LabelService:  svc.Name,
+				docker.LabelResource: svc.ResourceID,
+				docker.LabelRole:     "sidecar",
+			},
+		}); err != nil {
+			// Named, because "the app did not start" when the app's own
+			// container is fine is the most confusing version of this.
+			return fmt.Errorf("starting the %q sidecar of %s: %w", s.Name, svc.Name, err)
+		}
+	}
+	return nil
+}
+
+// removeGroup removes the main container and every sidecar.
+//
+// Sidecars first: they live in the main container's namespace, so removing
+// it from under them is the untidy order even though Docker tolerates it.
+// Names are recomputed rather than read off the Service, so a redeploy
+// whose Sidecars list has changed still collects the previous one's --
+// the containers are named from the resource id, which has not changed.
+func (e *Engine) removeGroup(ctx context.Context, svc *Service) {
+	for i := range svc.Sidecars {
+		name := svc.Sidecars[i].Container
+		if name == "" {
+			name = sidecarName(e.cfg.NamePrefix, svc, svc.Sidecars[i].Name)
+		}
+		_ = e.docker.Remove(ctx, name)
+	}
+	// Anything else labelled a sidecar of this service, which is how a
+	// container from a PREVIOUS template -- one with a sidecar the new
+	// template no longer has -- is collected. Without this a renamed or
+	// deleted sidecar would run for ever with nothing referring to it,
+	// which is the --persist leak in another costume.
+	if found, err := e.docker.List(ctx, docker.LabelResource+"="+svc.ResourceID); err == nil {
+		for _, c := range found {
+			if c.Labels[docker.LabelRole] == "sidecar" {
+				_ = e.docker.Remove(ctx, strings.TrimPrefix(c.Name, "/"))
+			}
+		}
+	}
+	if svc.Container != "" {
+		_ = e.docker.Remove(ctx, svc.Container)
+	}
 }

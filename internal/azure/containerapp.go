@@ -146,12 +146,10 @@ func beforeContainerAppPut(s *Server, t target, body, existing map[string]any) *
 	return nil
 }
 
-// containerAppImage is the image of the FIRST container in the template.
+// containerAppImage is the image of the FIRST container in the template,
+// which is the one whose port is published and which the FQDN reaches.
 //
-// Real Container Apps run every container in the template as a sidecar
-// group. Nimbus runs the first, which is exactly the limit Cloud Run has
-// here and is stated in the roadmap rather than hidden: a sidecar is
-// stored and not started.
+// The rest become sidecars -- see containerAppSidecars.
 func containerAppImage(props map[string]any) string {
 	template, _ := props["template"].(map[string]any)
 	containers, _ := template["containers"].([]any)
@@ -162,24 +160,18 @@ func containerAppImage(props map[string]any) string {
 	return str(first["image"])
 }
 
-// containerAppEnv reads the first container's environment. Azure's shape is
-// a list of {name, value} rather than a map, like GCE's metadata items.
+// containerAppEnv reads the FIRST container's environment, which is the
+// one the app's own image gets. A sidecar's is its own, read the same way
+// by containerAppSidecars -- they are separate containers with separate
+// configuration, and mixing them would hand each the other's variables.
 func containerAppEnv(props map[string]any) map[string]string {
-	out := map[string]string{}
 	template, _ := props["template"].(map[string]any)
 	containers, _ := template["containers"].([]any)
 	if len(containers) == 0 {
-		return out
+		return map[string]string{}
 	}
 	first, _ := containers[0].(map[string]any)
-	entries, _ := first["env"].([]any)
-	for _, raw := range entries {
-		e, _ := raw.(map[string]any)
-		if name := str(e["name"]); name != "" {
-			out[name] = str(e["value"])
-		}
-	}
-	return out
+	return envFrom(first)
 }
 
 // containerAppPort is what the image listens on inside the container.
@@ -218,6 +210,7 @@ func provisionContainerApp(s *Server, t target, body map[string]any) error {
 		Image:         image,
 		Env:           containerAppEnv(props),
 		ContainerPort: containerAppPort(props),
+		Sidecars:      containerAppSidecars(props),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ClusterTimeout)
@@ -319,4 +312,80 @@ func (s *Server) containerAppAction(t target) (any, bool) {
 		return nil, false
 	}
 	return map[string]any{"value": []any{}}, true
+}
+
+// containerAppSidecars is every container in the template after the first.
+//
+// Real Container Apps run them as a GROUP sharing one network namespace,
+// so they reach each other on localhost -- which is the whole reason to
+// write a sidecar. Nimbus ran only the first one and stored the rest, so
+// an app with a cache or a log shipper beside it applied cleanly, reported
+// Succeeded and behaved as though half its configuration was absent. That
+// is worse than an error, because nothing said so.
+//
+// The first container is excluded rather than marked: it owns the
+// namespace and the published port, and the engine treats it differently
+// for exactly that reason.
+func containerAppSidecars(props map[string]any) []run.Sidecar {
+	template, _ := props["template"].(map[string]any)
+	containers, _ := template["containers"].([]any)
+	if len(containers) < 2 {
+		return nil
+	}
+	var out []run.Sidecar
+	for i, raw := range containers[1:] {
+		c, _ := raw.(map[string]any)
+		image := str(c["image"])
+		if image == "" {
+			// Skipped rather than started: docker would refuse an empty
+			// image with an error naming nothing anyone could act on.
+			continue
+		}
+		name := str(c["name"])
+		if name == "" {
+			// A container's NAME is optional in the ARM body but not here:
+			// the Docker container name is derived from it, so two unnamed
+			// sidecars would collide. Positional, which is stable across
+			// reads of the same template.
+			name = fmt.Sprintf("sidecar-%d", i+1)
+		}
+		out = append(out, run.Sidecar{
+			Name:    name,
+			Image:   image,
+			Command: stringsFrom(c["command"]),
+			Args:    stringsFrom(c["args"]),
+			Env:     envFrom(c),
+		})
+	}
+	return out
+}
+
+// stringsFrom reads a JSON array of strings, which is how ARM spells a
+// container's command and args.
+func stringsFrom(v any) []string {
+	raw, _ := v.([]any)
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// envFrom reads one container's environment. Azure's shape is a list of
+// {name, value} rather than a map, like GCE's metadata items.
+func envFrom(c map[string]any) map[string]string {
+	out := map[string]string{}
+	entries, _ := c["env"].([]any)
+	for _, raw := range entries {
+		e, _ := raw.(map[string]any)
+		if name := str(e["name"]); name != "" {
+			out[name] = str(e["value"])
+		}
+	}
+	return out
 }

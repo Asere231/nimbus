@@ -388,13 +388,16 @@ the work and Azure simply was not using it, and
   reconcile a legacy name with its encoded one, so a bucket whose directory
   predates `fsname` can end up with a stale copy beside a current one and the
   one that wins depends on walk order.
-- **A container app runs its FIRST container only.** Real Container Apps
-  run every container in the template as a sidecar group; a sidecar here is
-  stored and not started, exactly the limit Cloud Run has. There is no
-  scaling either: `template.scale` round-trips and one container runs, so
-  `minReplicas`/`maxReplicas` mean nothing, and there are no revisions —
-  one app, one container, `latestRevisionName` derived from the id and
-  stable.
+- **A container app runs EVERY container in its template**, as a group
+  sharing one network namespace -- so a sidecar reaches the main container
+  on localhost exactly as it does in Azure. Only the first container's
+  port is published and only it is reached by the FQDN, which is also what
+  Azure does.
+
+  There are still no revisions: one app, one template,
+  `latestRevisionName` derived from the id and stable. Running every
+  revision at once is what traffic splitting would cost, and nothing a
+  local apply does needs it -- the same decision Cloud Run made here.
 - **An app's FQDN has one label, so app names must be unique across
   environments.** Real Azure's is
   `{app}.{envdomain}.{region}.azurecontainerapps.io`; a TLS wildcard

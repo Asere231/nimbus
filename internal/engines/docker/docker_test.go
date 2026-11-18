@@ -412,3 +412,50 @@ func TestAStoppedContainerCanBeStartedAgain(t *testing.T) {
 		t.Errorf("starting a missing container gave %v, want NotFoundError", err)
 	}
 }
+
+// A container sharing another's network namespace must NOT get --add-host.
+//
+// Docker refuses the combination outright -- "conflicting options:
+// custom host-to-IP mapping and the network mode" -- because an
+// --add-host writes into /etc/hosts for a namespace this container does
+// not own. The mapping above is UNCONDITIONAL on purpose, since forgetting
+// it per cloud is exactly what broke the EKS and GKE jobs, so the one case
+// that cannot have it has to be excluded here rather than by each caller
+// remembering.
+//
+// This is what a Container Apps sidecar is: `--network container:<main>`,
+// so the two see each other on localhost exactly as they do in Azure.
+func TestASidecarSharingANamespaceGetsNoAddHost(t *testing.T) {
+	args := runArgs(RunOptions{
+		Name:    "nimbus-app-redis",
+		Image:   "redis:alpine",
+		Network: "container:nimbus-app-web",
+	})
+
+	for i, a := range args {
+		if a == "--add-host" {
+			t.Fatalf("--add-host is in %v; docker refuses it with --network container:", args)
+			_ = i
+		}
+	}
+	// And the namespace itself must still be passed.
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--network container:nimbus-app-web") {
+		t.Errorf("the shared namespace is missing from %v", args)
+	}
+}
+
+// An ordinary network name is unaffected: only a container namespace
+// conflicts, and a user-defined bridge still needs the host mapping --
+// which is how a registry joins a cluster's network today.
+func TestANamedNetworkStillGetsTheHostMapping(t *testing.T) {
+	args := runArgs(RunOptions{
+		Name:    "nimbus-registry-1",
+		Image:   "registry:2",
+		Network: "k3s-net",
+	})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--add-host host.docker.internal:host-gateway") {
+		t.Errorf("a named network lost the host mapping: %v", args)
+	}
+}

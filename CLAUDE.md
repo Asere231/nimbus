@@ -221,6 +221,17 @@ Nimbus is a from-scratch, offline cloud emulator in Go with a live web visualize
 - **A container app is LINKED to its environment, not nested inside it.** Its ARM parent is its resource group, because that is what its id says; the environment is a reference in `properties.managedEnvironmentId`, structurally the same kind of thing as a role assignment's scope. `identityLinks` in `types-azure.js` was already the hook for exactly that, so this needed no server change — and nesting would have made the graph disagree with the resource id.
 - **A fixture resource with no event that creates it is an inconsistent fixture.** Adding three resources to `fixture.json` broke `test/ui/replay.test.js`, which replays the journal and expects to end up with every resource — and the run's own embedded event list and counts need updating too, not just the top-level one.
 
+## Azure Functions: measured, not yet built
+
+A feasibility study, not an implementation — `docs/prompts/m20-functions.md`
+has the detail. Recorded here because the conclusion contradicts what this
+repo believed for several milestones.
+
+- **Microsoft DOES publish a Functions host image, and it runs offline.** The roadmap said for several milestones that there was "no Azure equivalent to lean on" for Lambda's base images. `mcr.microsoft.com/azure-functions/python:4-python3.11` binds `:80`, logs `Job host started` with no network, and the only unhealthy component is `AzureWebJobsStorage` — which an HTTP trigger does not need, and which Nimbus could serve itself since it has blob, queue and table. **The claim was not wrong about the difficulty, it was wrong about the reason**, which is the sort of error that survives because nobody tries the thing.
+- **A BIND MOUNT makes the host find zero functions; a `COPY` makes it find them.** Measured both ways with the same tree: mounted at `/home/site/wwwroot` it reported `0 functions found (Custom)` / `No functions were found` for BOTH the v2 decorator model and the classic v1 `function.json` model, with and without `AzureWebJobsFeatureFlags=EnableWorkerIndexing`, and nothing in the logs explaining it. Baked in with `COPY . /home/site/wwwroot` it reported `1 functions loaded`, mapped `api/hello`, and answered. So **a Functions deployment needs an image BUILD, not a mount** — still fully offline, since a local base image plus a `COPY` touches no network, but `internal/engines/docker` has no `Build` verb. This is the one finding that unlocks the milestone and the one that cost the most to reach.
+- **The image ships the host and the worker but NOT `azure-functions`.** `import azure.functions` fails outright. Real Azure installs `requirements.txt` at deploy time with a remote build, so a function app has to carry its dependencies; the image already sets `PYTHONPATH` to `.python_packages/lib/site-packages`, which is the supported place to put them. The contrast with Lambda is the whole story: AWS's images contain the emulator, the runtime client AND boto3, which is why mounting a handler into one was enough.
+- **The handler's own `print` lands in the container console** beside the host's `Executed 'Functions.hello' (Succeeded, ... Duration=5ms)`, so Log Analytics ingestion needs no new code — the tailer reads a console and knows nothing about what wrote to it.
+
 ## The engines
 
 Anything that really runs lives in `internal/engines`, shared by every cloud and knowing about none of them:

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Functions: a feasibility study that corrects what we believed
+
+Azure and GCP still cannot run a function, but the reason recorded in the
+roadmap turned out to be wrong, and wrong in the way that survives: nobody
+had tried it. Microsoft DOES publish a Functions host image, and it runs
+offline -- a Python function answered through it in a probe.
+
+What is actually hard is that the host expects a deploy, not a mount.
+Bind-mounting the code made it find zero functions in both programming
+models with nothing in the logs saying why; the identical tree baked in
+with a `COPY` loaded and served it. So a Functions deployment needs an
+image build -- still offline, since a local base image plus a `COPY`
+touches no network, but `internal/engines/docker` has no `Build` verb yet.
+
+The measurements and the resulting design questions are in
+`docs/prompts/m20-functions.md`. Nothing was implemented.
+
 ### Container Apps: sidecars and replicas that actually run
 
 A template's second container used to be stored and not started, and

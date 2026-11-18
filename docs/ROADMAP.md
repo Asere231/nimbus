@@ -1,6 +1,11 @@
 # Roadmap
 
-**Current: nothing scheduled. Milestone 19 is done.** CI now restarts
+**Current: nothing scheduled. Milestone 19 is done, and a feasibility
+study for Milestone 20 (Functions) is written up in
+`docs/prompts/m20-functions.md`** -- including the finding that corrects
+this file's own reasoning: Microsoft's Functions host image DOES run
+offline, and what makes it hard is that it needs a deploy rather than a
+mount. CI now restarts
 Nimbus and proves the resource still WORKS — `restart-control-plane`
 requires a clean plan afterwards, `restart-docker` requires the Lambda to
 answer and leaves no container behind. Until those existed, every Terraform
@@ -439,11 +444,23 @@ the work and Azure simply was not using it, and
   quiet rather than loud: a query against a reloaded workspace simply
   returned nothing, which is indistinguishable from a workspace nobody has
   used. They are still bounded at 10,000 lines per workspace.
-- **Azure still has no Functions.** Container Apps was the right first
-  choice because it takes any image, which is what the `run` engine does;
-  Functions would need a host per language, and Lambda only works here
-  because AWS publishes base images with the runtime interface emulator
-  inside them. There is no Azure equivalent to lean on.
+- **Azure still has no Functions, but the reason has CHANGED and is now
+  measured.** This entry used to say there was "no Azure equivalent to lean
+  on". There is: `mcr.microsoft.com/azure-functions/python:4-python3.11`
+  runs offline, and a Python function really answered through it in a
+  feasibility test. What differs from Lambda is not the absence of a host
+  but that the host expects a DEPLOY rather than a mount -- bind-mounting
+  the code made it find zero functions in both programming models, with
+  nothing in the logs saying why, while the identical tree baked in with a
+  `COPY` loaded and served it. So a Functions deployment needs an image
+  BUILD, which is still fully offline (local base image, no network) but
+  which `internal/engines/docker` has no verb for.
+
+  The app's dependencies are the other half: the image ships the host and
+  the worker but not `azure-functions`, and real Azure installs
+  `requirements.txt` with a remote build. They have to be vendored.
+
+  Written up with the measurements in `docs/prompts/m20-functions.md`.
 
 - **Resource policies ARE evaluated since Milestone 17**, on all three
   clouds: an S3 bucket policy (with its `Principal` element, and
@@ -549,12 +566,16 @@ the work and Azure simply was not using it, and
   written against the literal address cannot. Azure has no such override at
   all, so a VM there gets `NIMBUS_VM_*` environment variables instead. No
   cloud mints instance credentials, so the IAM-role paths answer nothing.
-- **GCP still has no Cloud Functions.** Cloud Run was the right first
-  choice for the same reason Container Apps was on Azure: it takes any
-  image, which is what the `run` engine does. A function would need a
-  per-language host, and Lambda only works here because AWS publishes base
-  images with the runtime interface emulator inside them. Google publishes
-  no equivalent to lean on.
+- **GCP still has no Cloud Functions**, and here the old reasoning holds:
+  Google publishes no functions host image. Gen 2 IS Cloud Run underneath
+  and the runtime contract is the Functions Framework -- an ordinary
+  library the user's code imports, whose `functions-framework` command is
+  just an HTTP server, so the `run` engine's contract already fits.
+  Deploying from SOURCE is what needs a builder and the network. The open
+  question is whether to build an image from a plain `python:3.11-slim`
+  with the framework vendored, or to require a container image and admit
+  it is Cloud Run under another name; `docs/prompts/m20-functions.md`
+  states both and asks.
 - **Cloud Routers and their NAT configuration round-trip as state and
   nothing routes.** The same is true of every other GCP networking object
   that implies traffic handling.

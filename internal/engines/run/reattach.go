@@ -48,7 +48,10 @@ func (e *Engine) Reattach(ctx context.Context, keep func(resourceID string) bool
 	if err := e.docker.Available(ctx); err != nil {
 		return nil // no Docker, nothing to reattach to
 	}
-	containers, err := e.docker.List(ctx, docker.LabelRole+"=service")
+	// This engine's OWN role, not a hardcoded "service": one cloud can
+	// run two instances of this engine, and two instances sharing a label
+	// adopt each other's containers.
+	containers, err := e.docker.List(ctx, docker.LabelRole+"="+e.cfg.Role)
 	if err != nil {
 		return nil
 	}

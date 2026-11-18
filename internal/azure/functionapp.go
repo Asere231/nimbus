@@ -65,6 +65,10 @@ const FunctionsSuffix = "azurewebsites.nimbus.localhost"
 // container apps use so the two never race for one.
 const DefaultFunctionAppPortBase = 9700
 
+// roleFunctionApp is the nimbus.role label a function app's container
+// carries, so the container-app engine cannot adopt it on a restart.
+const roleFunctionApp = "functionapp"
+
 // pythonFunctionImage is the host image a Python function app runs in.
 //
 // Python only, for now: each runtime is its own image of about a gigabyte
@@ -521,17 +525,24 @@ func deprovisionFunctionApp(s *Server, t target, body map[string]any) {
 	defer cancel()
 
 	if svc := s.funcapps.Get(t.ID); svc != nil {
-		// Stop takes the container AND the image it built -- a built
-		// image is this resource's own and would otherwise accumulate
-		// one per app at about a gigabyte each.
 		s.funcapps.Stop(ctx, svc)
 		s.funcapps.Forget(t.ID)
-	} else {
-		// Nothing registered: a restart that did not adopt it, or a
-		// create that failed. The image may still exist, and its tag is
-		// derived from the id, so it can be removed without a registry.
-		_ = s.funcapps.Docker().RemoveImage(ctx, docker.ImageTag("nimbus-fnapp", t.ID, t.Name))
 	}
+	// The image, ALWAYS, by its derived tag.
+	//
+	// The engine removes an image it remembers building, and after a
+	// RESTART it remembers nothing: reattach adopts a container and
+	// cannot know whether its image was built or pulled, and an adopted
+	// Service has no BuildDir to say so. Measured -- a destroy after a
+	// restart removed the container and left a 3GB image behind, which is
+	// the --persist leak in its quietest form, since nothing in `docker
+	// ps` shows it.
+	//
+	// Deriving the tag from the resource id is what makes this safe
+	// without a registry: it is the same tag the build used, and it
+	// belongs to this resource alone.
+	_ = s.funcapps.Docker().RemoveImage(ctx, docker.ImageTag("nimbus-fnapp", t.ID, t.Name))
+
 	// The deploy directory is this resource's own too.
 	_ = os.RemoveAll(s.functionAppDir(t.ID))
 }

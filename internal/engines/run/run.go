@@ -60,6 +60,17 @@ type Config struct {
 	// StartTimeout bounds how long a container may take to answer. It
 	// includes pulling the image, which on a first run is most of it.
 	StartTimeout time.Duration
+	// Role is the nimbus.role label this engine's containers carry, and
+	// the one Reattach lists by. Defaults to "service".
+	//
+	// It exists because ONE CLOUD can run two instances of this engine --
+	// Azure runs container apps and function apps on it -- and two
+	// instances sharing a label adopt each other's containers on a
+	// restart. Measured: the container-app engine took the function app's
+	// container, so every request to the function app answered "not
+	// running" while its container sat plainly Up, and the delete could
+	// not reach it. The --persist leak by yet another road.
+	Role string
 }
 
 func (c Config) withDefaults() Config {
@@ -72,8 +83,14 @@ func (c Config) withDefaults() Config {
 	if c.StartTimeout == 0 {
 		c.StartTimeout = DefaultStartTimeout
 	}
+	if c.Role == "" {
+		c.Role = "service"
+	}
 	return c
 }
+
+// Role is the label this engine's containers carry.
+func (e *Engine) Role() string { return e.cfg.Role }
 
 // Service is one running container.
 type Service struct {
@@ -299,7 +316,7 @@ func (e *Engine) Start(ctx context.Context, svc *Service) error {
 		Labels: map[string]string{
 			docker.LabelService:  svc.Name,
 			docker.LabelResource: svc.ResourceID,
-			docker.LabelRole:     "service",
+			docker.LabelRole:     e.cfg.Role,
 		},
 	}); err != nil {
 		return fmt.Errorf("starting the service container: %w", err)
@@ -668,7 +685,7 @@ func (e *Engine) startReplica(ctx context.Context, svc *Service, index int,
 		Labels: map[string]string{
 			docker.LabelService:  svc.Name,
 			docker.LabelResource: svc.ResourceID,
-			docker.LabelRole:     "service",
+			docker.LabelRole:     e.cfg.Role,
 		},
 	}); err != nil {
 		return Replica{}, fmt.Errorf("starting replica %d of %s: %w", index+1, svc.Name, err)

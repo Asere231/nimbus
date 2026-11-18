@@ -175,6 +175,9 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		NamePrefix:   "nimbus-fnapp",
 		PortBase:     DefaultFunctionAppPortBase,
 		StartTimeout: cfg.ClusterTimeout,
+		// Its own role, so the container-app engine above cannot adopt
+		// its containers on a restart and vice versa.
+		Role: roleFunctionApp,
 	}, s.docker)
 	s.logs = newLogStore()
 	// The challenge a Key Vault client gets points at our own login endpoint,
@@ -251,11 +254,23 @@ func (s *Server) SecretBrowser() *keyvault.Handler { return s.keyvault }
 // registry containers itself while the engine starts clusters, and a test
 // that set only one of them would silently talk to the real daemon
 // through the other.
+// useDocker swaps EVERY engine's client, which is the whole point.
+//
+// Missing one is a bug this project has now made twice: AWS's missed
+// s.vms, so that engine kept the real CLI through every test that called
+// it, and Azure's missed s.funcapps when function apps were added. A
+// handler that starts a container then leaves it running after the
+// package passes -- precisely what the Fake exists to prevent.
+//
+// TestEveryEngineGetsTheSwappedDockerClient counts the engines by
+// reflection and fails if this list is shorter, so the next engine cannot
+// be forgotten quietly.
 func (s *Server) useDocker(d docker.Client) {
 	s.docker = d
 	s.k3s.SetDocker(d)
 	s.vms.SetDocker(d)
 	s.apps.SetDocker(d)
+	s.funcapps.SetDocker(d)
 }
 
 func (s *Server) Start() func() {
@@ -511,4 +526,8 @@ func (s *Server) reattach(ctx context.Context) {
 	}
 	s.vms.Reattach(ctx, s.store.Exists)
 	s.apps.Reattach(ctx, s.store.Exists)
+	// EVERY engine, which this forgot at first: without it a function app
+	// came back unregistered, so requests to it 404'd while its container
+	// was plainly Up and a delete could not reach it.
+	s.funcapps.Reattach(ctx, s.store.Exists)
 }

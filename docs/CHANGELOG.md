@@ -1,6 +1,77 @@
 # Changelog
 
-## Unreleased
+## 0.20.0 — 2026-11-18
+
+Milestone 20: Azure Functions. Azure runs a function now, which was the
+last thing it could not do.
+
+    curl -k "https://fn-nimbus.azurewebsites.nimbus.localhost:4701/api/hello?name=nimbus"
+    hello nimbus from azure functions
+
+The host is Microsoft's own image, so the programming model is the real
+one. `terraform apply` of an `azurerm_linux_function_app` with
+`zip_deploy_file` completes, the plan after it is clean, the app survives
+a restart, and the destroy leaves no container and no built image while
+keeping the shared base image. `examples/terraform/azure-functions` is the
+worked example and CI drives all of it on Linux.
+
+**Nimbus builds an image per deployment**, which is the whole shape of
+this milestone. The feasibility study found that the Functions host
+reports "0 functions found" when the code is bind-mounted and loads them
+from an identical tree baked in with a `COPY` — so `docker.Client` gained
+`Build` and `RemoveImage`, and the `run` engine can now be asked to build
+before it runs. That stays offline: a local base image plus a `COPY`
+touches no network.
+
+Two limits, both deliberate and both stated where you meet them.
+**Dependencies must be vendored** into `.python_packages`, because the
+image ships the host and the Python worker but not `azure-functions` and
+real Azure installs `requirements.txt` with a remote build; Nimbus refuses
+a deploy without them rather than letting every invocation fail on an
+import. And **Python 3.11 is the only runtime**, because each is its own
+1.5 GB image; an unknown stack is refused by name.
+
+A function app's logs are in its container console, not in Log Analytics —
+real Azure routes them through Application Insights, which Nimbus does not
+model. The console carries both the handler's own `print` and the host's
+`Executed 'Functions.hello' (Succeeded...)`.
+
+Of everything azurerm insisted on, four are worth repeating:
+
+- **A 501 from the deployment site makes it retry for ever.** Ten minutes
+  of "Deployment service came back with a 501 status code, retrying..."
+  with the apply never finishing and nothing naming the refused path. A
+  404 makes it fail fast. Cloud Storage's `anywhereCaches` lesson one step
+  worse: a polite failure that never terminates beats one that merely
+  misleads.
+- **An empty object is not a safe default.** The generic "unknown action
+  returns `{}`" made the provider PANIC with a nil pointer dereference,
+  because it dereferences the publishing credentials without checking
+  them.
+- **`backup` must 404, not answer an empty document.** An empty one reads
+  as "this exists and is disabled", and azurerm flattened it into a block
+  the configuration never had — a permanent diff.
+- **It publishes through `/api/publish?type=zip`**, not the
+  `/api/zipdeploy` every tutorial shows, and it checks readiness with
+  `GET /deployments` — with no `/api` prefix.
+
+`Hook.SkipSpecDefaults` is new: the generated spec table was inventing
+`siteConfig.http20Enabled` as Microsoft's documented `true` where
+azurerm's schema defaults it to `false`, and `properties.backup` as an
+explicit null. Those defaults exist for the types nobody wrote a hook for,
+and for a hand-written type they do harm.
+
+Three bugs of this project's own, all of them old lessons by new roads:
+two instances of one engine sharing a role label adopted each other's
+containers on a restart; `useDocker` missed the new engine, exactly as
+AWS's once missed `s.vms` — so a reflection-based test now counts the
+engines and fails if the list is shorter; and a destroy after a restart
+left a 3 GB built image behind, because the engine remembers nothing about
+having built it once the process has gone.
+
+### Also in this release
+
+Work that landed before the milestone and had not been released yet.
 
 ### Functions: a feasibility study that corrects what we believed
 

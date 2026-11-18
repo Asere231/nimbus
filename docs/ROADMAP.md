@@ -1,11 +1,22 @@
 # Roadmap
 
-**Current: nothing scheduled. Milestone 19 is done, and a feasibility
-study for Milestone 20 (Functions) is written up in
-`docs/prompts/m20-functions.md`** -- including the finding that corrects
-this file's own reasoning: Microsoft's Functions host image DOES run
-offline, and what makes it hard is that it needs a deploy rather than a
-mount. CI now restarts
+**Current: nothing scheduled. Milestone 20 is done.** Azure runs a
+FUNCTION now, which was the last thing it could not do: an
+`azurerm_linux_function_app` applies, `curl` of its hostname returns what
+the handler returned, the plan afterwards is clean, it survives a restart,
+and the destroy leaves no container and no built image.
+
+The feasibility study in `docs/prompts/m20-functions.md` corrected this
+file's own reasoning before a line was written -- Microsoft's Functions
+host image DOES run offline, and what makes it hard is that it needs a
+DEPLOY rather than a mount, so Nimbus builds an image per deployment. Of
+the dozen things azurerm then insisted on, the one worth remembering is
+that a **501 from the deployment site makes it retry for ever** while a
+404 makes it fail fast: Cloud Storage's `anywhereCaches` lesson one step
+worse, because a polite failure that never terminates beats one that
+merely misleads.
+
+**Milestone 19 is done.** CI now restarts
 Nimbus and proves the resource still WORKS — `restart-control-plane`
 requires a clean plan afterwards, `restart-docker` requires the Lambda to
 answer and leaves no container behind. Until those existed, every Terraform
@@ -250,6 +261,7 @@ to demonstrate once there are instances to refuse it to.
 | 17 | ~~**Resource-level policies**~~ **done** | A principal reads a bucket ONLY because of the bucket policy, and an explicit deny in it wins |
 | 18 | ~~**Windows, properly**~~ **done** | Terraform, a data plane and a container all work on Windows, and what is different is written down |
 | 19 | ~~**Surviving a restart**~~ **done** | CI applies, restarts Nimbus, and proves the resource still WORKS — then destroys it with nothing left behind |
+| 20 | ~~**Azure Functions**~~ **done** | `curl` of a function app's hostname returns what the handler returned, and the host's own log records the invocation |
 
 Milestone 15 was first because Azure was the one cloud that could not run
 code, and it was indeed the cheapest: `internal/engines/run` already did
@@ -444,21 +456,39 @@ the work and Azure simply was not using it, and
   quiet rather than loud: a query against a reloaded workspace simply
   returned nothing, which is indistinguishable from a workspace nobody has
   used. They are still bounded at 10,000 lines per workspace.
-- **Azure still has no Functions, but the reason has CHANGED and is now
-  measured.** This entry used to say there was "no Azure equivalent to lean
-  on". There is: `mcr.microsoft.com/azure-functions/python:4-python3.11`
-  runs offline, and a Python function really answered through it in a
-  feasibility test. What differs from Lambda is not the absence of a host
-  but that the host expects a DEPLOY rather than a mount -- bind-mounting
-  the code made it find zero functions in both programming models, with
-  nothing in the logs saying why, while the identical tree baked in with a
-  `COPY` loaded and served it. So a Functions deployment needs an image
-  BUILD, which is still fully offline (local base image, no network) but
-  which `internal/engines/docker` has no verb for.
+- **Azure Functions WORK**, since Milestone 20: an
+  `azurerm_linux_function_app` with `zip_deploy_file` applies, `curl` of
+  its hostname returns what the handler returned, the plan afterwards is
+  clean, it survives a restart, and the destroy leaves no container and no
+  built image. See `examples/terraform/azure-functions`.
 
-  The app's dependencies are the other half: the image ships the host and
-  the worker but not `azure-functions`, and real Azure installs
-  `requirements.txt` with a remote build. They have to be vendored.
+  The host is Microsoft's own image, so the programming model is the real
+  one -- both the classic `function.json` model and the v2 decorators were
+  measured. Nimbus BUILDS an image per deployment, because the host finds
+  zero functions in a bind mount and loads them from an identical tree
+  baked in with a `COPY`; that stays offline, since a local base image
+  plus a `COPY` touches no network.
+
+  Two limits worth knowing. **Dependencies must be vendored** into
+  `.python_packages`: the image ships the host and the Python worker but
+  not `azure-functions`, and real Azure installs `requirements.txt` with a
+  remote build that needs the network. Nimbus REFUSES a deploy without
+  them rather than letting every invocation fail on an import. And
+  **Python 3.11 is the only runtime**: each is its own image of about
+  1.5 GB, the table is keyed by `linuxFxVersion`, and an unknown stack is
+  refused by name rather than run on the nearest image.
+
+  A function app's logs are in its container console, NOT in Log
+  Analytics. Real Azure routes them through Application Insights, which
+  Nimbus does not model -- so there is no workspace for them to reach, and
+  the console carries both the handler's own output and the host's
+  `Executed 'Functions.hello' (Succeeded...)` record.
+
+  There are no slots, no durable functions and no non-HTTP triggers -- a
+  timer or a queue trigger needs the host's own scheduler and a working
+  `AzureWebJobsStorage`, which is the obvious next thing. The deployment
+  (Kudu) site implements the zip deploy and the deployment history and
+  nothing else of its large surface.
 
   Written up with the measurements in `docs/prompts/m20-functions.md`.
 

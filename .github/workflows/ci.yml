@@ -1969,6 +1969,187 @@ jobs:
             exit 1
           fi
 
+  functions:
+    name: terraform azure-functions (Functions host, built image)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Docker and the Functions host image
+        run: |
+          docker version --format '{{.Server.Version}}'
+          # About 1.5 GB. Pre-pulled so the apply measures Nimbus rather
+          # than the network -- and because a `docker build` whose FROM is
+          # missing would reach a registry, which is the one thing this
+          # project will not do. Nimbus pulls the base through the
+          # ordinary path for exactly that reason.
+          docker pull mcr.microsoft.com/azure-functions/python:4-python3.11
+
+      - name: Vendor the function's dependencies
+        working-directory: examples/terraform/azure-functions/handler
+        run: |
+          # The one step real Azure does for you, with a remote build that
+          # needs the network. The host image ships the host and the
+          # Python worker but NOT azure-functions, so without this every
+          # invocation would fail on `import azure.functions` -- and
+          # Nimbus refuses the deploy rather than letting that happen.
+          pip install --target .python_packages/lib/site-packages -r requirements.txt
+          test -d .python_packages/lib/site-packages/azure
+
+      - name: Start Nimbus with --persist
+        run: |
+          set -euo pipefail
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus start --clouds azure --persist &
+          echo $! > /tmp/nimbus.pid
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, call the function, RESTART, destroy
+        working-directory: examples/terraform/azure-functions
+        run: |
+          set -euo pipefail
+          # Go on Linux honours SSL_CERT_FILE, so the CA does not have to
+          # go in the system store here. On WINDOWS the azurerm provider
+          # ignores it and the certificate store is the mechanism that
+          # matters -- measured in Milestone 18, which is why the Windows
+          # job imports the CA instead.
+          export SSL_CERT_FILE="$HOME/.nimbus/certs/nimbus-ca.pem"
+
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          HOST=$(terraform output -raw hostname)
+          echo "hostname: $HOST"
+
+          # THE assertion: the function answers with what the handler
+          # returned. Microsoft's own host, running the real programming
+          # model, reached through a hostname Nimbus invented.
+          out=$(curl -s --fail --max-time 60 "https://$HOST/api/hello?name=ci")
+          echo "GET  -> $out"
+          [ "$out" = "hello ci from azure functions" ] || {
+            echo "::error::the function did not return what the handler returns"; exit 1; }
+
+          # And a POST, so the body path is exercised too.
+          out=$(curl -s --fail --max-time 60 -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"posted"}' "https://$HOST/api/hello")
+          echo "POST -> $out"
+          [ "$out" = "hello posted from azure functions" ] || {
+            echo "::error::the POST body did not reach the handler"; exit 1; }
+
+          # The handler's own output, beside the host's record of the
+          # invocation. Both are in the container console, which is where
+          # a function app's logs live here -- real Azure routes them
+          # through Application Insights, which Nimbus does not model.
+          C=$(docker ps -qf label=nimbus.role=functionapp | head -1)
+          docker logs "$C" 2>&1 | tail -40 > logs.txt
+          grep -q "hello called for ci" logs.txt || {
+            echo "::error::the handler's print is not in the container console"
+            cat logs.txt; exit 1; }
+          grep -q "Executed 'Functions.hello' (Succeeded" logs.txt || {
+            echo "::error::the host did not record the invocation"
+            cat logs.txt; exit 1; }
+
+          # A clean plan, which means every field round-tripped exactly as
+          # sent. Several of this milestone's bugs were permanent diffs
+          # that a "the resource exists" check would have missed:
+          # siteConfig.http20Enabled defaulted to Microsoft's true where
+          # azurerm's schema says false, and properties.backup answered as
+          # an empty document that azurerm flattened into a block.
+          set +e; terraform plan -detailed-exitcode -input=false; code=$?; set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::plan -detailed-exitcode returned $code; expected 0"
+            exit 1
+          fi
+
+          # The restart. With --persist the container outlives the
+          # process, so it must be ADOPTED -- and into the FUNCTION APP
+          # engine, not the container-app one: the two share this engine
+          # and used to share a role label, so each adopted the other's
+          # containers.
+          echo "::group::restarting Nimbus"
+          kill "$(cat /tmp/nimbus.pid)"
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null || break
+            sleep 1
+          done
+          cd "$GITHUB_WORKSPACE"
+          ./bin/nimbus start --clouds azure --persist &
+          echo $! > /tmp/nimbus.pid
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          cd "$GITHUB_WORKSPACE/examples/terraform/azure-functions"
+          echo "::endgroup::"
+
+          # POLLED, because /api/info answering does not mean reattach has
+          # finished: it runs in the startup goroutine. Measured at about
+          # three seconds, and the first attempt at this reported a
+          # failure purely by asking too early.
+          after=""
+          for i in $(seq 1 40); do
+            after=$(curl -s --max-time 20 "https://$HOST/api/hello?name=after" 2>/dev/null || true)
+            case "$after" in *"hello after"*) echo "adopted after ${i}s"; break ;; esac
+            sleep 1
+          done
+          case "$after" in
+            *"hello after"*) ;;
+            *) echo "::error::the function did not answer after the restart: $after"; exit 1 ;;
+          esac
+
+          set +e; terraform plan -detailed-exitcode -input=false; code=$?; set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::plan after the restart returned $code; expected 0"
+            exit 1
+          fi
+
+          terraform destroy -auto-approve -input=false
+
+      - name: Nothing left behind, and the shared base image kept
+        run: |
+          left=$(docker ps -aq --filter label=nimbus.role=functionapp | wc -l)
+          if [ "$left" -ne 0 ]; then
+            echo "::error::destroy left $left function-app container(s)"
+            docker ps -a --filter label=nimbus.role=functionapp
+            exit 1
+          fi
+          # A BUILT image belongs to its resource alone and must go. This
+          # one leaked for a while: after a restart the engine remembers
+          # nothing about having built it, and nothing in `docker ps`
+          # would ever have shown a 3 GB image sitting there.
+          images=$(docker images -q --filter 'reference=nimbus-fnapp-*' | wc -l)
+          if [ "$images" -ne 0 ]; then
+            echo "::error::destroy left $images built image(s)"
+            docker images --filter 'reference=nimbus-fnapp-*'
+            exit 1
+          fi
+          # And the shared base image must STAY: removing it because one
+          # app used it would break every other app and cost a 1.5 GB
+          # re-pull.
+          base=$(docker images -q mcr.microsoft.com/azure-functions/python:4-python3.11 | wc -l)
+          if [ "$base" -ne 1 ]; then
+            echo "::error::the shared base image was removed; only built images are ours"
+            exit 1
+          fi
+
   containerapp:
     name: terraform azure-containerapp (run engine + Log Analytics)
     runs-on: ubuntu-latest

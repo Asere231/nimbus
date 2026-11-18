@@ -1,0 +1,6 @@
+handler.zip
+handler/.python_packages/
+terraform.tfstate*
+.terraform*
+*.out
+*.round

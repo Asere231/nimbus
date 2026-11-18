@@ -203,11 +203,11 @@ func (s *Server) serveLogs(w http.ResponseWriter, r *http.Request) string {
 	case "PutRetentionPolicy", "DeleteRetentionPolicy":
 		aerr = s.putRetentionPolicy(w, req, action == "PutRetentionPolicy")
 	case "ListTagsLogGroup", "ListTagsForResource":
-		// Tags on a log group are accepted and never read back by anything
-		// that matters, so an empty map is the honest answer.
-		writeJSON(w, 200, map[string]any{"tags": map[string]string{}})
-	case "TagLogGroup", "UntagLogGroup", "TagResource", "UntagResource":
-		writeJSON(w, 200, map[string]any{})
+		aerr = s.listLogGroupTags(w, req)
+	case "TagLogGroup", "TagResource":
+		aerr = s.tagLogGroup(w, req)
+	case "UntagLogGroup", "UntagResource":
+		aerr = s.untagLogGroup(w, req)
 	default:
 		aerr = invalidAction("CloudWatch Logs", action)
 	}
@@ -246,8 +246,138 @@ func (s *Server) createLogGroup(w http.ResponseWriter, req map[string]any) *apiE
 			Message: "The specified log group already exists"}
 	}
 	s.ensureLogGroup(name)
+	// A create can carry tags, and the provider sends them that way rather
+	// than following with a TagResource -- so dropping them here is enough on
+	// its own to produce a permanent diff.
+	if tags := stringMap(req["tags"]); len(tags) > 0 {
+		_ = s.mergeLogGroupTags(name, tags)
+	}
 	writeJSON(w, 200, map[string]any{})
 	return nil
+}
+
+// --- tags -----------------------------------------------------------------
+//
+// These used to be accepted and thrown away, under a comment saying they
+// were "never read back by anything that matters". The aws provider reads
+// them on every refresh: `aws_cloudwatch_log_group` with a `tags` block
+// applied cleanly and then wanted the same change on every later plan, for
+// ever, with nothing in the diff saying where it came from. Same family as
+// the AKS kubeconfig and Content-MD5 -- a value a client re-reads has to be
+// the value it wrote.
+//
+// There are two spellings of every one of these calls, both current API: the
+// provider uses TagResource/UntagResource/ListTagsForResource with an ARN,
+// while `aws logs tag-log-group` uses TagLogGroup/UntagLogGroup/
+// ListTagsLogGroup with a name. They are the same operation on the same
+// group, so they share an implementation and differ only in how the group is
+// named.
+
+// resolveLogGroup finds the group a tag call is about, by either spelling.
+//
+// CloudWatch's own log-group ARN ends in ":*" -- the wildcard over the
+// group's streams -- and a client composes it both with and without, so a
+// comparison has to tolerate either. Resolving by NAME rather than by ARN
+// string also keeps the account and region out of it, which a hand-written
+// policy or a copied ARN often gets wrong.
+func (s *Server) resolveLogGroup(req map[string]any) (string, *apiError) {
+	name := str(req["logGroupName"])
+	if name == "" {
+		if a := str(req["resourceArn"]); a != "" {
+			if i := strings.Index(a, ":log-group:"); i >= 0 {
+				name = strings.TrimSuffix(a[i+len(":log-group:"):], ":*")
+			}
+		}
+	}
+	if name == "" {
+		return "", &apiError{Status: 400, Code: "InvalidParameterException",
+			Message: "logGroupName or resourceArn is required"}
+	}
+	if !s.logs.hasGroup(name) {
+		return "", &apiError{Status: 400, Code: "ResourceNotFoundException",
+			Message: "The specified log group does not exist"}
+	}
+	return name, nil
+}
+
+func (s *Server) listLogGroupTags(w http.ResponseWriter, req map[string]any) *apiError {
+	name, aerr := s.resolveLogGroup(req)
+	if aerr != nil {
+		return aerr
+	}
+	// An untagged group answers an empty MAP, not an absent field and not an
+	// error: every Lambda makes its own log group untagged, so that is the
+	// common case, and it is the only other shape the provider tolerates.
+	tags := map[string]string{}
+	if res, err := s.store.Get(s.logGroupARN(name)); err == nil {
+		var body map[string]any
+		if jsonInto(res.Body, &body) == nil {
+			for k, v := range stringMap(body["tags"]) {
+				tags[k] = v
+			}
+		}
+	}
+	writeJSON(w, 200, map[string]any{"tags": tags})
+	return nil
+}
+
+func (s *Server) tagLogGroup(w http.ResponseWriter, req map[string]any) *apiError {
+	name, aerr := s.resolveLogGroup(req)
+	if aerr != nil {
+		return aerr
+	}
+	if err := s.mergeLogGroupTags(name, stringMap(req["tags"])); err != nil {
+		return &apiError{Status: 400, Code: "ResourceNotFoundException", Message: err.Error()}
+	}
+	writeJSON(w, 200, map[string]any{})
+	return nil
+}
+
+func (s *Server) untagLogGroup(w http.ResponseWriter, req map[string]any) *apiError {
+	name, aerr := s.resolveLogGroup(req)
+	if aerr != nil {
+		return aerr
+	}
+	// The keys arrive under "tagKeys" from UntagResource and under "tags"
+	// from UntagLogGroup -- where "tags" is a LIST, the one place in this
+	// API where that field is not an object.
+	keys := stringList(req["tagKeys"])
+	if len(keys) == 0 {
+		keys = stringList(req["tags"])
+	}
+	err := s.store.Update(s.logGroupARN(name), func(body map[string]any) error {
+		tags := stringMap(body["tags"])
+		for _, k := range keys {
+			delete(tags, k)
+		}
+		body["tags"] = tags
+		return nil
+	})
+	if err != nil {
+		return &apiError{Status: 400, Code: "ResourceNotFoundException", Message: err.Error()}
+	}
+	writeJSON(w, 200, map[string]any{})
+	return nil
+}
+
+// mergeLogGroupTags adds tags to a group, keeping the ones already there.
+//
+// Through store.Update, which holds the store's lock across read, change and
+// write: a create and a TagResource for the same group arrive one after the
+// other and a load-mutate-save would be the lost update this repo already
+// has a rule about.
+func (s *Server) mergeLogGroupTags(name string, add map[string]string) error {
+	if len(add) == 0 {
+		return nil
+	}
+	return s.store.Update(s.logGroupARN(name), func(body map[string]any) error {
+		tags := stringMap(body["tags"])
+		for k, v := range add {
+			tags[k] = v
+		}
+		body["tags"] = tags
+		return nil
+	})
 }
 
 func (s *Server) deleteLogGroup(w http.ResponseWriter, req map[string]any) *apiError {

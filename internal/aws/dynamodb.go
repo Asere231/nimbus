@@ -150,6 +150,40 @@ func boolOf(v any) bool {
 	return b
 }
 
+// stringMap reads a JSON object of strings, such as a tag set, and always
+// returns a map that can be written into -- so a caller adding a tag to a
+// resource that has none does not have to special-case the absent field.
+// Anything that is not a string is dropped rather than stringified, because
+// a tag value is a string in every one of these APIs.
+func stringMap(v any) map[string]string {
+	out := map[string]string{}
+	raw, ok := v.(map[string]any)
+	if !ok {
+		return out
+	}
+	for k, val := range raw {
+		if s, ok := val.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
+}
+
+// stringList reads a JSON array of strings, such as a list of tag keys.
+func stringList(v any) []string {
+	raw, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, val := range raw {
+		if s, ok := val.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func objList(v any) []map[string]any {
 	raw, ok := v.([]any)
 	if !ok {

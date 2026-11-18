@@ -199,6 +199,38 @@ func (s *Server) reattach(ctx context.Context) {
 	}
 	s.vms.Reattach(ctx, s.store.Exists)
 	s.lambda.Reattach(ctx, s.store.Exists)
+	s.reattachLogGroups()
+}
+
+// reattachLogGroups rebuilds the in-memory index of log groups from the
+// store.
+//
+// A log group's existence lives in two places: the resource in core.Store,
+// which persists, and logStore's own map of groups to streams, which is
+// memory -- and the latter is what DescribeLogGroups reads. So a restart
+// used to leave the store holding a group that nothing could see, and
+// Terraform recreated a resource that was right there:
+//
+//	# aws_cloudwatch_log_group.fn has been deleted
+//
+// This is the engine-reattach lesson about something that is not an engine.
+// An in-memory index over persisted state needs rebuilding exactly as an
+// engine's registry does, and for the same reason -- the store survives and
+// the index does not.
+//
+// Only the group is restored, not its events: nothing persists log lines,
+// and an empty group reads as "nothing has run yet", which after a restart
+// is true of the process doing the reading.
+func (s *Server) reattachLogGroups() {
+	groups := s.store.List(func(r *core.Resource) bool {
+		// The TYPE, not something looser: a Lambda's ARN and its log
+		// group's differ by one segment, so anything matching on the id
+		// would sooner or later invent a group from a function.
+		return r.Cloud == "aws" && r.Type == typeLogGroup && r.Name != ""
+	})
+	for _, res := range groups {
+		s.logs.ensureGroup(res.Name)
+	}
 }
 
 // setClusterStatus records what reattaching found. A container that is

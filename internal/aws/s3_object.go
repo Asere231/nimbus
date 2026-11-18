@@ -279,6 +279,105 @@ func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucketName 
 	return nil
 }
 
+// nullVersionID is the version id S3 gives an object that was written
+// before versioning was enabled on its bucket -- the literal string "null",
+// not an absent field.
+//
+// Nimbus keeps ONE version of an object, so that is the id every object
+// here reports. Enabling versioning does not actually retain anything, and
+// saying "null" is the truthful way to say so: a client reading it knows it
+// is looking at an unversioned object. What matters is that it is a real id
+// a client can delete by, because emptying a versioned bucket is a list
+// followed by a delete per version.
+const nullVersionID = "null"
+
+type listVersionsResult struct {
+	XMLName        xml.Name `xml:"ListVersionsResult"`
+	Xmlns          string   `xml:"xmlns,attr"`
+	Name           string   `xml:"Name"`
+	Prefix         string   `xml:"Prefix"`
+	Delimiter      string   `xml:"Delimiter,omitempty"`
+	MaxKeys        int      `xml:"MaxKeys"`
+	IsTruncated    bool     `xml:"IsTruncated"`
+	Versions       []objectVersion
+	DeleteMarkers  []objectVersion `xml:"DeleteMarker"`
+	CommonPrefixes []commonPrefix  `xml:"CommonPrefixes"`
+}
+
+type objectVersion struct {
+	XMLName      xml.Name `xml:"Version"`
+	Key          string   `xml:"Key"`
+	VersionID    string   `xml:"VersionId"`
+	IsLatest     bool     `xml:"IsLatest"`
+	LastModified string   `xml:"LastModified"`
+	ETag         string   `xml:"ETag"`
+	Size         int64    `xml:"Size"`
+	StorageClass string   `xml:"StorageClass"`
+}
+
+// listObjectVersions answers GET /{bucket}?versions.
+//
+// This is how the aws provider empties a VERSIONED bucket for
+// force_destroy, and until it existed the call fell through to the generic
+// empty document for an unimplemented sub-resource. The provider then
+// deleted nothing and asked for the bucket, which refused because it was
+// not empty, and the destroy retried for ever:
+//
+//	aws_s3_bucket.assets: Still destroying... [10m0s elapsed]
+//
+// The same shape as Cloud Storage's anywhereCaches 404: an unimplemented
+// sub-resource failing politely is not safe when a client is reading the
+// failure as an answer.
+//
+// Every object is reported as one version, with id "null" and IsLatest set,
+// because that is all Nimbus stores. Delete markers are always empty: a
+// delete here removes the object rather than laying a marker over it.
+func (s *Server) listObjectVersions(w http.ResponseWriter, r *http.Request, bucketName string) *apiError {
+	q := r.URL.Query()
+	prefix := q.Get("prefix")
+	delimiter := q.Get("delimiter")
+	maxKeys := 1000
+	if v, err := strconv.Atoi(q.Get("max-keys")); err == nil && v > 0 {
+		maxKeys = v
+	}
+
+	doc := listVersionsResult{
+		Xmlns: s3Namespace, Name: bucketName, Prefix: prefix,
+		Delimiter: delimiter, MaxKeys: maxKeys,
+		Versions: []objectVersion{}, DeleteMarkers: []objectVersion{},
+		CommonPrefixes: []commonPrefix{},
+	}
+	seenPrefix := map[string]bool{}
+	for _, info := range s.objects.list(bucketName, prefix) {
+		if delimiter != "" {
+			rest := strings.TrimPrefix(info.Key, prefix)
+			if i := strings.Index(rest, delimiter); i >= 0 {
+				p := prefix + rest[:i+len(delimiter)]
+				if !seenPrefix[p] {
+					seenPrefix[p] = true
+					doc.CommonPrefixes = append(doc.CommonPrefixes, commonPrefix{Prefix: p})
+				}
+				continue
+			}
+		}
+		if len(doc.Versions) >= maxKeys {
+			doc.IsTruncated = true
+			break
+		}
+		doc.Versions = append(doc.Versions, objectVersion{
+			Key:          info.Key,
+			VersionID:    nullVersionID,
+			IsLatest:     true,
+			LastModified: info.LastModified.Format(time.RFC3339),
+			ETag:         info.ETag,
+			Size:         info.Size,
+			StorageClass: "STANDARD",
+		})
+	}
+	writeXML(w, 200, doc)
+	return nil
+}
+
 // deleteObjects is the bulk delete a `terraform destroy` with
 // force_destroy uses, and `aws s3 rm --recursive` after it.
 type deleteObjectsResult struct {

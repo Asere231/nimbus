@@ -246,6 +246,13 @@ func (s *Server) serveBucket(w http.ResponseWriter, r *http.Request, name string
 	}
 	switch r.Method {
 	case http.MethodGet:
+		// ?versions is a LISTING, not a piece of configuration, so it does
+		// not belong with the dozen sub-resources below -- and landing in
+		// their default answer is what made a versioned bucket impossible
+		// to destroy.
+		if sub == "versions" {
+			return s.listObjectVersions(w, r, b.Name)
+		}
 		return s.getBucketConfig(w, r, b, sub)
 	case http.MethodPut:
 		return s.putBucketConfig(w, r, b, sub)

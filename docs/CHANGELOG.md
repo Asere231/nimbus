@@ -2,8 +2,39 @@
 
 ## Unreleased
 
-Two small things Milestone 18 and 19 noted and left alone, both about a
-first contact with the binary that looked like a failure.
+### A real application, and the three bugs it found
+
+`examples/apps/url-shortener` is the first example here that is an
+APPLICATION rather than a tour of one service: a DynamoDB table with a
+secondary index, a Lambda doing conditional writes and atomic counters
+against it, an S3 bucket it publishes a page to, a log group you read to
+see what happened, and the IAM tying them together. It was built to find
+out what breaks when services are used together, and it found three
+things, none of which any single-service example could have.
+
+- **A versioned bucket could never be destroyed.** `GET /{bucket}?versions`
+  fell through to the generic empty document for an unimplemented
+  sub-resource, and the aws provider empties a versioned bucket through
+  exactly that call — so `force_destroy` deleted nothing, the bucket
+  refused to go while it held objects, and the destroy retried past ten
+  minutes. `ListObjectVersions` now lists every object as one version with
+  id `"null"`, which is all Nimbus keeps.
+- **CloudWatch Logs tags were discarded**, under a comment saying they were
+  "never read back by anything that matters". The provider reads them on
+  every refresh, so a log group with tags applied cleanly and then wanted
+  the same change on every plan, for ever.
+- **A log group did not survive a restart.** Its existence lived both in the
+  store, which persists, and in an in-memory index, which is what
+  `DescribeLogGroups` reads — so Terraform said `has been deleted` and
+  recreated a resource that was right there.
+
+The second and third are the same lesson as Milestone 18's engine
+reattachment and Milestone 11's `Content-MD5`, one service further on; the
+first is Cloud Storage's `anywhereCaches` 404 almost exactly.
+
+### Two small things from Milestones 18 and 19
+
+Both about a first contact with the binary that looked like a failure.
 
 - **`nimbus --help` prints usage to stdout and exits 0.** It used to fall
   through to the unknown-command path, which writes usage to stderr and

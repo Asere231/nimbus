@@ -504,3 +504,49 @@ func TestTheExplainerReportsASatisfiedConditionAsAllowed(t *testing.T) {
 		t.Errorf("a region condition the request satisfies was explained as denied: %s", got.Reason)
 	}
 }
+
+// The public-bucket badge uses the same context as the enforcement.
+//
+// isPublicBucket asks "could an anonymous caller read this", and it used
+// to ask with an EMPTY condition context. That was harmless while no
+// supported key could appear in a bucket policy and became wrong the
+// moment aws:SecureTransport did: a bucket whose policy grants `*` and
+// then denies anything not over TLS would be badged PUBLIC while every
+// anonymous request to it was refused.
+//
+// Over-warning is the safe direction for a safety badge, so this was not
+// dangerous -- but it is still the explainer disagreeing with the
+// behaviour, which this repo has a rule about, and the badge exists to
+// teach what the policy does.
+func TestThePublicBucketBadgeAgreesWithTheEnforcement(t *testing.T) {
+	s := newTestServer(t)
+
+	// Grant the world, then deny anything not over TLS -- the standard
+	// hardening pair. Nimbus serves AWS over plain HTTP, so nothing can
+	// read this bucket and it is not public.
+	hardened := &bucket{
+		Name: "hardened", ARN: bucketARN("hardened"), Region: "us-east-1",
+		Policy: `{"Statement":[
+		  {"Effect":"Allow","Principal":"*","Action":"s3:GetObject",
+		   "Resource":"arn:aws:s3:::hardened/*"},
+		  {"Effect":"Deny","Principal":"*","Action":"s3:*",
+		   "Resource":"arn:aws:s3:::hardened/*",
+		   "Condition":{"Bool":{"aws:SecureTransport":"false"}}}
+		]}`,
+	}
+	if public, src := s.isPublicBucket(hardened); public {
+		t.Errorf("a bucket whose policy denies non-TLS access is badged public (rule %q), "+
+			"but every anonymous request to it is refused", src)
+	}
+
+	// And a genuinely open bucket is still badged public, so the fix is
+	// not "report nothing".
+	open := &bucket{
+		Name: "open", ARN: bucketARN("open"), Region: "us-east-1",
+		Policy: `{"Statement":[{"Effect":"Allow","Principal":"*",
+		  "Action":"s3:GetObject","Resource":"arn:aws:s3:::open/*"}]}`,
+	}
+	if public, _ := s.isPublicBucket(open); !public {
+		t.Error("a bucket granting s3:GetObject to everyone is public and must be badged so")
+	}
+}

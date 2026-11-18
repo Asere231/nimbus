@@ -126,6 +126,16 @@ func (s *Server) isPublicBucket(b *bucket) (bool, string) {
 	} {
 		d := authz.Evaluate(authz.Request{
 			Principal: anon, Action: probe.action, Resource: probe.resource,
+			// The same context a real anonymous request would carry.
+			// Evaluating with an EMPTY one was harmless while no
+			// supported condition key could appear in a bucket policy,
+			// and became wrong the moment aws:SecureTransport could: a
+			// bucket granting `*` and then denying anything not over TLS
+			// would be badged PUBLIC while every anonymous request to it
+			// was refused. Over-warning is the safe direction for a
+			// safety badge, but it is still the badge disagreeing with
+			// the behaviour, and the badge exists to teach the behaviour.
+			Context: s.explainContext(anon),
 		}, s.policies.rules(docs))
 		if d.Allowed {
 			return true, d.Source

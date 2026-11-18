@@ -1,16 +1,24 @@
-# A container that really runs, on Azure.
+# Containers that really run, on Azure.
 #
 # Until Milestone 15 this was the one thing Azure could not do here: AWS
 # runs a Lambda in AWS's own base image and GCP runs a Cloud Run service in
 # any image the daemon can pull, while Azure ran a Kubernetes cluster and a
 # VM and nothing in between.
 #
+# FOUR containers come out of this one resource: the app and its cache
+# sidecar, twice over, because min_replicas is 2. Both of those are real --
+# the sidecar is reachable on localhost from the app, as it is in Azure,
+# and requests are spread across the replicas round robin. See the
+# template below for how to check each.
+#
 #   1. nimbus start --clouds azure          (in another terminal)
 #   2. terraform init && terraform apply
 #   3. curl -k "https://$(terraform output -raw fqdn)/"
 #        -> whatever the image serves, proxied through Nimbus, so the
 #           request shows up in the activity feed at localhost:4700
-#   4. terraform destroy
+#   4. docker ps --filter label=nimbus.resource
+#        -> two app containers and two caches
+#   5. terraform destroy
 #
 # The FQDN has ONE label for the app and then a shared suffix, where real
 # Azure puts the environment and the region in as well. A TLS wildcard

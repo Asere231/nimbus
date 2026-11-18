@@ -59,6 +59,20 @@ type Hook struct {
 	// delete. AfterDelete still runs synchronously for bookkeeping; this is
 	// for stopping engines, which can be slow.
 	Deprovision func(s *Server, t target)
+	// SkipSpecDefaults stops applySpecDefaults filling this type's fields
+	// from Microsoft's published specs.
+	//
+	// Those defaults exist for "the types nobody wrote a hook for", and
+	// for a type whose behaviour IS hand-written they can do harm: a
+	// field Microsoft documents a default for, that the real client does
+	// not send and defaults differently itself, becomes a permanent diff.
+	// Measured on a function app, where the generated table filled
+	// siteConfig.http20Enabled with true (Microsoft's default) while
+	// azurerm's schema defaults it to false, so every plan after a clean
+	// apply wanted to change it -- and filled properties.backup with
+	// null, which azurerm flattens into a `backup` block the
+	// configuration does not have. Present-and-null is not absent.
+	SkipSpecDefaults bool
 }
 
 type armError struct {
@@ -277,9 +291,10 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 
 	// Fields Microsoft's own specs say the server owns, for the types nobody
 	// wrote a hook for. Runs before the hook so a hook always wins.
-	applySpecDefaults(t, body)
-
 	h := s.hookFor(t.Type)
+	if !h.SkipSpecDefaults {
+		applySpecDefaults(t, body)
+	}
 	if h.BeforePut != nil {
 		if aerr := h.BeforePut(s, t, body, existing); aerr != nil {
 			writeError(w, aerr.Status, aerr.Code, "%s", aerr.Message)

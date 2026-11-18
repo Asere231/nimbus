@@ -104,6 +104,10 @@ type Server struct {
 	// mixing function apps into that would be muddy. Its own name prefix
 	// and port base keep the two sets of containers apart.
 	funcapps *run.Engine
+	// funcRoot is where function apps' deploy directories live, created
+	// once per process when there is no data directory to put them under.
+	funcRoot     string
+	funcRootOnce sync.Once
 	// logs is what a Log Analytics workspace actually holds. Bounded and
 	// in memory, like CloudWatch's -- see logstore.go.
 	logs *logStore

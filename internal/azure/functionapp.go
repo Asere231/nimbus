@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Asere231/nimbus/internal/engines/docker"
 	"github.com/Asere231/nimbus/internal/engines/funcs"
@@ -163,8 +164,70 @@ func (s *Server) functionAppHostname(name string) string {
 // everything else so a restart finds the same place. It is the docker
 // build CONTEXT, which is why nothing else may live in it.
 func (s *Server) functionAppDir(resourceID string) string {
-	return filepath.Join(s.cfg.DataDir, "functions",
-		docker.SanitiseName(docker.Name("app", resourceID, "")))
+	return filepath.Join(s.functionRoot(), docker.SanitiseName(docker.Name("app", resourceID, "")))
+}
+
+// functionRoot is where every app's deploy directory lives.
+//
+// Under the data directory when there is one, and under a per-process
+// temporary directory when there is not -- which is the ORDINARY case,
+// since DataDir is empty without --persist. The first version joined
+// DataDir directly, so in memory-only mode the deploy directory came out
+// RELATIVE ("functions/app-...") and `docker build` ran against whatever
+// the process's working directory happened to be:
+//
+//	failed to read dockerfile: open Dockerfile: no such file or directory
+//
+// A path that depends on the caller's cwd is wrong everywhere; it is just
+// invisible until something reads it from somewhere else. The temporary
+// root matches what memory-only means: the code lives as long as the
+// process does.
+func (s *Server) functionRoot() string {
+	if s.cfg.DataDir != "" {
+		return filepath.Join(s.cfg.DataDir, "functions")
+	}
+	s.funcRootOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "nimbus-functions-")
+		if err != nil {
+			// Nowhere to put code is fatal to a deploy, not to the
+			// server, so this falls back to the system temp directory
+			// rather than panicking a request.
+			dir = filepath.Join(os.TempDir(), "nimbus-functions")
+			_ = os.MkdirAll(dir, 0o755)
+		}
+		s.funcRoot = dir
+	})
+	return s.funcRoot
+}
+
+// prepareDeployDir makes a directory buildable: a host.json so the host
+// treats it as a deployment, and Nimbus's own Dockerfile.
+//
+// Called after EVERY unpack, not once at create. unpackFunctionApp
+// replaces the directory -- deliberately, so a function removed from the
+// app stops running -- which also deletes the Dockerfile the create
+// wrote, and the build then failed with "open Dockerfile: no such file or
+// directory" on a deploy that had otherwise worked.
+//
+// Writing it afterwards settles a second question too: a zip carrying its
+// own Dockerfile cannot hijack the build, because Nimbus's is written
+// last. A host.json the user deployed IS kept, since it carries their
+// extension bundle and logging settings.
+func prepareDeployDir(dir, baseImage string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(dir, "host.json")); err != nil {
+		// An app with no code yet still needs one, or the host logs "the
+		// host.json file is missing from the most recent deployment" and
+		// finds nothing. With one it starts and 404s, which is what real
+		// Azure does for a site nobody has deployed to.
+		if err := os.WriteFile(filepath.Join(dir, "host.json"),
+			[]byte(defaultHostJSON), 0o644); err != nil {
+			return err
+		}
+	}
+	return writeFunctionDockerfile(dir, baseImage)
 }
 
 // writeFunctionDockerfile puts the one-line build beside the code.
@@ -291,7 +354,14 @@ func registerFunctionAppHooks(s *Server) {
 	// accounts hit, and the reason Hook.CreateStatus exists. Nothing else
 	// about a plan needs behaviour -- azurerm reads nothing back that the
 	// spec table does not already fill.
-	s.registerHook(typeServicePlan, Hook{CreateStatus: 202})
+	s.registerHook(typeServicePlan, Hook{
+		CreateStatus: 202,
+		// And the delete is SYNCHRONOUS: a 202 fails with "unexpected
+		// status 202 (202 Accepted) received with no body", the same way
+		// a storage account's and a user-assigned identity's do.
+		DeleteStatus: 200,
+		BeforePut:    beforeServicePlanPut,
+	})
 
 	// A site's config children answer 200, not 201.
 	//
@@ -308,10 +378,21 @@ func registerFunctionAppHooks(s *Server) {
 
 	s.registerHook(typeFunctionApp, Hook{
 		Backing: "real",
+		// No spec defaults: the generated table invents siteConfig
+		// fields azurerm defaults differently, and a nullable object as
+		// an explicit null, both of which are permanent diffs. See the
+		// field's own comment in arm.go.
+		SkipSpecDefaults: true,
 		// 202, not 201, for the same reason as the plan above -- measured
 		// the same way, with azurerm refusing the 201 and quoting the
 		// whole body back.
 		CreateStatus: 202,
+		// Synchronous delete, for the same reason: the generated client
+		// refuses a 202 with no body. Measured on the destroy, which
+		// otherwise failed AFTER the container and the image had already
+		// been cleaned up -- so the teardown was right and only the
+		// status was wrong, which is the most confusing combination.
+		DeleteStatus: 200,
 		BeforePut:    beforeFunctionAppPut,
 		// The create is long-running for real: it builds an image and
 		// waits for the host to answer. azurerm polls the RESOURCE rather
@@ -388,20 +469,7 @@ func provisionFunctionApp(s *Server, t target, body map[string]any) error {
 	}
 
 	dir := s.functionAppDir(t.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	// A host.json is what makes the host treat the directory as a
-	// deployment at all; without one it logs "the host.json file is
-	// missing from the most recent deployment". An app with no code yet
-	// gets a minimal one so it starts and 404s rather than failing.
-	if _, err := os.Stat(filepath.Join(dir, "host.json")); err != nil {
-		if err := os.WriteFile(filepath.Join(dir, "host.json"),
-			[]byte("{\n  \"version\": \"2.0\"\n}\n"), 0o644); err != nil {
-			return err
-		}
-	}
-	if err := writeFunctionDockerfile(dir, image); err != nil {
+	if err := prepareDeployDir(dir, image); err != nil {
 		return err
 	}
 
@@ -555,9 +623,15 @@ func (s *Server) handleSiteConfig(w http.ResponseWriter, t target) string {
 	}
 	out, ok := s.siteConfigView(t.ParentID, t.Name)
 	if !ok {
+		// Either the site does not exist or this configuration was never
+		// set. Both are a 404 to ARM, and the note says which.
+		why := "not configured"
+		if !s.store.Exists(t.ParentID) {
+			why = "no such site"
+		}
 		writeError(w, 404, "ResourceNotFound",
-			"The site %q was not found, so it has no configuration.", t.ParentID)
-		return "site config: no site " + t.ParentID
+			"The Resource '%s' was not found.", t.ID)
+		return "site config " + t.Name + ": " + why
 	}
 	out["id"] = t.ID
 	out["name"] = t.Name
@@ -652,20 +726,92 @@ func (s *Server) siteConfigView(siteID, what string) (map[string]any, bool) {
 		out["properties"] = settings
 	case "connectionstrings":
 		out["properties"] = map[string]any{}
+	case "authsettings":
+		// Easy Auth, off. azurerm reads it on every read of the app.
+		out["properties"] = map[string]any{"enabled": false}
+	case "authsettingsv2":
+		// The v2 shape is NESTED and the provider walks into it, so an
+		// empty properties is not enough -- the platform block has to be
+		// there for `enabled` to be read off it.
+		out["properties"] = map[string]any{
+			"platform":          map[string]any{"enabled": false},
+			"globalValidation":  map[string]any{},
+			"identityProviders": map[string]any{},
+			"login":             map[string]any{},
+			"httpSettings":      map[string]any{},
+		}
+	case "logs":
+		// Diagnostic logging, all off. Nested for the same reason.
+		out["properties"] = map[string]any{
+			"applicationLogs": map[string]any{
+				"fileSystem": map[string]any{"level": "Off"},
+			},
+			"httpLogs":              map[string]any{},
+			"detailedErrorMessages": map[string]any{"enabled": false},
+			"failedRequestsTracing": map[string]any{"enabled": false},
+		}
+	case "metadata":
+		// A dictionary, like appsettings, and empty.
+		out["properties"] = map[string]any{}
+	case "slotconfignames":
+		// Which app settings and connection strings stick to a slot
+		// rather than travelling with a swap. azurerm reads this on
+		// EVERY read of a function app, and a 404 fails the apply --
+		// found by making unset configurations 404 and watching this one
+		// break. An app with no slots has no sticky names, so the lists
+		// are simply absent.
+		out["properties"] = map[string]any{}
+	case "publishingcredentials":
+		// azurerm asks for these BEFORE a zip deploy and dereferences the
+		// answer without checking it. The generic "unknown action returns
+		// an empty object" made the provider PANIC:
+		//
+		//	panic: runtime error: invalid memory address or nil pointer
+		//	dereference
+		//	  helpers.GetCredentialsAndPublish(...) publish_app.go:43
+		//
+		// which is the sharpest version yet of this project's recurring
+		// lesson -- it is not enough for an unimplemented thing to fail
+		// politely, because a client may be reading that failure as an
+		// answer. An empty object is not a safe default here.
+		//
+		// Nimbus verifies no credentials, so these are a shape rather
+		// than a secret. They are derived from the site name so two
+		// reads agree, like every other value a client might compare.
+		name := siteID[strings.LastIndex(siteID, "/")+1:]
+		out["properties"] = map[string]any{
+			"name":               name,
+			"publishingUserName": "$" + name,
+			"publishingPassword": "nimbus",
+			"scmUri":             "https://$" + name + ":nimbus@" + s.scmHostname(name),
+		}
 	case "web":
 		if cfg == nil {
 			cfg = map[string]any{}
 		}
 		out["properties"] = cfg
 	default:
-		// Whatever a client PUT here, if it did; otherwise empty.
+		// Whatever a client PUT here, if it did.
 		if stored, err := s.store.Get(siteID + "/config/" + what); err == nil {
 			var sb map[string]any
 			if json.Unmarshal(stored.Body, &sb) == nil {
 				return sb, true
 			}
 		}
-		out["properties"] = map[string]any{}
+		// And otherwise NOT an empty object.
+		//
+		// An empty `properties` is not "nothing is configured" to a
+		// client -- it is "this configuration exists and is blank". For
+		// `config/backup` that produced a permanent diff: azurerm
+		// flattened the empty document into a `backup { enabled = false }`
+		// block, and every plan after a clean apply wanted to remove a
+		// block the configuration never had.
+		//
+		// ARM answers 404 for an optional configuration nobody has set,
+		// so that is what this answers. Exactly S3's rule that each
+		// sub-resource needs its OWN unset answer, and that the generous
+		// one is not always the safe one.
+		return nil, false
 	}
 	return out, true
 }
@@ -694,20 +840,86 @@ func (s *Server) serveScm(w http.ResponseWriter, r *http.Request, app string) st
 
 	path := strings.ToLower(strings.TrimSuffix(r.URL.Path, "/"))
 	switch {
-	case r.Method == http.MethodPost && (path == "/api/zipdeploy" || path == "/api/zipdeploy/"):
+	// Two spellings of a zip deploy, and azurerm uses the SECOND.
+	//
+	// /api/zipdeploy is the one every tutorial shows and the one `az
+	// functionapp deployment source config-zip` uses. azurerm 4.81.0
+	// publishes through /api/publish?type=zip -- Kudu's newer "one
+	// deploy" endpoint -- which was found the hard way: the handler
+	// implemented only zipdeploy, so the publish got a 501.
+	case r.Method == http.MethodPost && (path == "/api/zipdeploy" || path == "/api/publish"):
 		return s.zipDeploy(w, r, svc)
-	case r.Method == http.MethodGet && path == "/api/deployments":
-		// A deployment history. azurerm does not need it, but `az` and the
-		// portal ask, and an empty list is the truthful answer for a site
-		// whose deployments Nimbus does not keep.
-		writeJSON(w, 200, []any{})
+
+	// Deployment history. The publish is synchronous here -- the image is
+	// rebuilt before the response -- so the latest deployment is always a
+	// finished, successful one. Kudu's status 4 means success, and
+	// `complete` is what a poller waits for; without them a client would
+	// wait for a deployment that already happened.
+	// Deployment history, under BOTH spellings.
+	//
+	// azurerm's readiness check before a publish is `GET /deployments`
+	// with no /api prefix -- measured by logging what the deployment site
+	// refused, after the documented `/api/deployments` turned out not to
+	// be the one it asks for. Answering only the /api form failed the
+	// apply with "checking deployment service status: waiting for
+	// deployment service to be ready: client error: 404 Not Found".
+	case r.Method == http.MethodGet && (path == "/api/deployments" || path == "/deployments"):
+		writeJSON(w, 200, []any{scmDeployment(svc.Name)})
+		return ""
+	case r.Method == http.MethodGet &&
+		(strings.HasPrefix(path, "/api/deployments/") || strings.HasPrefix(path, "/deployments/")):
+		writeJSON(w, 200, scmDeployment(svc.Name))
+		return ""
+
+	// Kudu's own identity, which some clients read before deploying.
+	case r.Method == http.MethodGet && (path == "/api/scm/info" || path == "/api/environment"):
+		writeJSON(w, 200, map[string]any{
+			"type": "nimbus", "version": "1", "siteName": svc.Name,
+		})
 		return ""
 	}
-	writeError(w, 501, "NotImplemented",
-		"Nimbus's deployment site implements POST /api/zipdeploy and nothing else; "+
-			"%s %s is refused rather than answered with a success it did not perform.",
-		r.Method, r.URL.Path)
-	return "scm " + app + ": unimplemented " + r.Method + " " + r.URL.Path
+
+	// 404 and NOT 501.
+	//
+	// This matters more than it looks. azurerm reads a 501 from the
+	// deployment site as "the service is not ready yet" and retries FOR
+	// EVER -- measured: ten minutes of
+	//
+	//	[DEBUG] Deployment service came back with a 501 status code, retrying...
+	//
+	// thirty seconds apart, with the apply never finishing and nothing
+	// saying which path was refused. A 404 is what Kudu answers for a
+	// path it does not have, so the client either proceeds or fails
+	// quickly. The same lesson as Cloud Storage's anywhereCaches 404,
+	// except that here the polite failure does not merely mislead the
+	// client -- it never terminates.
+	writeError(w, 404, "NotFound",
+		"Nimbus's deployment site implements the zip deploy (POST /api/zipdeploy or "+
+			"POST /api/publish) and the deployment history, and nothing else. %s %s is not "+
+			"one of them.", r.Method, r.URL.Path)
+	return "scm " + app + ": no such endpoint " + r.Method + " " + r.URL.Path
+}
+
+// scmDeployment is a finished, successful deployment in Kudu's shape.
+//
+// status 4 is Kudu's "success" and `complete` is what a poller waits for.
+// Both are true as soon as the response is written, because a deploy here
+// rebuilds the image synchronously -- so there is never a deployment in
+// progress to report.
+func scmDeployment(name string) map[string]any {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return map[string]any{
+		"id":          "nimbus-" + name,
+		"status":      4,
+		"status_text": "",
+		"complete":    true,
+		"active":      true,
+		"deployer":    "Nimbus",
+		"message":     "deployed by Nimbus",
+		"progress":    "",
+		"start_time":  now,
+		"end_time":    now,
+	}
 }
 
 // zipDeploy unpacks an uploaded archive and rebuilds the app's image.
@@ -740,6 +952,12 @@ func (s *Server) zipDeploy(w http.ResponseWriter, r *http.Request, svc *run.Serv
 		writeError(w, 400, "MissingDependencies", "%v", err)
 		return "zipdeploy: no vendored dependencies"
 	}
+	// The unpack replaced the directory, which took the Dockerfile with
+	// it. Writing it again is what makes the rebuild possible at all.
+	if err := prepareDeployDir(dir, svc.BuildBase); err != nil {
+		writeError(w, 500, "DeploymentFailed", "preparing the deploy directory: %v", err)
+		return "zipdeploy: " + err.Error()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ClusterTimeout)
 	defer cancel()
@@ -757,3 +975,84 @@ func (s *Server) zipDeploy(w http.ResponseWriter, r *http.Request, svc *run.Serv
 // dependencies is a few megabytes; 256 MB is far more than any of them and
 // small enough that a mistake cannot exhaust the machine.
 const maxDeployZip = 256 << 20
+
+// defaultHostJSON is the minimal deployment manifest an app with no code
+// of its own gets, so the Functions host treats its directory as a
+// deployment and starts. A raw string, so no escape can be mangled.
+const defaultHostJSON = `{
+  "version": "2.0"
+}
+`
+
+// beforeServicePlanPut fills what a real server farm reports.
+//
+// azurerm reads the plan back when UPDATING a function app, and a thin
+// body made it fail with
+//
+//	retrieving Service Plan for App Service ...: <nil>
+//
+// -- an error whose text is the nil it got, naming nothing. Real Azure
+// reports a `kind` and a complete `sku` (tier, size, family, capacity),
+// all of which are derivable from the sku name, so they are filled rather
+// than invented.
+func beforeServicePlanPut(s *Server, t target, body, existing map[string]any) *armError {
+	props, _ := body["properties"].(map[string]any)
+	if props == nil {
+		props = map[string]any{}
+		body["properties"] = props
+	}
+	sku, _ := body["sku"].(map[string]any)
+	if sku == nil {
+		sku = map[string]any{}
+		body["sku"] = sku
+	}
+	name := str(sku["name"])
+	if name == "" {
+		name = "Y1"
+		sku["name"] = name
+	}
+	setDefault(sku, "tier", skuTier(name))
+	setDefault(sku, "size", name)
+	setDefault(sku, "family", name[:1])
+	setDefault(sku, "capacity", 0)
+
+	// A Linux plan sets reserved, and azurerm sends it. The kind follows
+	// from it: Azure reports "functionapp" for a consumption plan and
+	// "linux" for an ordinary Linux App Service plan.
+	if body["kind"] == nil || str(body["kind"]) == "" {
+		if eq(skuTier(name), "Dynamic") {
+			body["kind"] = "functionapp"
+		} else if reserved, _ := props["reserved"].(bool); reserved {
+			body["kind"] = "linux"
+		} else {
+			body["kind"] = "app"
+		}
+	}
+	return nil
+}
+
+// skuTier is the tier a plan's sku name belongs to.
+//
+// Only the families Nimbus can be asked about: Y is the consumption plan
+// ("Dynamic"), EP is Elastic Premium, and everything else falls back to
+// the letter's usual tier. Wrong for an exotic sku, and a tier is not
+// something Nimbus acts on -- it is reported because azurerm reads it.
+func skuTier(name string) string {
+	switch {
+	case strings.HasPrefix(name, "Y"):
+		return "Dynamic"
+	case strings.HasPrefix(name, "EP"):
+		return "ElasticPremium"
+	case strings.HasPrefix(name, "FC"):
+		return "FlexConsumption"
+	case strings.HasPrefix(name, "P"):
+		return "PremiumV3"
+	case strings.HasPrefix(name, "S"):
+		return "Standard"
+	case strings.HasPrefix(name, "B"):
+		return "Basic"
+	case strings.HasPrefix(name, "F"):
+		return "Free"
+	}
+	return "Dynamic"
+}

@@ -31,6 +31,12 @@ type Fake struct {
 	Unavailable bool
 	// FailRun, when set, makes Run return this error.
 	FailRun error
+	// FailBuild, when set, makes Build return this error -- so a test can
+	// put a deploy in the state where the image could not be built, which
+	// is a real outcome (a bad generated Dockerfile, a missing base
+	// image) and has to surface as a failed resource rather than as a
+	// container that never appears.
+	FailBuild error
 	// BlockRun, when set, makes Run wait until it is closed before
 	// starting anything. It is how a test holds a resource in the state it
 	// wants to assert about -- "still provisioning" -- rather than racing
@@ -58,6 +64,8 @@ type Fake struct {
 	// assertions Calls cannot carry -- the environment a container was
 	// given, and which ports were published.
 	Runs []RunOptions
+	// Builds records every image built, for the same reason.
+	Builds []Built
 }
 
 // NewFake returns an empty Fake with a running "daemon".
@@ -342,4 +350,55 @@ func (f *Fake) RunOptionsFor(name string) (RunOptions, bool) {
 		}
 	}
 	return RunOptions{}, false
+}
+
+// Build records a build and marks the image present.
+//
+// Marking it present is the half that matters: a caller that builds an
+// image and then asks whether to pull it must be told it is already
+// there, or every start path would try to PULL something that exists only
+// locally and fail against a registry that has never heard of it.
+func (f *Fake) Build(ctx context.Context, contextDir, tag string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("build %s from %s", tag, contextDir)
+	if err := f.check(); err != nil {
+		return err
+	}
+	if f.FailBuild != nil {
+		return f.FailBuild
+	}
+	f.Builds = append(f.Builds, Built{ContextDir: contextDir, Tag: tag})
+	f.Images[tag] = true
+	return nil
+}
+
+// BuiltImage returns the recorded build for a tag, for assertions.
+func (f *Fake) BuiltImage(tag string) (contextDir, builtTag string, ok bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, b := range f.Builds {
+		if b.Tag == tag {
+			return b.ContextDir, b.Tag, true
+		}
+	}
+	return "", "", false
+}
+
+// Built is one recorded image build.
+type Built struct {
+	ContextDir string
+	Tag        string
+}
+
+// RemoveImage forgets an image, ignoring one that is already gone.
+func (f *Fake) RemoveImage(ctx context.Context, tag string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("image-rm %s", tag)
+	if err := f.check(); err != nil {
+		return err
+	}
+	delete(f.Images, tag)
+	return nil
 }

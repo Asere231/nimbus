@@ -25,6 +25,15 @@ import (
 type Client interface {
 	// Available reports whether a usable daemon is reachable.
 	Available(ctx context.Context) error
+	// Build builds an image from a directory holding a Dockerfile.
+	//
+	// Only the Azure Functions host needs this: its own base image
+	// reports zero functions when the code is bind-mounted and loads them
+	// when the same tree is baked in with a COPY. Measured, not assumed.
+	Build(ctx context.Context, contextDir, tag string) error
+	// RemoveImage removes an image, ignoring one that is already gone.
+	// Only a built image is ever removed: a pulled one is shared.
+	RemoveImage(ctx context.Context, tag string) error
 	// Run starts a detached container and returns its ID.
 	Run(ctx context.Context, opts RunOptions) (string, error)
 	// Stop stops a container, ignoring one that is already stopped.

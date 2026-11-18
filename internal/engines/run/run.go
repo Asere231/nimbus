@@ -96,6 +96,23 @@ type Service struct {
 	// rest are reachable from inside the group and from nowhere else,
 	// which is exactly what the two clouds do.
 	Sidecars []Sidecar
+	// BuildDir, when set, is a directory holding a Dockerfile that is
+	// BUILT into Image before the container starts, instead of Image
+	// being pulled.
+	//
+	// Only the Azure Functions host needs this, and the reason is
+	// measured: with the code bind-mounted its own base image reports
+	// zero functions, and the identical tree baked in with a COPY loads
+	// and serves them. What goes IN the Dockerfile is the plugin's
+	// business -- the base image and /home/site/wwwroot are Azure's
+	// vocabulary and have no place in an engine that serves three clouds.
+	BuildDir string
+	// BuildBase is the image the Dockerfile's FROM names, pulled before
+	// the build so that `docker build` never has to reach a registry --
+	// which is the one thing this project will not do. A missing base
+	// then produces the ordinary "pre-pull it while online" message
+	// rather than a build that silently needs the network.
+	BuildBase string
 	// Replicas is how many copies of the whole group to run. 0 and 1 both
 	// mean one, so a caller that does not know about replicas is
 	// unchanged.
@@ -158,11 +175,15 @@ type Engine struct {
 	mu    sync.Mutex
 	svcs  map[string]*Service
 	proxy map[string]*httputil.ReverseProxy
+	// built maps a resource id to the image tag Nimbus built for it, so a
+	// delete removes that image and never a pulled one.
+	built map[string]string
 }
 
 func New(cfg Config, d docker.Client) *Engine {
 	return &Engine{cfg: cfg.withDefaults(), docker: d,
-		svcs: map[string]*Service{}, proxy: map[string]*httputil.ReverseProxy{}}
+		svcs: map[string]*Service{}, proxy: map[string]*httputil.ReverseProxy{},
+		built: map[string]string{}}
 }
 
 // SetDocker swaps the Docker client, which tests use to supply the Fake.
@@ -215,6 +236,16 @@ func (e *Engine) Start(ctx context.Context, svc *Service) error {
 				return fmt.Errorf("pulling %s: %w\n\nPre-pull it while online: docker pull %s",
 					image, err, image)
 			}
+		}
+	}
+
+	// An image to BUILD rather than pull. A function app's image exists
+	// only on this machine, so pulling it could only ever fail against a
+	// registry that has never heard of it -- which is why svc.images()
+	// leaves it out and this runs instead.
+	if svc.BuildDir != "" {
+		if err := e.buildImage(ctx, svc); err != nil {
+			return err
 		}
 	}
 	if svc.ContainerPort == 0 {
@@ -489,6 +520,8 @@ func (e *Engine) Stop(ctx context.Context, svc *Service) {
 	// one layer down: the store forgets the app while its containers keep
 	// running, with nothing left that knows about them.
 	e.removeGroup(ctx, svc)
+	// And the image, if Nimbus built it for this service alone.
+	e.removeBuiltImage(ctx, svc)
 }
 
 // Forget drops a service from the registry without touching its container.
@@ -501,9 +534,19 @@ func (e *Engine) Forget(resourceID string) {
 
 // --- sidecars --------------------------------------------------------------
 
-// images is every image the service needs, main container first.
+// images is every image the service needs PULLED, main container first.
+//
+// A built image is deliberately absent: it exists only on this machine, so
+// pulling it could only fail against a registry that has never heard of
+// it. Its BASE takes its place, because the build itself must not be the
+// thing that reaches the network.
 func (svc *Service) images() []string {
-	out := []string{svc.Image}
+	var out []string
+	if svc.BuildDir == "" {
+		out = append(out, svc.Image)
+	} else if svc.BuildBase != "" {
+		out = append(out, svc.BuildBase)
+	}
 	for _, s := range svc.Sidecars {
 		if s.Image != "" {
 			out = append(out, s.Image)
@@ -686,5 +729,54 @@ func (e *Engine) removeGroup(ctx context.Context, svc *Service) {
 	}
 	if svc.Container != "" {
 		_ = e.docker.Remove(ctx, svc.Container)
+	}
+}
+
+// buildImage builds a service's own image from its deploy directory.
+//
+// A failure fails the START, naming the image. The alternative -- a
+// container that never appears while the resource reports Succeeded -- is
+// the shape this project keeps removing, and a generated Dockerfile with
+// a mistake in it lands here.
+func (e *Engine) buildImage(ctx context.Context, svc *Service) error {
+	if err := e.docker.Build(ctx, svc.BuildDir, svc.Image); err != nil {
+		return fmt.Errorf("building the image %s for %s: %w\n\n"+
+			"The deploy directory is %s; `docker build %s` reproduces it by hand.",
+			svc.Image, svc.Name, err, svc.BuildDir, svc.BuildDir)
+	}
+	e.mu.Lock()
+	e.built[svc.ResourceID] = svc.Image
+	e.mu.Unlock()
+	return nil
+}
+
+// removeBuiltImage removes an image Nimbus built for this service, and
+// only one it built.
+//
+// A pulled image is shared with everything else on the machine, so
+// removing nginx:alpine because one Container App used it would break
+// every other app and cost a re-pull. One built for a single resource is
+// that resource's own, and would otherwise accumulate per app -- invisibly,
+// at roughly a gigabyte each.
+//
+// The tag is recomputed from the Service when the registry has forgotten
+// it, which is the state a restart leaves: adopting a container tells you
+// nothing about whether its image was built.
+func (e *Engine) removeBuiltImage(ctx context.Context, svc *Service) {
+	e.mu.Lock()
+	tag, known := e.built[svc.ResourceID]
+	delete(e.built, svc.ResourceID)
+	e.mu.Unlock()
+
+	if !known {
+		// Only when this Service says it has one; never guess at a tag
+		// for a service that pulled its image.
+		if svc.BuildDir == "" {
+			return
+		}
+		tag = svc.Image
+	}
+	if tag != "" {
+		_ = e.docker.RemoveImage(ctx, tag)
 	}
 }

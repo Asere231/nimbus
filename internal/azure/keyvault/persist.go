@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Asere231/nimbus/internal/datadir"
 )
 
 // Persistence for the vault data plane.
@@ -106,16 +108,20 @@ func (s *Store) load() error {
 	if err != nil {
 		return err
 	}
+	ignored := 0
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			ignored++
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
+			ignored++
 			continue
 		}
 		var file vaultFile
 		if json.Unmarshal(raw, &file) != nil {
+			ignored++
 			continue
 		}
 		v := s.CreateVault(file.Name)
@@ -132,5 +138,6 @@ func (s *Store) load() error {
 		}
 		v.mu.Unlock()
 	}
+	datadir.ReportIgnored("key vault", dir, ignored)
 	return nil
 }

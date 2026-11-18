@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Asere231/nimbus/internal/datadir"
 	"github.com/Asere231/nimbus/internal/fsname"
 )
 
@@ -172,17 +173,21 @@ func (s *Store) load() error {
 	if err != nil {
 		return err
 	}
+	ignored := 0
 	for _, e := range entries {
 		if !e.IsDir() {
+			ignored++
 			continue
 		}
 		acctDir := filepath.Join(s.dir, e.Name())
 		data, err := os.ReadFile(filepath.Join(acctDir, "account.json"))
 		if err != nil {
+			ignored++
 			continue // a directory without a manifest is not ours
 		}
 		var f accountFile
 		if json.Unmarshal(data, &f) != nil {
+			ignored++
 			continue
 		}
 		a := &Account{
@@ -200,12 +205,18 @@ func (s *Store) load() error {
 			}
 		}
 		for _, pb := range f.Blobs {
+			// A blob the manifest names and the disk cannot produce is the
+			// one case here that is worth hearing about: unlike S3, the name
+			// came from a manifest rather than from the path, so this is the
+			// manifest and the directory disagreeing with each other.
 			c := a.containers[strings.ToLower(pb.Container)]
 			if c == nil {
+				ignored++
 				continue
 			}
 			content, err := os.ReadFile(filepath.Join(acctDir, pb.File))
 			if err != nil {
+				ignored++
 				continue
 			}
 			c.blobs[pb.Name] = &Blob{
@@ -228,6 +239,7 @@ func (s *Store) load() error {
 		}
 		s.accounts[key(a.Name)] = a
 	}
+	datadir.ReportIgnored("azure storage", s.dir, ignored)
 	return nil
 }
 

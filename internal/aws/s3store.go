@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Asere231/nimbus/internal/datadir"
 	"github.com/Asere231/nimbus/internal/fsname"
 )
 
@@ -217,6 +218,7 @@ func (s *objectStore) load() {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ignored := 0
 	_ = filepath.WalkDir(s.dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || strings.HasSuffix(path, metaSuffix) {
 			return nil
@@ -227,6 +229,7 @@ func (s *objectStore) load() {
 		}
 		parts := strings.SplitN(filepath.ToSlash(rel), "/", 2)
 		if len(parts) != 2 {
+			ignored++
 			return nil
 		}
 		// The path is an ENCODED name, so the key is what it decodes back
@@ -235,14 +238,17 @@ func (s *objectStore) load() {
 		// than loaded under an invented name.
 		bucket, ok := fsname.Decode(parts[0])
 		if !ok {
+			ignored++
 			return nil
 		}
 		key, ok := fsname.Decode(parts[1])
 		if !ok {
+			ignored++
 			return nil
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
+			ignored++
 			return nil
 		}
 		info := objectInfo{Key: key, Size: int64(len(data))}
@@ -255,6 +261,7 @@ func (s *objectStore) load() {
 		s.mem[bucket][key] = storedObject{info: info, data: data}
 		return nil
 	})
+	datadir.ReportIgnored("s3", s.dir, ignored)
 }
 
 // cleanKey refuses a key that would escape the bucket's directory.

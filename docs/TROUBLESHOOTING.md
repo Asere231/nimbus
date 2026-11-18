@@ -204,12 +204,30 @@ path it asked for.
 Without `--persist` everything is in memory by design. With it, state is
 under `~/.nimbus/data`.
 
+### `nimbus: s3: ignoring 2 files under … that Nimbus did not write`
+
+Exactly what it says, and not an error. A store reads its state off disk at
+startup and skips anything it cannot account for, rather than refusing to
+start over a file nobody asked about. The line is there so that a file which
+is genuinely not being served does not look like one that was never uploaded
+— which is how it read before, because the skip was silent.
+
+It is one line per store, counted rather than listed, and nothing is printed
+when everything is accounted for. If you did not put the files there
+yourself, they are most likely leftovers from before v0.18.1 (below), and
+deleting them is safe.
+
 ### A store written before v0.18.1 has odd leftovers
 
 Object names are now encoded before becoming filenames. Ordinary lowercase
-keys are unaffected, but a key that previously collided or failed to write
-may leave one orphan file from before. Clearing `~/.nimbus/data` is the
-simple answer; nothing reads the orphan.
+keys are unaffected and still load, but a key that previously collided or
+failed to write may leave one orphan file from before. Clearing
+`~/.nimbus/data` is the simple answer.
+
+Note that a bucket directory written before the encoding existed loads
+normally — it is not reported as ignored — but a later write to that bucket
+goes to the encoded path, leaving a stale copy beside a current one. If reads
+of one bucket disagree with what you just wrote, that is the reason.
 
 ### GCP resource ids changed after a port change
 

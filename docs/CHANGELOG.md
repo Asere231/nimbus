@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+Two small things Milestone 18 and 19 noted and left alone, both about a
+first contact with the binary that looked like a failure.
+
+- **`nimbus --help` prints usage to stdout and exits 0.** It used to fall
+  through to the unknown-command path, which writes usage to stderr and
+  exits 2 — rendered in PowerShell as a red `NativeCommandError` block,
+  an alarming answer to a command that worked. An unknown command still
+  exits 2, where it belongs.
+- **Startup says how many files in the data directory it is ignoring.**
+  Every store that reads its state off disk skips a file it did not write,
+  which is right — refusing to start over a stray file nobody asked about
+  would be far worse. But it did that in silence, so an object that was
+  genuinely not being served read exactly like one that had never been
+  uploaded. `internal/datadir` now prints one counted line per store,
+  naming the directory, and nothing at all on a clean start.
+
+  The first version of this counted a pre-`fsname` uppercase directory as
+  an orphan. It is not one: `Decode` is a percent-decoder, so a name with
+  nothing to decode comes back as itself and a store written before
+  Milestone 18 loads exactly as it did. Reporting those would have told
+  everyone upgrading that their objects were gone.
+
 ## 0.19.0 — 2026-11-17
 
 Milestone 19: surviving a restart. `--persist` promised that state

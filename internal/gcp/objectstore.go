@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/Asere231/nimbus/internal/datadir"
 )
 
 // Where object bytes live.
@@ -251,29 +253,42 @@ func (s *objectStore) load() {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ignored := 0
 	for _, b := range buckets {
 		if !b.IsDir() {
+			ignored++
 			continue
 		}
 		files, err := os.ReadDir(filepath.Join(s.dir, b.Name()))
 		if err != nil {
+			ignored++
 			continue
 		}
 		for _, f := range files {
+			// An object is a metadata file and a content file beside it.
+			// The content file is reached from the metadata, so it is not
+			// an orphan on its own account -- only a .json with nothing
+			// behind it, or a file that is neither, is unaccounted for.
 			if !strings.HasSuffix(f.Name(), ".json") {
+				if _, err := os.Stat(filepath.Join(s.dir, b.Name(), f.Name()+".json")); err != nil {
+					ignored++
+				}
 				continue
 			}
 			metaPath := filepath.Join(s.dir, b.Name(), f.Name())
 			raw, err := os.ReadFile(metaPath)
 			if err != nil {
+				ignored++
 				continue
 			}
 			var meta map[string]any
 			if json.Unmarshal(raw, &meta) != nil {
+				ignored++
 				continue
 			}
 			data, err := os.ReadFile(strings.TrimSuffix(metaPath, ".json"))
 			if err != nil {
+				ignored++
 				continue
 			}
 			// The bucket comes from the METADATA, not from the directory
@@ -281,6 +296,7 @@ func (s *objectStore) load() {
 			// turned back into the real name.
 			bucket, name := str(meta["bucket"]), str(meta["name"])
 			if bucket == "" || name == "" {
+				ignored++
 				continue
 			}
 			if s.data[bucket] == nil {
@@ -289,6 +305,7 @@ func (s *objectStore) load() {
 			s.data[bucket][name] = storedObject{meta: meta, data: data}
 		}
 	}
+	datadir.ReportIgnored("cloud storage", s.dir, ignored)
 }
 
 // crc32cBase64 is the other digest GCS reports: CRC-32C (Castagnoli, not

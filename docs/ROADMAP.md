@@ -379,16 +379,15 @@ the work and Azure simply was not using it, and
 
 ## Later
 
-- **`nimbus --help` is not a command**, so it falls through to the usage text
-  on stderr and exits 2. In PowerShell that renders as a red
-  `NativeCommandError` block, which is an alarming first contact with the
-  binary for something that worked. Found in Milestone 18 and left alone
-  because it is cosmetic; `-h`/`--help` should print usage and exit 0.
 - **A persisted store written before Milestone 18 may hold a stale file.**
   `fsname.Encode` is the identity for ordinary lowercase keys, so existing
   data loads unchanged, but a key that previously collided or failed to write
   can leave one orphan file from the broken era. Clearing `~/.nimbus/data` is
-  the simple answer; nothing reads the orphan, it just sits there.
+  the simple answer. Startup now SAYS how many such files it is ignoring, so
+  the orphan no longer sits there unmentioned — what it still does not do is
+  reconcile a legacy name with its encoded one, so a bucket whose directory
+  predates `fsname` can end up with a stale copy beside a current one and the
+  one that wins depends on walk order.
 - **A container app runs its FIRST container only.** Real Container Apps
   run every container in the template as a sidecar group; a sidecar here is
   stored and not started, exactly the limit Cloud Run has. There is no

@@ -409,14 +409,31 @@ lived in the reload path and all four were found by hand.
   correctly excluded from the feed and from run grouping. This is the thing
   the snapshot machinery was built for in Milestone 12, now checked rather
   than assumed.
-- **A stray file in the data directory is ignored, silently.** A junk file
-  at the top level, a pre-`fsname` uppercase name and a name `fsname.Decode`
-  refuses all left the server starting normally. Nothing is said about them,
-  which is the right trade — refusing to start over a file nobody asked
-  about would be worse — but it does mean an orphan sits there unmentioned.
+- **A stray file in the data directory is ignored, and now SAYS so.** A junk
+  file at the top level and a name `fsname.Decode` refuses both left the
+  server starting normally with nothing said anywhere, so an object that was
+  genuinely not being served read exactly like one that had never been
+  uploaded. Ignoring the file is still right — refusing to start over a file
+  nobody asked about would be worse — so what changed is only the silence:
+  every store that walks the disk counts what it could not account for and
+  `internal/datadir` prints ONE line per store naming the directory. One line
+  rather than one per file, because a directory somebody has been poking at
+  can hold a great many, and a hundred lines of startup noise is its own way
+  of saying nothing; and nothing at all on a clean start, by the same argument
+  that stopped the activity feed crying wolf over a `listSecrets` that worked.
   Note that object files alone do not resurrect a bucket: the bucket is
   control-plane state in `state.json`, so objects without it answer
   `NoSuchBucket` rather than reappearing.
+- **A pre-`fsname` name is not an orphan — it still loads.** The M19 note
+  above used to say an uppercase directory was ignored like the rest, and it
+  is not: `Decode` is a percent-decoder, and a name with nothing to decode
+  comes back as itself, so a store written before `internal/fsname` existed
+  loads exactly as it did. The first version of the reporting counted those as
+  files Nimbus refuses to serve, which would have told everyone upgrading that
+  their objects were gone. `Encode(Decode(x)) == x` distinguishes a canonical
+  name from a legacy one if that is ever wanted; what matters is that the two
+  questions — "can this be read" and "did this version write it" — are not the
+  same question, and only the first one decides whether anything is lost.
 - **An apply SURVIVES Nimbus being killed mid-flight, provided it comes
   back.** The expectation was a quick failure — CLAUDE.md already notes a
   poll against a closed port reporting `unimplemented polling status

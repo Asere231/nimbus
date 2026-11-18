@@ -14,7 +14,14 @@ nimbus ssh INSTANCE            a shell on an instance
 nimbus plan-view PLAN          show a terraform plan on the graph
 nimbus can ACTION RESOURCE     ask whether a principal may do something
 nimbus version
+nimbus help                    this list; also --help and -h
 ```
+
+`help`, `--help` and `-h` all print that list to stdout and exit 0. An
+unrecognised command prints it to stderr and exits 2, so a script can tell
+"you asked for help" from "you typed something that is not a command" —
+which in PowerShell is the difference between plain text and a red
+`NativeCommandError` block.
 
 ---
 

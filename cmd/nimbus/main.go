@@ -41,7 +41,7 @@ const version = "0.19.0"
 
 func main() {
 	if len(os.Args) < 2 {
-		usage()
+		usage(os.Stderr)
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -61,16 +61,25 @@ func main() {
 		planView(os.Args[2:])
 	case "can":
 		canCLI(os.Args[2:])
+	case "help", "--help", "-h":
+		// Asking for help is not an error, so it goes to stdout and exits 0 --
+		// which also means `nimbus --help | less` works.
+		usage(os.Stdout)
 	case "version", "--version", "-v":
 		fmt.Println("nimbus", version)
 	default:
-		usage()
+		usage(os.Stderr)
 		os.Exit(2)
 	}
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `nimbus: a local multi-cloud emulator with a live visualizer
+// usage writes to the writer it is given: STDOUT when somebody asked for
+// help, stderr when they got the command wrong. `nimbus --help` used to fall
+// through to the unknown-command branch and so printed to stderr and exited
+// 2 -- which PowerShell renders as a red NativeCommandError block, an
+// alarming first interaction with a binary that is working perfectly.
+func usage(w io.Writer) {
+	fmt.Fprint(w, `nimbus: a local multi-cloud emulator with a live visualizer
 
 Usage:
   nimbus start [--home DIR] [--ui-port 4700] [--clouds azure,aws,gcp] [--persist]
@@ -83,6 +92,7 @@ Usage:
   nimbus plan-view PLAN          show a terraform plan on the graph before applying it
   nimbus can ACTION RESOURCE     ask whether a principal may do something, and why
   nimbus version
+  nimbus help                    this text (also --help, -h)
 `)
 }
 

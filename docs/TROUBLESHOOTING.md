@@ -108,6 +108,65 @@ just the one that ran `update-kubeconfig`.
 Expected once: the lock files gain a `windows_amd64` hash. Commit it or
 discard it; it recurs only if the hashes are removed.
 
+## Azure Functions
+
+### `MissingDependencies: this function app has no vendored dependencies`
+
+Exactly what it says, and deliberate. The Functions host image ships the
+host and the Python worker but not `azure-functions`, so an app whose
+dependencies are not in the zip fails on `import azure.functions` at every
+single invocation. Real Azure installs your `requirements.txt` at deploy
+time with a remote build; that needs the network, which Nimbus will not
+use.
+
+```bash
+pip install --target handler/.python_packages/lib/site-packages \
+  -r handler/requirements.txt
+terraform apply
+```
+
+Refusing at the apply is the point: failing where you are looking beats
+failing at the first call, in a message that mentions neither the
+deployment nor the fix.
+
+### `UnsupportedRuntime: Nimbus has no Functions host image for …`
+
+Python 3.11 only, so far. Each runtime and version is its own host image
+of about 1.5 GB, so they are added one at a time, and an unknown stack is
+refused rather than run on the nearest one — a function app silently
+running on a different Python minor would fail at import time for reasons
+nothing in the apply mentions.
+
+### A function app's logs are not in Log Analytics
+
+They are in the container's console, which is where a function app's
+output lives here:
+
+```bash
+docker logs "$(docker ps -qf label=nimbus.role=functionapp)"
+```
+
+Real Azure routes function logs through **Application Insights**, which
+Nimbus does not model, so there is no workspace for them to reach. The
+console carries both your own `print` and the host's
+`Executed 'Functions.hello' (Succeeded, …)` record of each call. A
+Container App's console *does* reach a workspace — that is a different
+mechanism (`appLogsConfiguration` on its environment), not an
+inconsistency.
+
+### The first apply takes minutes
+
+The host image is about 1.5 GB and Nimbus builds an image per deployment
+on top of it. Pull it once while online and the apply is seconds:
+
+```bash
+docker pull mcr.microsoft.com/azure-functions/python:4-python3.11
+```
+
+The build itself needs no network — a local base image plus a `COPY` —
+which is why Nimbus pulls the base through its ordinary path first rather
+than letting `docker build` reach a registry.
+
 ## Docker
 
 ### `docker is not available`

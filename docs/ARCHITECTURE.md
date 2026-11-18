@@ -108,14 +108,36 @@ Two subtleties that bite:
 | `docker` | all of them | the container client, plus naming, labels, free ports, and a `Fake` for tests |
 | `k3s` | AKS, EKS, GKE | real Kubernetes in Docker; watches the cluster and mirrors pods into the store |
 | `funcs` | Lambda | AWS's own base images and the Runtime Interface Emulator they ship |
-| `run` | Cloud Run, Container Apps | pull, publish a port, wait for it to answer, proxy through |
+| `run` | Cloud Run, Container Apps, Azure Functions | pull (or **build**), publish a port, wait for it to answer, proxy through |
 | `vm` | EC2, GCE, Azure VMs | a container that boots, runs a boot script and stays up |
+
+The `run` engine serves three products because they ask for the same
+thing: one long-lived container, listening on a port, every method and
+path proxied through, readiness by HTTP GET. Azure Functions added one
+capability to it and no vocabulary — a service may name a directory to
+**build** an image from, because the Functions host finds nothing in a
+bind mount and loads a tree baked in with a `COPY`. What goes in the
+Dockerfile stays in the Azure plugin, since the base image and
+`/home/site/wwwroot` are Azure's words, not an engine's.
+
+Azure runs **two instances** of it, for container apps and function apps.
+Each carries its own `nimbus.role` label, which is not cosmetic: with a
+shared label the two adopted each other's containers on a restart, so
+requests to one answered "not running" while its container sat plainly
+`Up`.
 
 **Every engine is reattached on startup.** With `--persist` containers
 outlive the process deliberately, so a fresh Nimbus adopts them — matching
 on labels, letting the plugin decide which resource ids are its own, and
 recovering the published port, which is the one thing about a running
 container that cannot be derived.
+
+An image Nimbus **built** is removed when its resource is deleted, and one
+it *pulled* never is: a pulled image is shared with everything else on the
+machine, while a built one belongs to that resource alone. After a restart
+the engine no longer remembers building it, so the plugin removes it by
+its derived tag instead — without that, a destroy left a 3 GB image that
+nothing in `docker ps` would show.
 
 `nimbus ssh` is `docker exec`: Nimbus is stdlib-only and cannot run an SSH
 server, and no vendor base image ships `sshd`.

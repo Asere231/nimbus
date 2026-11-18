@@ -19,9 +19,10 @@ Google Cloud on your machine and never calls a real cloud endpoint.
 | What | Why | Needed for |
 |---|---|---|
 | **Go 1.22 or newer** | to build the binary | always |
-| **Docker** | anything that really runs a container | Kubernetes, Lambda, Container Apps, Cloud Run, VMs, container registries |
+| **Docker** | anything that really runs a container | Kubernetes, Lambda, Azure Functions, Container Apps, Cloud Run, VMs, container registries |
 | **Terraform 1.5+** | the examples | the examples |
 | `az`, `aws`, `gcloud`, `kubectl` | optional, if you want to drive Nimbus with a cloud CLI | per-cloud |
+| **Python 3.11 + `pip`** | vendoring a function app's dependencies | Azure Functions only |
 
 Nimbus itself is **stdlib-only** — `go build` fetches nothing. The main
 module has no third-party dependencies at all.
@@ -30,6 +31,25 @@ Everything except Docker is optional. Without Docker you can still use every
 control-plane resource, the storage data planes, IAM enforcement and the
 visualizer; what you lose is the handful of resources backed by a real
 container.
+
+### Pull the base images while you are online
+
+Nimbus never reaches the network itself, so anything container-backed
+needs its base image already local. Each one is pulled once and reused:
+
+```bash
+docker pull rancher/k3s:v1.34.12-k3s1                        # AKS, EKS, GKE
+docker pull public.ecr.aws/lambda/python:3.12                # Lambda
+docker pull mcr.microsoft.com/azure-functions/python:4-python3.11  # Azure Functions
+docker pull nginx:alpine                                     # Container Apps, Cloud Run
+docker pull debian:12                                        # VMs
+docker pull registry:2                                       # container registries
+```
+
+Only pull what you intend to use — the Functions host is about 1.5 GB and
+k3s is not small either. An apply whose image is missing will pull it
+itself and simply take longer; one with no network at all fails with a
+message naming the image and this command.
 
 ## Build
 

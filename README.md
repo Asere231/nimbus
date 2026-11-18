@@ -9,11 +9,12 @@ terraform apply  ──HTTPS──▶  Nimbus Azure (ARM) :4701 ──┐
 terraform apply  ──HTTP───▶  Nimbus AWS        :4702 ──┴▶ store ──▶ event bus ──SSE──▶  visualizer :4700
 ```
 
-**Status (v0.18.1):** all three clouds, in one process. Control planes,
-storage data planes, real Kubernetes clusters, Lambda functions, Cloud Run
-and Container Apps services and compute instances that really boot — plus
-IAM, Azure RBAC and GCP IAM that actually refuse. Driven by Terraform, `az`,
-`aws`, `gcloud` and `kubectl`. Verified on macOS, Linux and Windows.
+**Status (v0.20.0):** all three clouds, in one process. Control planes,
+storage data planes, real Kubernetes clusters, Lambda and **Azure
+Functions** that really execute, Cloud Run and Container Apps services,
+and compute instances that really boot — plus IAM, Azure RBAC and GCP IAM
+that actually refuse. Driven by Terraform, `az`, `aws`, `gcloud` and
+`kubectl`. Verified on macOS, Linux and Windows.
 See [docs/ROADMAP.md](docs/ROADMAP.md) for what is and is not covered.
 
 ## Documentation
@@ -86,7 +87,7 @@ eval "$(./bin/nimbus env azure)"          # PowerShell: ./bin/nimbus.exe env azu
 
 | Tier | Resource types | Behaviour |
 |---|---|---|
-| Real | Storage accounts and containers, AKS clusters and node pools, Key Vaults, container registries, Linux virtual machines, **Container Apps** | Something actually runs: bytes on disk, k3s in Docker, a `registry:2` container, a container serving on its own FQDN, secrets you can read back with a client |
+| Real | Storage accounts and containers, AKS clusters and node pools, Key Vaults, container registries, Linux virtual machines, **Container Apps**, **Function Apps** | Something actually runs: bytes on disk, k3s in Docker, a `registry:2` container, a container serving on its own FQDN, a Python function executing in Microsoft's own Functions host, secrets you can read back with a client |
 | Modelled by hand | Resource groups, virtual networks, subnets, managed identities, role assignments and definitions, Log Analytics workspaces | Validation, server-generated fields, parent/child sync, cascade delete. A workspace **holds logs**: a container app's console lands in it and `az monitor log-analytics query` returns the rows |
 | Modelled from the specs | 53 more types across networking, compute, web, data and integration | Read-only fields and defaults taken from Microsoft's own OpenAPI specs, applied generically — no hook per type |
 | Accepted | Any other ARM type | Stored and returned with `provisioningState: Succeeded`; nothing runs behind it |
@@ -163,6 +164,51 @@ az monitor log-analytics query \
   --workspace "$(terraform output -raw workspace_customer_id)" \
   --analytics-query "ContainerAppConsoleLogs | where Log_s contains 'GET' | take 10"
 ```
+
+### An Azure Function that really executes
+
+```bash
+cd examples/terraform/azure-functions
+
+# The one step real Azure does for you. See below.
+pip install --target handler/.python_packages/lib/site-packages \
+  -r handler/requirements.txt
+
+terraform apply
+curl -k "https://$(terraform output -raw hostname)/api/hello?name=nimbus"
+# -> hello nimbus from azure functions
+```
+
+An `azurerm_linux_function_app` runs in **Microsoft's own Functions host
+image**, so the programming model is the real one — a `function.json`
+beside an `__init__.py`, or the v2 decorators, either way. Nothing in the
+handler knows about Nimbus.
+
+Nimbus **builds an image per deployment** rather than mounting the code,
+and that is not a preference: the host reports `0 functions found` when
+`/home/site/wwwroot` is a bind mount, and loads them from an identical
+tree baked in with a `COPY`. It stays offline all the same, because a
+local base image plus a `COPY` reaches no registry.
+
+**Your dependencies have to be vendored**, which is the `pip install
+--target` above. The host image ships the host and the Python worker but
+not `azure-functions`, and real Azure installs `requirements.txt` for you
+with a remote build — which needs the network. Nimbus refuses the deploy
+without them rather than letting every invocation fail on an import.
+
+The handler's own output goes to the container's console, beside the
+host's own record of each call:
+
+```bash
+docker logs "$(docker ps -qf label=nimbus.role=functionapp)"
+# hello called for nimbus
+# Executed 'Functions.hello' (Succeeded, Id=…, Duration=10ms)
+```
+
+That console is where a function app's logs live here — real Azure routes
+them through Application Insights, which Nimbus does not model. Python
+3.11 is the only runtime so far: each one is its own 1.5 GB image, and an
+unknown stack is refused by name rather than run on the nearest.
 
 `where`, `project`, `take`, `limit` and `count` work. Anything else is
 **refused and named** rather than guessed at — `summarize` answers "not

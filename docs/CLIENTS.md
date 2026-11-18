@@ -39,6 +39,49 @@ provider "azurerm" {
 document from it and learns every other endpoint — ARM, the login authority,
 the storage and Key Vault DNS suffixes — from that one setting.
 
+#### Function apps: vendor your dependencies first
+
+`azurerm_linux_function_app` works, including `zip_deploy_file`, with one
+thing you have to do yourself:
+
+```bash
+pip install --target handler/.python_packages/lib/site-packages \
+  -r handler/requirements.txt
+terraform apply
+```
+
+The Functions host image ships the host and the Python worker but **not
+the `azure-functions` package**. Real Azure installs your
+`requirements.txt` at deploy time with a remote build, and that needs the
+network — which Nimbus will not use. So the dependencies travel in the
+zip, in `.python_packages/lib/site-packages`, which is where the image's
+own `PYTHONPATH` already points.
+
+Nimbus refuses a deploy without them:
+
+```
+Error: MissingDependencies: this function app has no vendored
+dependencies, so every invocation would fail on `import azure.functions`.
+```
+
+That is deliberate. Such an app cannot serve a single call, and failing at
+`terraform apply` — where you are looking — beats failing later at the
+first invocation, in a place that mentions neither the deployment nor the
+fix.
+
+Two more things to know. Python **3.11** is the only runtime so far
+(`application_stack { python_version = "3.11" }`); another stack is
+refused by name, because each one is its own 1.5 GB host image. And the
+deploy **rebuilds an image**, so it takes a few seconds rather than being
+instant — the host finds no functions in a bind mount, which is why.
+
+Pre-pull the host image once while online, or the first apply spends its
+time downloading 1.5 GB:
+
+```bash
+docker pull mcr.microsoft.com/azure-functions/python:4-python3.11
+```
+
 ### The `az` CLI
 
 ```bash

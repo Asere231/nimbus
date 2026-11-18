@@ -1992,17 +1992,18 @@ jobs:
           # is what makes the create genuinely long-running.
           docker pull nginx:alpine
 
-      - name: Start Nimbus
+      - name: Start Nimbus with --persist
         run: |
           go build -o bin/nimbus ./cmd/nimbus
-          ./bin/nimbus start --clouds azure &
+          ./bin/nimbus start --clouds azure --persist &
+          echo $! > /tmp/nimbus.pid
           for i in $(seq 1 30); do
             curl -sf http://localhost:4700/api/info >/dev/null && break
             sleep 1
           done
           curl -sf http://localhost:4700/api/info
 
-      - name: apply, curl the app, query its logs, destroy
+      - name: apply, curl the app, query its logs, RESTART, destroy
         working-directory: examples/terraform/azure-containerapp
         run: |
           set -euo pipefail
@@ -2066,14 +2067,82 @@ jobs:
             esac
           done
 
-          # An unsupported operator must be REFUSED AND NAMED, not treated
-          # as a no-op returning every row (the FilterExpression trap) and
-          # not as an empty result, which reads as "nothing logged yet".
-          out=$(query '"ContainerAppConsoleLogs | summarize count() by Log_s"')
+          # The widened subset, against a real workspace with real lines.
+          # `summarize count() by` and `order by` used to be in the refusal
+          # list below; they are implemented now, so they are asserted
+          # POSITIVELY here rather than left out -- a test that only ever
+          # checked they were refused would have passed while they broke.
+          out=$(query '"ContainerAppConsoleLogs | summarize count() by ContainerAppName_s"')
           echo "$out"
           case "$out" in
-            *summarize*) ;;
+            *count_*) ;;
+            *) echo "::error::summarize count() by did not answer a count_ column"; exit 1 ;;
+          esac
+
+          # ago() is the one that matters most: it is in virtually every
+          # real query and was refused outright, so a time window could not
+          # be written at all. A one-hour window must hold lines the app
+          # produced seconds ago.
+          out=$(query '"ContainerAppConsoleLogs | where TimeGenerated > ago(1h) | count"')
+          echo "$out"
+          case "$out" in
+            *'"rows":[[0]]'*)
+              echo "::error::ago(1h) found no lines, though the app has just logged some"
+              exit 1 ;;
+            *'"rows"'*) ;;
+            *) echo "::error::ago(1h) was not answered"; exit 1 ;;
+          esac
+
+          # A filter with two conditions, which `where` could not read
+          # before: one comparison was the whole of it.
+          out=$(query '"ContainerAppConsoleLogs | where Stream_s == \"stdout\" and Log_s contains \"\" | take 3"')
+          echo "$out" | head -c 200; echo
+          case "$out" in
+            *'"rows"'*) ;;
+            *) echo "::error::a where with and/or was not answered"; exit 1 ;;
+          esac
+
+          # And an operator that is still NOT implemented must be REFUSED
+          # AND NAMED -- not treated as a no-op returning every row (the
+          # FilterExpression trap), and not as an empty result, which reads
+          # as "nothing logged yet".
+          out=$(query '"ContainerAppConsoleLogs | extend n = 1"')
+          echo "$out"
+          case "$out" in
+            *extend*) ;;
             *) echo "::error::an unsupported KQL operator was not refused by name"; exit 1 ;;
+          esac
+
+          # A workspace's rows used NOT to survive a restart, and losing
+          # them did not fail loudly: a query simply returned nothing,
+          # which is indistinguishable from a workspace nobody has used.
+          before=$(query '"ContainerAppConsoleLogs | count"')
+          echo "before the restart: $before"
+
+          echo "::group::restarting Nimbus"
+          kill "$(cat /tmp/nimbus.pid)"
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null || break
+            sleep 1
+          done
+          cd "$GITHUB_WORKSPACE"
+          ./bin/nimbus start --clouds azure --persist &
+          echo $! > /tmp/nimbus.pid
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          cd "$GITHUB_WORKSPACE/examples/terraform/azure-containerapp"
+          echo "::endgroup::"
+
+          after=$(query '"ContainerAppConsoleLogs | count"')
+          echo "after the restart: $after"
+          case "$after" in
+            *'"rows":[[0]]'*)
+              echo "::error::the workspace lost its rows across the restart"
+              exit 1 ;;
+            *'"rows"'*) ;;
+            *) echo "::error::the query did not answer after the restart"; exit 1 ;;
           esac
 
           set +e

@@ -408,13 +408,25 @@ the work and Azure simply was not using it, and
   up to three seconds late, and only a CONTAINER APP's output is ingested:
   nothing else writes to a workspace, so diagnostic settings, the AKS
   monitoring add-on and the agent ingestion API still record nothing.
-- **The KQL subset is `where`, `project`, `take`, `limit` and `count`**,
-  one comparison per `where` with no `and`/`or`, and `contains` is
-  case-insensitive as KQL's is. Everything else is refused and named —
-  including `summarize`, `extend`, `order by`, time ranges and every
-  function — rather than being guessed at. There is no `timespan`
-  handling: a query's time range is ignored, which can only ever return
-  too much.
+- **The KQL subset is `where`, `project`, `summarize count()`, `order by`,
+  `sort by`, `top`, `distinct`, `take`, `limit` and `count`.** `where`
+  takes several comparisons joined by `and` and `or`, with `and` binding
+  tighter, and understands `ago(10m)`, `ago(7d)` and
+  `datetime(...)` — so a time range can be written, where before it could
+  not be expressed at all. `contains` is case-insensitive, as KQL's is.
+
+  Everything else is refused and named rather than guessed at:
+  parentheses in a `where`, any aggregation other than `count()`, grouping
+  or sorting on more than one column, `extend`, `join`, `mv-expand`,
+  `parse`, `render` and every other function. An aggregation is also
+  TERMINAL here — after `summarize`, `distinct` or `count` only `take` and
+  `limit` still apply, because carrying groups and numbers on through the
+  rest of a pipeline would mean inventing semantics.
+- **A workspace's rows survive a restart** with `--persist`, unlike
+  CloudWatch Logs' and Pub/Sub's. They used not to, and the failure was
+  quiet rather than loud: a query against a reloaded workspace simply
+  returned nothing, which is indistinguishable from a workspace nobody has
+  used. They are still bounded at 10,000 lines per workspace.
 - **Azure still has no Functions.** Container Apps was the right first
   choice because it takes any image, which is what the `run` engine does;
   Functions would need a host per language, and Lambda only works here

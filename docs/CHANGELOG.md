@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Log Analytics: rows that survive a restart, and more KQL
+
+A workspace's rows were memory-only, and losing them did not fail loudly —
+a query against a reloaded workspace simply returned nothing, which is
+indistinguishable from a workspace nobody has used. They are persisted with
+`--persist` now, per workspace, written atomically because the ingestion
+goroutine rewrites them every three seconds.
+
+The query subset gained `summarize count()` with an optional `by` column,
+`order by`, `sort by`, `top`, `distinct`, `and`/`or` in a `where`, and
+`ago()`. That last one is the important one: without it a query's time
+range could not be *written*, not merely not honoured, and it appears in
+virtually every real KQL query.
+
+The discipline is unchanged — what is not implemented is refused and named,
+because a no-op returns every row and an empty result reads as "nothing
+logged yet". So parentheses, any aggregation other than `count()`, grouping
+or sorting on several columns, and `extend`/`join`/`mv-expand`/`parse` all
+still refuse. An aggregation is terminal: after it, only `take` and `limit`
+apply, since carrying groups through a pipeline would mean inventing
+semantics.
+
+Two details worth knowing: `order by` defaults to **descending**, as KQL
+does and no SQL dialect does; and `and` binds tighter than `or`, found by
+word boundary so that `contains "android"` is not split in half.
+
 ### Condition keys and operators: four to ten, eight to twenty-six
 
 The rule for what belongs in the list is "can the server answer it from the

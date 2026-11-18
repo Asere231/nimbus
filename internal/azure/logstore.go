@@ -3,12 +3,17 @@ package azure
 import (
 	"context"
 	"encoding/json"
+	"log"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Asere231/nimbus/internal/core"
+	"github.com/Asere231/nimbus/internal/datadir"
+	"github.com/Asere231/nimbus/internal/fsname"
 )
 
 // Where a workspace's logs actually live.
@@ -19,15 +24,25 @@ import (
 // Lambda's output landed in CloudWatch and a Cloud Run service's in its
 // own container log.
 //
-// Same shape as `internal/aws/logs.go`, and the same honest limits:
-// bounded, in memory, and NOT persisted even with --persist. A workspace
-// survives a restart; its rows do not. CloudWatch Logs' and Pub/Sub's
-// entries in docs/ROADMAP.md already say this about themselves, and this
-// one says it too rather than leaving someone to discover it.
+// Same shape as `internal/aws/logs.go`, and bounded the same way -- but
+// unlike it, these rows DO survive a restart when --persist is on.
+//
+// This file used to say they did not, and being honest about the gap was
+// better than hiding it. The gap was still worth closing: an app's console
+// is the only record of what it did, and losing it did not even fail
+// loudly. A query against a reloaded workspace simply returned nothing,
+// which is precisely the ambiguity logquery.go exists to avoid -- an empty
+// result is indistinguishable from "nothing has been logged yet", the
+// ordinary state of a workspace somebody is looking at for the first time.
+// So the rows vanished and the workspace just looked unused.
 //
 // Keyed by the workspace's `customerId` rather than its ARM id, because
 // that is what a client queries with: the data plane knows nothing about
 // resource ids, exactly as the storage and Key Vault data planes do not.
+// The customerId is also the FILENAME, through internal/fsname, for the
+// reason every other store goes through it -- a GUID happens to be safe on
+// every filesystem, and relying on that is how the next key that is not
+// gets written straight to disk.
 
 // maxWorkspaceLines bounds what one workspace keeps. Generous enough for
 // anything an example produces, small enough that a chatty container
@@ -53,21 +68,47 @@ type logLine struct {
 type logStore struct {
 	mu    sync.Mutex
 	lines map[string][]logLine
+	dir   string // empty = memory only, which is the default
 }
 
 func newLogStore() *logStore { return &logStore{lines: map[string][]logLine{}} }
+
+// Persist turns on the on-disk copy and reads back whatever is there.
+//
+// Called once at startup, like the storage and Key Vault stores' own
+// Persist, and the same shape: set the directory, make it, load.
+func (l *logStore) Persist(dir string) error {
+	l.mu.Lock()
+	l.dir = dir
+	l.mu.Unlock()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	l.load()
+	return nil
+}
 
 func (l *logStore) append(customerID string, lines ...logLine) {
 	if customerID == "" || len(lines) == 0 {
 		return
 	}
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	kept := append(l.lines[customerID], lines...)
 	if len(kept) > maxWorkspaceLines {
 		kept = kept[len(kept)-maxWorkspaceLines:]
 	}
 	l.lines[customerID] = kept
+	// Snapshot and directory are taken under the lock; the write happens
+	// outside it, so a slow disk cannot stall the ingestion goroutine
+	// that holds this lock every three seconds.
+	snapshot := make([]logLine, len(kept))
+	copy(snapshot, kept)
+	dir := l.dir
+	l.mu.Unlock()
+
+	if dir != "" {
+		writeWorkspaceLines(dir, customerID, snapshot)
+	}
 }
 
 // all returns a workspace's rows, newest last, as a copy.
@@ -93,10 +134,119 @@ func (l *logStore) count(customerID string) int {
 }
 
 // forget drops a workspace's rows, when the workspace is deleted.
+//
+// Off disk too: a customerId that comes round again -- a destroy followed
+// by an apply -- would otherwise surface the previous workspace's lines,
+// which is worse than losing them.
 func (l *logStore) forget(customerID string) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	delete(l.lines, customerID)
+	dir := l.dir
+	l.mu.Unlock()
+
+	if dir != "" {
+		if name, ok := workspaceFileName(customerID); ok {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
+}
+
+// --- on disk ---------------------------------------------------------------
+
+// workspaceFileSuffix is what a workspace's rows are stored under.
+//
+// It ends in "%" so it can never collide with an encoded customerId:
+// fsname.Encode escapes a percent sign, so no name it produces ends in a
+// bare one. The S3 object store learned this the expensive way -- its
+// sidecar was ".json" until every object key ending in .json was dropped
+// on load.
+const workspaceFileSuffix = ".rows%"
+
+func workspaceFileName(customerID string) (string, bool) {
+	if customerID == "" {
+		return "", false
+	}
+	return fsname.Encode(strings.ToLower(customerID)) + workspaceFileSuffix, true
+}
+
+func writeWorkspaceLines(dir, customerID string, lines []logLine) {
+	name, ok := workspaceFileName(customerID)
+	if !ok {
+		return
+	}
+	data, err := json.Marshal(lines)
+	if err != nil {
+		return
+	}
+	// Written through a temporary file and renamed, because this is
+	// rewritten every three seconds by the ingestion goroutine: a process
+	// killed mid-write would otherwise leave a truncated file where a
+	// whole one was, and the next start would read nothing.
+	path := filepath.Join(dir, name)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		log.Printf("nimbus: could not persist workspace %s logs: %v", customerID, err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		log.Printf("nimbus: could not persist workspace %s logs: %v", customerID, err)
+	}
+}
+
+// load reads every workspace's rows back.
+//
+// A file this did not write is ignored and counted, as every other store's
+// data directory is -- ignoring it is right, and ignoring it in SILENCE is
+// what made an orphan sit unmentioned.
+func (l *logStore) load() {
+	l.mu.Lock()
+	dir := l.dir
+	l.mu.Unlock()
+	if dir == "" {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	ignored := 0
+	loaded := map[string][]logLine{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), workspaceFileSuffix) {
+			// A .tmp left by a process killed mid-write is expected
+			// rather than stray, so it is removed quietly instead of
+			// being reported as something a person should look at.
+			if strings.HasSuffix(e.Name(), ".tmp") {
+				_ = os.Remove(filepath.Join(dir, e.Name()))
+				continue
+			}
+			ignored++
+			continue
+		}
+		customerID, ok := fsname.Decode(strings.TrimSuffix(e.Name(), workspaceFileSuffix))
+		if !ok {
+			ignored++
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			ignored++
+			continue
+		}
+		var lines []logLine
+		if json.Unmarshal(raw, &lines) != nil {
+			ignored++
+			continue
+		}
+		loaded[customerID] = lines
+	}
+	datadir.ReportIgnored("log analytics", dir, ignored)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for id, lines := range loaded {
+		l.lines[id] = lines
+	}
 }
 
 // --- ingestion -------------------------------------------------------------

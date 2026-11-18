@@ -175,6 +175,13 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		if err := s.keyvault.Store().Persist(filepath.Join(cfg.DataDir, "keyvault")); err != nil {
 			log.Printf("nimbus: key vault persistence disabled: %v", err)
 		}
+		// A workspace's rows, which used not to survive a restart at all.
+		// An app's console is the only record of what it did, and losing
+		// it did not fail loudly: a query simply returned nothing, which
+		// is indistinguishable from a workspace nobody has used.
+		if err := s.logs.Persist(filepath.Join(cfg.DataDir, "loganalytics")); err != nil {
+			log.Printf("nimbus: log analytics persistence disabled: %v", err)
+		}
 	}
 	s.storage.OnChange = s.mirrorDataPlaneContainer
 	registerNetworkHooks(s)

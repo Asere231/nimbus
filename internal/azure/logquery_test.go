@@ -94,10 +94,15 @@ func TestTheKQLSubsetFiltersProjectsAndLimits(t *testing.T) {
 func TestAnUnsupportedKQLConstructIsRefusedAndNamed(t *testing.T) {
 	rows := []logLine{{Time: "2026-11-11T10:00:00Z", Table: "ContainerAppConsoleLogs", Message: "x"}}
 
+	// `summarize count() by` and `order by` used to be in this list and are
+	// implemented now, so they were replaced rather than deleted: an
+	// aggregation Nimbus will not approximate, and a sort on two columns it
+	// will not half-apply. Leaving the old cases would have meant a test
+	// asserting that working features are refused.
 	cases := []struct{ query, name string }{
-		{"ContainerAppConsoleLogs | summarize count() by Log_s", "summarize"},
+		{"ContainerAppConsoleLogs | summarize avg(Log_s)", "avg"},
 		{"ContainerAppConsoleLogs | extend n = 1", "extend"},
-		{"ContainerAppConsoleLogs | order by TimeGenerated desc", "order"},
+		{"ContainerAppConsoleLogs | order by TimeGenerated, Log_s desc", "order"},
 		{"ContainerAppConsoleLogs | join kind=inner Other on Id", "join"},
 		{"ContainerAppConsoleLogs | mv-expand Log_s", "mv-expand"},
 		{`ContainerAppConsoleLogs | where Log_s matches regex "a.*"`, "matches"},

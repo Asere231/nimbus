@@ -34,5 +34,10 @@ func DNSNames() []string {
 		"*." + KeyVaultSuffix,
 		ContainerAppsSuffix,
 		"*." + ContainerAppsSuffix,
+		FunctionsSuffix,
+		"*." + FunctionsSuffix,
+		// The deployment (Kudu) site is TWO labels deep, so it needs its
+		// own wildcard: the one above does not cover it.
+		"*." + ScmSuffix,
 	}
 }

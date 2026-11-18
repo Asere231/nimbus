@@ -101,6 +101,14 @@ func (s *Server) handleARM(w http.ResponseWriter, r *http.Request) string {
 	if isDeploymentOperationsPath(t) && r.Method == http.MethodGet {
 		return s.handleDeploymentOperations(w, t)
 	}
+	// A site's config sub-resources are VIEWS on the site, not children
+	// anybody creates. azurerm sends the app settings INSIDE the site body
+	// and then reads them back from a path of their own, which 404s if it
+	// is looked up in the store -- and the 404 fails the apply. Same
+	// shape as a role definition: not a stored resource.
+	if r.Method == http.MethodGet && (eq(t.Type, typeSiteConfig) || eq(t.Type, typeSitePublish)) {
+		return s.handleSiteConfig(w, t)
+	}
 
 	switch t.Kind {
 	case "subscriptions":
@@ -460,6 +468,15 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, t target) 
 	// yet -- that is the point of them -- so they come before the existence
 	// check every other action needs.
 	if s.deploymentAction(w, t, body) {
+		return ""
+	}
+	// A site's config sub-resources are VIEWS on the site, not stored
+	// resources, so the existence check below would 404 them -- and
+	// azurerm reads the app settings with a POST to /list, because they
+	// are secrets like a storage account's keys. Measured: the 404 fails
+	// the apply with "reading App Settings ... was not found".
+	if out, ok := s.siteConfigAction(t); ok {
+		writeJSON(w, 200, out)
 		return ""
 	}
 	if t.ID != "" && !s.store.Exists(t.ID) {

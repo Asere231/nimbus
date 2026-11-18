@@ -40,7 +40,11 @@ func putResource(t *testing.T, s *Server, id, body string) map[string]any {
 	req := httptest.NewRequest(http.MethodPut, id+"?api-version=2024-01-01", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
-	if rec.Code != 200 && rec.Code != 201 {
+	// 202 is a success too. A few types' creates are declared
+	// long-running in the SDK and their generated clients refuse anything
+	// else -- storage accounts, service plans, function apps -- so this
+	// helper must not encode a narrower rule than the server's.
+	if rec.Code != 200 && rec.Code != 201 && rec.Code != 202 {
 		t.Fatalf("PUT %s: %d %s", id, rec.Code, rec.Body.String())
 	}
 	var out map[string]any

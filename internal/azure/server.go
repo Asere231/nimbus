@@ -97,6 +97,13 @@ type Server struct {
 	// apps runs the Container Apps, on the same engine Cloud Run uses --
 	// see internal/engines/run, which knows about neither cloud.
 	apps *run.Engine
+	// funcapps is a SECOND run engine, for function apps.
+	//
+	// Separate from s.apps rather than shared, because the Log Analytics
+	// tailer walks s.apps.All() looking for each app's environment and
+	// mixing function apps into that would be muddy. Its own name prefix
+	// and port base keep the two sets of containers apart.
+	funcapps *run.Engine
 	// logs is what a Log Analytics workspace actually holds. Bounded and
 	// in memory, like CloudWatch's -- see logstore.go.
 	logs *logStore
@@ -160,6 +167,11 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		PortBase:     DefaultContainerAppPortBase,
 		StartTimeout: cfg.ClusterTimeout,
 	}, s.docker)
+	s.funcapps = run.New(run.Config{
+		NamePrefix:   "nimbus-fnapp",
+		PortBase:     DefaultFunctionAppPortBase,
+		StartTimeout: cfg.ClusterTimeout,
+	}, s.docker)
 	s.logs = newLogStore()
 	// The challenge a Key Vault client gets points at our own login endpoint,
 	// and asks for a token for Azure's Key Vault audience -- which our token
@@ -196,6 +208,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	registerDeploymentHooks(s)
 	registerACRHooks(s)
 	registerVMHooks(s)
+	registerFunctionAppHooks(s)
 
 	// The default subscription exists from the start, rather than appearing
 	// the first time something asks for it. `az login` lists subscriptions
@@ -339,6 +352,16 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) (note string) {
 	// label, because that is all a wildcard certificate covers.
 	if name, ok := parseAppHost(r.Host, s.containerAppsSuffix()); ok {
 		return s.serveContainerApp(w, r, name)
+	}
+	// And a function app: {app}.azurewebsites.nimbus.localhost. Same one
+	// label, same reason.
+	// The deployment site FIRST: its host ends with the functions suffix
+	// too, so checking that one first would shadow it.
+	if name, ok := parseAppHost(r.Host, s.scmSuffix()); ok {
+		return s.serveScm(w, r, name)
+	}
+	if name, ok := parseAppHost(r.Host, s.functionsSuffix()); ok {
+		return s.serveFunctionApp(w, r, name)
 	}
 
 	// Authorization, in one place in front of ARM.

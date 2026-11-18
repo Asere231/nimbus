@@ -122,3 +122,51 @@ func TestAnUnnamedSidecarGetsAPositionalName(t *testing.T) {
 			got[0].Name)
 	}
 }
+
+// minReplicas is honoured: the count in the template is the number of
+// container groups that run.
+//
+// It used to round-trip as state with nothing acting on it, so a
+// configuration asking for three replicas applied cleanly and ran one --
+// the same silent shape sidecars had.
+func TestMinReplicasIsTheReplicaCount(t *testing.T) {
+	cases := []struct {
+		scale any
+		want  int
+	}{
+		{nil, 1},
+		{map[string]any{}, 1},
+		{map[string]any{"minReplicas": float64(0)}, 1},
+		{map[string]any{"minReplicas": float64(3)}, 3},
+		{map[string]any{"minReplicas": float64(3), "maxReplicas": float64(10)}, 3},
+		// An int rather than a float64, which is what a value set in Go
+		// rather than decoded from JSON looks like -- the trap GCP's node
+		// count already fell into.
+		{map[string]any{"minReplicas": 2}, 2},
+	}
+	for _, c := range cases {
+		props := map[string]any{"template": map[string]any{
+			"containers": []any{map[string]any{"name": "web", "image": "nginx:alpine"}},
+		}}
+		if c.scale != nil {
+			props["template"].(map[string]any)["scale"] = c.scale
+		}
+		if got := containerAppReplicas(props); got != c.want {
+			t.Errorf("scale %v gave %d replicas, want %d", c.scale, got, c.want)
+		}
+	}
+}
+
+// maxReplicas alone changes nothing, and that is deliberate: scaling OUT
+// means reacting to load and nothing here measures load. Honouring a
+// maximum as though it were a minimum would run containers nobody asked
+// for.
+func TestMaxReplicasAloneRunsOne(t *testing.T) {
+	props := map[string]any{"template": map[string]any{
+		"containers": []any{map[string]any{"name": "web", "image": "nginx:alpine"}},
+		"scale":      map[string]any{"maxReplicas": float64(10)},
+	}}
+	if got := containerAppReplicas(props); got != 1 {
+		t.Errorf("maxReplicas alone gave %d replicas, want 1", got)
+	}
+}

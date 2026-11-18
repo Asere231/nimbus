@@ -211,6 +211,7 @@ func provisionContainerApp(s *Server, t target, body map[string]any) error {
 		Env:           containerAppEnv(props),
 		ContainerPort: containerAppPort(props),
 		Sidecars:      containerAppSidecars(props),
+		Replicas:      containerAppReplicas(props),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ClusterTimeout)
@@ -388,4 +389,38 @@ func envFrom(c map[string]any) map[string]string {
 		}
 	}
 	return out
+}
+
+// containerAppReplicas is how many copies of the group to run.
+//
+// Azure's `template.scale` has minReplicas and maxReplicas. The MINIMUM is
+// what Nimbus can honour, because it is a promise about what is running
+// without reference to traffic; maxReplicas is a ceiling for autoscaling,
+// and nothing here measures load to scale against. Treating a maximum as
+// a count would start containers nobody asked for.
+//
+// A number read back from JSON is a float64 and the same number set in Go
+// is an int, so both are accepted -- the trap GCP's node count fell into,
+// where every test passed and gcloud reported one node for a cluster of
+// three.
+func containerAppReplicas(props map[string]any) int {
+	template, _ := props["template"].(map[string]any)
+	scale, _ := template["scale"].(map[string]any)
+	if scale == nil {
+		return 1
+	}
+	switch v := scale["minReplicas"].(type) {
+	case float64:
+		if v >= 1 {
+			return int(v)
+		}
+	case int:
+		if v >= 1 {
+			return v
+		}
+	}
+	// minReplicas 0 is scale-to-zero, which Nimbus cannot do: there is no
+	// request to wake a container up, because the proxy needs something to
+	// forward to. One running copy is the nearest honest answer.
+	return 1
 }

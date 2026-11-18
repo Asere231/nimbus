@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Container Apps: sidecars and replicas that actually run
+
+A template's second container used to be stored and not started, and
+`minReplicas` round-tripped as state with nothing acting on it — so an app
+with a cache beside it and two replicas asked for applied cleanly, reported
+Succeeded, and ran a single container. Worse than an error, because nothing
+said so.
+
+Now every container in the template runs, as a group sharing one network
+namespace per replica, and `minReplicas` is the number of groups. Requests
+are spread across them round robin, and each replica's console reaches the
+Log Analytics workspace tagged with its container name.
+
+Measured on a real two-replica app with a redis sidecar: four containers,
+the two sidecars in two different namespaces, `nc -z 127.0.0.1 6379`
+answering from inside the app container, seven requests split 3/4 across
+the replicas, 34 and 32 log lines from each in the workspace, a clean plan,
+and a destroy that took all four.
+
+Cloud Run shares the engine, so its sidecars work too. It has no replica
+count — nothing here needs one, and the engine side is done if it ever
+does.
+
+`maxReplicas` stays inert and `minReplicas: 0` runs one copy: scaling out
+means reacting to load and nothing in a local emulator measures load, and
+scale-to-zero needs a request to wake a container when the proxy needs
+something to forward to. A count above 8 is refused naming the cap rather
+than silently clamped. Revisions are still declined, as on Cloud Run.
+
 ### Log Analytics: rows that survive a restart, and more KQL
 
 A workspace's rows were memory-only, and losing them did not fail loudly —

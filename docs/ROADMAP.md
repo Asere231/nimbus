@@ -388,11 +388,20 @@ the work and Azure simply was not using it, and
   reconcile a legacy name with its encoded one, so a bucket whose directory
   predates `fsname` can end up with a stale copy beside a current one and the
   one that wins depends on walk order.
-- **A container app runs EVERY container in its template**, as a group
-  sharing one network namespace -- so a sidecar reaches the main container
-  on localhost exactly as it does in Azure. Only the first container's
-  port is published and only it is reached by the FQDN, which is also what
-  Azure does.
+- **A container app runs EVERY container in its template, and `minReplicas`
+  copies of the group.** They share one network namespace per replica, so a
+  sidecar reaches the main container on localhost exactly as it does in
+  Azure; only the first container's port is published and only it is
+  reached by the FQDN, which is also what Azure does. Requests are spread
+  across the replicas round robin.
+
+  `maxReplicas` is recorded and inert, and `minReplicas: 0` runs one copy.
+  Both are honest rather than lazy: scaling OUT means reacting to load and
+  nothing in a local emulator measures load, and scale-to-zero needs a
+  request to wake a container up when the proxy needs something to forward
+  to. The count is capped at `run.MaxReplicas` (8) and a larger one is
+  REFUSED naming the cap, rather than silently clamped -- a configuration
+  asking for 50 and getting 8 is a divergence with nothing to read.
 
   There are still no revisions: one app, one template,
   `latestRevisionName` derived from the id and stable. Running every
@@ -563,8 +572,12 @@ the work and Azure simply was not using it, and
   nodes are agent containers, not VM instances, so nothing answers
   `instances.list`; the instance group manager behind a pool is derived
   on demand purely so the provider can compute a node count.
-- **Cloud Run runs the FIRST container of a service and the latest
-  revision only.** Sidecars are stored and not started, and `traffic`
+- **Cloud Run runs every container in a service, and the latest revision
+  only.** Sidecars share a network namespace as they do on Azure, since
+  both clouds sit on the same `run` engine. What it does NOT have is
+  Azure's replica count: `scaling.minInstanceCount` round-trips and one
+  copy runs, because no Cloud Run example here needs more and the engine
+  side is already done if one ever does. `traffic`
   round-trips without splitting anything: running every revision at once
   is what that would cost, and nothing a local apply does needs it. There
   is no scale-to-zero, no concurrency limit, no CPU or memory limit, and

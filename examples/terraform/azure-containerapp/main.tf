@@ -118,6 +118,36 @@ resource "azurerm_container_app" "web" {
         value = "hello from nimbus"
       }
     }
+
+    # A SIDECAR. Every container in the template runs, as a group sharing
+    # one network namespace -- so the main container reaches this one on
+    # localhost:6379, exactly as it does in real Container Apps. Verify it
+    # from inside the app:
+    #
+    #   docker exec $(docker ps -qf label=nimbus.role=service | head -1) \
+    #     sh -c 'nc -z 127.0.0.1 6379 && echo reachable'
+    #
+    # It publishes no port of its own: Docker refuses that for a container
+    # that does not own its namespace, and Azure does not expose a sidecar
+    # either.
+    container {
+      name   = "cache"
+      image  = "redis:alpine"
+      cpu    = 0.25
+      memory = "0.5Gi"
+    }
+
+    # min_replicas is REAL here: two copies of the whole group run -- two
+    # app containers and two caches -- and requests are spread across them
+    # round robin. Count them with
+    #
+    #   docker ps --filter label=nimbus.role=service
+    #
+    # max_replicas is recorded and inert, which is honest rather than
+    # lazy: scaling OUT means reacting to load and nothing in a local
+    # emulator measures load.
+    min_replicas = 2
+    max_replicas = 10
   }
 
   # targetPort is what the image listens on INSIDE the container. The

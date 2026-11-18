@@ -248,6 +248,7 @@ func (s *Server) provisionService(location, name, opName string) {
 		Args:          containerCommand(body, "args"),
 		Env:           containerEnv(body),
 		ContainerPort: containerPort(body),
+		Sidecars:      serviceSidecars(body),
 	}
 	// Cloud Run tells a container about itself through these, and a
 	// handler written for Cloud Run may read them.
@@ -508,4 +509,60 @@ func containerPort(body map[string]any) int {
 // numberOf writes an int the way these APIs do: as a decimal string.
 func numberOf(n int) string {
 	return strings.TrimSpace(sprintf("%d", n))
+}
+
+// serviceSidecars is every container in the template after the first.
+//
+// Cloud Run defines a service as a GROUP of containers sharing one network
+// namespace, exactly as Azure Container Apps does, so they reach each
+// other on localhost. Only the first one's port is published and only it
+// is reached by the service URL.
+//
+// The engine gained this for Container Apps and Cloud Run shares the
+// engine, so the wiring is the only cloud-specific part -- which is the
+// arrangement internal/engines is for: a plugin supplies the shape, the
+// engine knows no cloud.
+func serviceSidecars(body map[string]any) []run.Sidecar {
+	tmpl, _ := body["template"].(map[string]any)
+	if tmpl == nil {
+		return nil
+	}
+	containers, _ := tmpl["containers"].([]any)
+	if len(containers) < 2 {
+		return nil
+	}
+	var out []run.Sidecar
+	for i, raw := range containers[1:] {
+		c, _ := raw.(map[string]any)
+		image := str(c["image"])
+		if image == "" {
+			continue
+		}
+		name := str(c["name"])
+		if name == "" {
+			// The Docker container name is derived from it, so two
+			// unnamed sidecars would collide. Positional, which is stable
+			// across reads of the same template.
+			name = "sidecar-" + numberOf(i+1)
+		}
+		env := map[string]string{}
+		items, _ := c["env"].([]any)
+		for _, item := range items {
+			entry, _ := item.(map[string]any)
+			if entry == nil {
+				continue
+			}
+			if n := str(entry["name"]); n != "" {
+				env[n] = str(entry["value"])
+			}
+		}
+		out = append(out, run.Sidecar{
+			Name:    name,
+			Image:   image,
+			Command: stringList(c["command"]),
+			Args:    stringList(c["args"]),
+			Env:     env,
+		})
+	}
+	return out
 }

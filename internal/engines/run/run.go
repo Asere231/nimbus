@@ -31,10 +31,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Asere231/nimbus/internal/engines/docker"
@@ -96,6 +96,18 @@ type Service struct {
 	// rest are reachable from inside the group and from nowhere else,
 	// which is exactly what the two clouds do.
 	Sidecars []Sidecar
+	// Replicas is how many copies of the whole group to run. 0 and 1 both
+	// mean one, so a caller that does not know about replicas is
+	// unchanged.
+	//
+	// This is a MINIMUM made real, not autoscaling: nothing here measures
+	// load, so there is nothing to scale out against. A cloud's
+	// maxReplicas stays inert and says so.
+	Replicas int
+	// Extra holds replicas 2..N. The first replica is this Service's own
+	// Container and Port, so everything that only ever knew about one
+	// container keeps working and a reattach still finds the same name.
+	Extra []Replica
 
 	Container string
 	// Port is the host port it was published on. It changes every time the
@@ -103,6 +115,22 @@ type Service struct {
 	// in a URL a client stores; see the proxy in the GCP plugin.
 	Port    int
 	Started time.Time
+}
+
+// MaxReplicas is the most copies of one service Nimbus will run.
+//
+// Real Azure allows minReplicas up to 1000. Starting a thousand containers
+// on a laptop is not a scaling test, it is a way to lose the machine, so a
+// larger count is REFUSED and the refusal says what the cap is -- rather
+// than being silently clamped, which would leave a configuration asking
+// for 50 and getting 8 with nothing to read.
+const MaxReplicas = 8
+
+// Replica is one copy of a service's container group beyond the first.
+type Replica struct {
+	Container string
+	Port      int
+	Sidecars  []Sidecar
 }
 
 // Sidecar is another container in the same service.
@@ -193,12 +221,26 @@ func (e *Engine) Start(ctx context.Context, svc *Service) error {
 		svc.ContainerPort = DefaultContainerPort
 	}
 
+	// Refused rather than clamped: a configuration asking for 50 replicas
+	// and silently getting 8 is a divergence with nothing to read.
+	replicas := svc.Replicas
+	if replicas < 1 {
+		replicas = 1
+	}
+	if replicas > MaxReplicas {
+		return fmt.Errorf(
+			"%s asks for %d replicas, and Nimbus runs at most MaxReplicas (%d): each one is a "+
+				"real container, and a few hundred would take the machine down rather than "+
+				"demonstrate scaling. Lower minReplicas to %d or fewer",
+			svc.Name, svc.Replicas, MaxReplicas, MaxReplicas)
+	}
+
 	port, err := docker.FreePort(e.cfg.PortBase)
 	if err != nil {
 		return err
 	}
 	svc.Port = port
-	svc.Container = docker.Name(e.cfg.NamePrefix, svc.ResourceID, svc.Name)
+	svc.Container = replicaName(e.cfg.NamePrefix, svc, 0)
 
 	// A container left from a previous deployment is removed rather than
 	// reused: a new revision means a new image or a new environment, and
@@ -236,8 +278,27 @@ func (e *Engine) Start(ctx context.Context, svc *Service) error {
 	// makes them reachable on localhost from it -- the thing a sidecar is
 	// FOR. They are started before the readiness probe, because the main
 	// container may well be waiting for one of them.
-	if err := e.startSidecars(ctx, svc); err != nil {
+	svc.Sidecars, err = e.startSidecars(ctx, svc, svc.Container, svc.Sidecars, 0)
+	if err != nil {
 		return err
+	}
+
+	// Replicas 2..N: the same group again, each in its own namespace with
+	// its own published port and its own sidecars.
+	svc.Extra = nil
+	// Each replica's port search starts ABOVE the last one allocated.
+	// FreePort asks the OS whether a port is free, and the container that
+	// just took one has not necessarily bound it yet -- against the Docker
+	// Fake it never will -- so searching from the same base would hand
+	// every replica the same port and the second would fail to start.
+	nextBase := svc.Port + 1
+	for i := 1; i < replicas; i++ {
+		rep, err := e.startReplica(ctx, svc, i, env, nextBase)
+		if err != nil {
+			return err
+		}
+		svc.Extra = append(svc.Extra, rep)
+		nextBase = rep.Port + 1
 	}
 	svc.Started = time.Now()
 
@@ -323,11 +384,29 @@ func (e *Engine) proxyFor(svc *Service) (*httputil.ReverseProxy, error) {
 	if svc.Port == 0 {
 		return nil, fmt.Errorf("service %s is not running", svc.Name)
 	}
-	target, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", svc.Port))
-	if err != nil {
-		return nil, err
+
+	// Every replica's port, in a stable order. A three-replica service
+	// that sent every request to the first would be a worse lie than
+	// running one container: the configuration would look honoured while
+	// the behaviour was not.
+	ports := []int{svc.Port}
+	for _, rep := range svc.Extra {
+		if rep.Port != 0 {
+			ports = append(ports, rep.Port)
+		}
 	}
-	p := httputil.NewSingleHostReverseProxy(target)
+
+	// Round robin, which is what a load balancer in front of identical
+	// replicas does and all a local emulator can honestly offer -- there
+	// is no health state to weight by and no sessions to be sticky about.
+	var next atomic.Uint64
+	p := &httputil.ReverseProxy{
+		Director: func(r *http.Request) {
+			port := ports[int(next.Add(1)-1)%len(ports)]
+			r.URL.Scheme = "http"
+			r.URL.Host = fmt.Sprintf("127.0.0.1:%d", port)
+		},
+	}
 	// A dead container must not produce a blank 502 with nothing to read:
 	// say which service and what went wrong, the way every other error
 	// here does.
@@ -340,9 +419,55 @@ func (e *Engine) proxyFor(svc *Service) (*httputil.ReverseProxy, error) {
 	return p, nil
 }
 
-// Logs returns what a service has printed since a moment.
+// Logs returns what a service has printed since a moment -- from EVERY
+// replica, not only the first.
+//
+// A workspace holding one replica's console out of three is the kind of
+// half-working feature this project would rather not have: nothing says
+// the other two are missing, and their output is usually where the
+// interesting thing is. Each replica's lines are prefixed with its
+// container name when there is more than one, because otherwise two
+// interleaved consoles are unreadable.
+//
+// A replica whose container has gone is SKIPPED rather than failing the
+// whole read: one container removed behind Nimbus's back must not hide
+// the other two's output.
 func (e *Engine) Logs(ctx context.Context, svc *Service, since time.Time) ([]byte, error) {
-	return e.docker.Logs(ctx, svc.Container, since)
+	main, err := e.docker.Logs(ctx, svc.Container, since)
+	if len(svc.Extra) == 0 {
+		return main, err
+	}
+
+	var out []byte
+	out = append(out, prefixLines(svc.Container, main)...)
+	for _, rep := range svc.Extra {
+		raw, err := e.docker.Logs(ctx, rep.Container, since)
+		if err != nil {
+			continue
+		}
+		out = append(out, prefixLines(rep.Container, raw)...)
+	}
+	// The error from the first replica is only reported when NOTHING was
+	// read, so one dead container does not lose two live ones' lines.
+	if len(out) == 0 {
+		return nil, err
+	}
+	return out, nil
+}
+
+// prefixLines tags each line with the container it came from.
+func prefixLines(container string, raw []byte) []byte {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out []byte
+	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		out = append(out, []byte(container+" | "+line+"\n")...)
+	}
+	return out
 }
 
 // Stop removes a service's container.
@@ -389,26 +514,51 @@ func (svc *Service) images() []string {
 
 // sidecarName is what a sidecar's container is called.
 //
-// Derived from the service's resource id and the sidecar's own name, so
-// two apps each with a "cache" sidecar do not collide and a restart can
-// find the same container again -- the same reason docker.Name exists for
-// the main one.
-func sidecarName(prefix string, svc *Service, sidecar string) string {
-	return docker.Name(prefix, svc.ResourceID+"/"+sidecar, sidecar)
+// Derived from the service's resource id, the replica index and the
+// sidecar's own name, so two apps each with a "cache" sidecar do not
+// collide, two REPLICAS of one app do not either, and a restart can find
+// the same container again -- the same reason docker.Name exists for the
+// main one.
+func sidecarName(prefix string, svc *Service, replica int, sidecar string) string {
+	key := svc.ResourceID + "/" + sidecar
+	if replica > 0 {
+		key = fmt.Sprintf("%s/%d/%s", svc.ResourceID, replica, sidecar)
+	}
+	return docker.Name(prefix, key, sidecar)
 }
 
-// startSidecars runs the rest of the template's containers inside the main
-// container's network namespace.
+// replicaName is what replica 2..N's main container is called.
+//
+// Replica 0 keeps the plain name docker.Name gives it, so a service that
+// never heard of replicas is byte-for-byte unchanged and a reattach written
+// before this existed still finds it.
+func replicaName(prefix string, svc *Service, replica int) string {
+	if replica == 0 {
+		return docker.Name(prefix, svc.ResourceID, svc.Name)
+	}
+	return docker.Name(prefix, fmt.Sprintf("%s/%d", svc.ResourceID, replica), svc.Name)
+}
+
+// startSidecars runs the rest of a group's containers inside that group's
+// network namespace.
 //
 // No ports are published for them: Docker refuses that for a container
 // that does not own its namespace, and it would be wrong anyway -- a
 // sidecar in Azure is reachable from its app and from nowhere else. PORT
 // is still set, because an image written for Container Apps reads it
 // whichever container it is.
-func (e *Engine) startSidecars(ctx context.Context, svc *Service) error {
-	for i := range svc.Sidecars {
-		s := &svc.Sidecars[i]
-		s.Container = sidecarName(e.cfg.NamePrefix, svc, s.Name)
+//
+// The namespace is the REPLICA's, not always the first one's: a sidecar
+// exists to be reachable on localhost from the container beside it, and
+// localhost is per namespace.
+func (e *Engine) startSidecars(ctx context.Context, svc *Service, namespaceOwner string,
+	sidecars []Sidecar, replica int) ([]Sidecar, error) {
+
+	out := make([]Sidecar, len(sidecars))
+	copy(out, sidecars)
+	for i := range out {
+		s := &out[i]
+		s.Container = sidecarName(e.cfg.NamePrefix, svc, replica, s.Name)
 		_ = e.docker.Remove(ctx, s.Container)
 
 		env := map[string]string{}
@@ -423,7 +573,7 @@ func (e *Engine) startSidecars(ctx context.Context, svc *Service) error {
 			Name:    s.Container,
 			Image:   s.Image,
 			Args:    append(append([]string{}, s.Command...), s.Args...),
-			Network: docker.NamespaceOf(svc.Container),
+			Network: docker.NamespaceOf(namespaceOwner),
 			Env:     env,
 			Labels: map[string]string{
 				docker.LabelService:  svc.Name,
@@ -433,37 +583,105 @@ func (e *Engine) startSidecars(ctx context.Context, svc *Service) error {
 		}); err != nil {
 			// Named, because "the app did not start" when the app's own
 			// container is fine is the most confusing version of this.
-			return fmt.Errorf("starting the %q sidecar of %s: %w", s.Name, svc.Name, err)
+			return nil, fmt.Errorf("starting the %q sidecar of %s: %w", s.Name, svc.Name, err)
 		}
 	}
-	return nil
+	return out, nil
 }
 
-// removeGroup removes the main container and every sidecar.
+// startReplica runs one more copy of the whole group.
 //
-// Sidecars first: they live in the main container's namespace, so removing
-// it from under them is the untidy order even though Docker tolerates it.
-// Names are recomputed rather than read off the Service, so a redeploy
-// whose Sidecars list has changed still collects the previous one's --
-// the containers are named from the resource id, which has not changed.
-func (e *Engine) removeGroup(ctx context.Context, svc *Service) {
-	for i := range svc.Sidecars {
-		name := svc.Sidecars[i].Container
-		if name == "" {
-			name = sidecarName(e.cfg.NamePrefix, svc, svc.Sidecars[i].Name)
-		}
-		_ = e.docker.Remove(ctx, name)
+// Its own published port, because two containers cannot share one; its own
+// namespace, so its sidecars are its own. The image is already pulled by
+// the time this runs, so a replica costs a container start and nothing
+// else.
+func (e *Engine) startReplica(ctx context.Context, svc *Service, index int,
+	baseEnv map[string]string, portBase int) (Replica, error) {
+
+	port, err := docker.FreePort(portBase)
+	if err != nil {
+		return Replica{}, err
 	}
-	// Anything else labelled a sidecar of this service, which is how a
-	// container from a PREVIOUS template -- one with a sidecar the new
-	// template no longer has -- is collected. Without this a renamed or
-	// deleted sidecar would run for ever with nothing referring to it,
-	// which is the --persist leak in another costume.
+	rep := Replica{Container: replicaName(e.cfg.NamePrefix, svc, index), Port: port}
+	_ = e.docker.Remove(ctx, rep.Container)
+
+	env := map[string]string{}
+	for k, v := range baseEnv {
+		env[k] = v
+	}
+	// A replica needs to be able to tell which one it is -- the closest
+	// thing Container Apps has is CONTAINER_APP_REPLICA_NAME, which it
+	// sets for exactly this reason.
+	env["CONTAINER_APP_REPLICA_NAME"] = rep.Container
+
+	if _, err := e.docker.Run(ctx, docker.RunOptions{
+		Name:  rep.Container,
+		Image: svc.Image,
+		Args:  append(append([]string{}, svc.Command...), svc.Args...),
+		Ports: map[string]string{
+			fmt.Sprintf("127.0.0.1:%d", port): fmt.Sprintf("%d", svc.ContainerPort),
+		},
+		Env: env,
+		Labels: map[string]string{
+			docker.LabelService:  svc.Name,
+			docker.LabelResource: svc.ResourceID,
+			docker.LabelRole:     "service",
+		},
+	}); err != nil {
+		return Replica{}, fmt.Errorf("starting replica %d of %s: %w", index+1, svc.Name, err)
+	}
+
+	rep.Sidecars, err = e.startSidecars(ctx, svc, rep.Container, svc.Sidecars, index)
+	if err != nil {
+		return Replica{}, err
+	}
+	return rep, nil
+}
+
+// removeGroup removes every container of the service: each replica's main
+// container and each replica's sidecars.
+//
+// It works in two ways on purpose. The names it can compute cover the
+// ordinary case, and a LABEL sweep covers the two cases where the names
+// are unknown: a restart, after which the registry knows the app and
+// nothing about its sidecars or extra replicas (--persist keeps them
+// running), and a redeploy with fewer replicas or a sidecar the new
+// template no longer mentions. Removing only what the Service names
+// misses both -- the first IS Milestone 18's --persist leak, and the
+// second is the same leak by another road. Both have a test that fails
+// naming the leaked container when the sweep is taken out.
+func (e *Engine) removeGroup(ctx context.Context, svc *Service) {
+	// Anything labelled with this service's resource id, whatever role:
+	// replicas are "service" and sidecars are "sidecar", and both belong
+	// to the app being removed.
 	if found, err := e.docker.List(ctx, docker.LabelResource+"="+svc.ResourceID); err == nil {
 		for _, c := range found {
-			if c.Labels[docker.LabelRole] == "sidecar" {
-				_ = e.docker.Remove(ctx, strings.TrimPrefix(c.Name, "/"))
+			_ = e.docker.Remove(ctx, strings.TrimPrefix(c.Name, "/"))
+		}
+	}
+	// The names that are known, for a Fake or a daemon whose listing does
+	// not include a container that is already stopped.
+	for i := range svc.Sidecars {
+		if name := svc.Sidecars[i].Container; name != "" {
+			_ = e.docker.Remove(ctx, name)
+		}
+	}
+	for _, rep := range svc.Extra {
+		for i := range rep.Sidecars {
+			if name := rep.Sidecars[i].Container; name != "" {
+				_ = e.docker.Remove(ctx, name)
 			}
+		}
+		if rep.Container != "" {
+			_ = e.docker.Remove(ctx, rep.Container)
+		}
+	}
+	// And any replica index this Service does not list, which is what a
+	// scale-down leaves behind when the new Service knows only of one.
+	for i := 1; i < MaxReplicas; i++ {
+		_ = e.docker.Remove(ctx, replicaName(e.cfg.NamePrefix, svc, i))
+		for _, s := range svc.Sidecars {
+			_ = e.docker.Remove(ctx, sidecarName(e.cfg.NamePrefix, svc, i, s.Name))
 		}
 	}
 	if svc.Container != "" {

@@ -1984,13 +1984,15 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Docker and the app image
+      - name: Docker and the app images
         run: |
           docker version --format '{{.Server.Version}}'
           # Pre-pulled so the apply measures Nimbus rather than the
-          # network. The engine pulls it itself when it is missing, which
-          # is what makes the create genuinely long-running.
+          # network. The engine pulls them itself when they are missing,
+          # which is what makes the create genuinely long-running.
           docker pull nginx:alpine
+          # The example's sidecar.
+          docker pull redis:alpine
 
       - name: Start Nimbus with --persist
         run: |
@@ -2030,6 +2032,56 @@ jobs:
           # That is the reason for proxying rather than publishing the
           # container's port.
           curl -sf "http://localhost:4700/api/resources" >/dev/null
+
+          # The template has two containers and min_replicas = 2, so FOUR
+          # containers run: two replicas of the group, each with its own
+          # cache. Before this, a sidecar was stored and not started and
+          # min_replicas round-tripped as state, so an app like this one
+          # applied cleanly and ran a single container -- which is worse
+          # than an error, because nothing said so.
+          replicas=$(docker ps -q --filter label=nimbus.role=service | wc -l)
+          sidecars=$(docker ps -q --filter label=nimbus.role=sidecar | wc -l)
+          echo "replicas=$replicas sidecars=$sidecars"
+          if [ "$replicas" -ne 2 ] || [ "$sidecars" -ne 2 ]; then
+            echo "::error::expected 2 replicas and 2 sidecars, got $replicas and $sidecars"
+            docker ps --filter label=nimbus.resource --format '{{.Names}} {{.Image}}'
+            exit 1
+          fi
+
+          # Each sidecar must be in its OWN replica's namespace. Sharing
+          # one would mean a replica had both or neither, and localhost is
+          # per namespace -- which is the entire reason a sidecar exists.
+          spaces=$(docker inspect --format '{{.HostConfig.NetworkMode}}' \
+            $(docker ps -q --filter label=nimbus.role=sidecar) | sort -u | wc -l)
+          if [ "$spaces" -ne 2 ]; then
+            echo "::error::the two sidecars share a namespace, so one replica has both"
+            exit 1
+          fi
+
+          # THE assertion: the cache answers on localhost from inside the
+          # app container. If this passes, the group is a real group.
+          app=$(docker ps -q --filter label=nimbus.role=service | head -1)
+          docker exec "$app" sh -c 'nc -z 127.0.0.1 6379' || {
+            echo "::error::the sidecar is not reachable on localhost from its app"
+            exit 1; }
+          echo "the sidecar answers on localhost"
+
+          # And requests are SPREAD, not all sent to the first replica --
+          # which would look honoured and not be. nginx logs each one, so
+          # the counts are readable from the containers themselves.
+          for i in $(seq 1 6); do
+            curl -sk --max-time 10 -o /dev/null "https://$FQDN/" || true
+          done
+          served=0
+          for c in $(docker ps -q --filter label=nimbus.role=service); do
+            n=$(docker logs "$c" 2>&1 | grep -c "GET /" || true)
+            echo "replica $c served $n"
+            if [ "${n:-0}" -gt 0 ]; then served=$((served + 1)); fi
+          done
+          if [ "$served" -lt 2 ]; then
+            echo "::error::only $served of two replicas served anything; requests are not spread"
+            exit 1
+          fi
 
           # Its console has to reach the workspace. The tailer polls every
           # three seconds, so wait for a line rather than racing it --

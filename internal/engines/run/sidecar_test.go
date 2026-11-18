@@ -87,7 +87,7 @@ func TestASidecarSharesTheMainContainersNamespace(t *testing.T) {
 	}
 	_ = e.Start(context.Background(), svc)
 
-	opts, ok := f.RunOptionsFor(sidecarName(e.cfg.NamePrefix, svc, "cache"))
+	opts, ok := f.RunOptionsFor(sidecarName(e.cfg.NamePrefix, svc, 0, "cache"))
 	if !ok {
 		t.Fatalf("the sidecar was not started; containers: %v", names(f.Containers()))
 	}

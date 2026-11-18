@@ -3,6 +3,9 @@ package aws
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -549,4 +552,75 @@ func TestThePublicBucketBadgeAgreesWithTheEnforcement(t *testing.T) {
 	if public, _ := s.isPublicBucket(open); !public {
 		t.Error("a bucket granting s3:GetObject to everyone is public and must be badged so")
 	}
+}
+
+// The counts the documentation states are the counts that exist.
+//
+// CLAUDE.md's own rule, written after an audit found four wrong
+// present-tense claims: "prefer a claim a test can check to a number in
+// prose, and where a number is incidental, leave it out". Adding
+// "ten condition keys and twenty-six operators" to the roadmap created
+// exactly the kind of number that goes stale the next time one is added,
+// so it is checked here rather than trusted.
+//
+// Reading documentation in a test is what TestEveryTestNamedInTheDocsExists,
+// TestEveryModuleImportResolves and TestEverySpecTypeHasABadge already do,
+// for this reason.
+func TestTheDocumentedConditionCountsAreRight(t *testing.T) {
+	root := repoRootDir(t)
+	raw, err := os.ReadFile(filepath.Join(root, "docs", "ROADMAP.md"))
+	if err != nil {
+		t.Skipf("no roadmap to check: %v", err)
+	}
+
+	// The entry reads "**Ten condition keys and twenty-six operators are
+	// supported**", spelled out rather than in digits, which is how the
+	// rest of that file reads.
+	words := map[string]int{
+		"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+		"six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+		"eleven": 11, "twelve": 12, "twenty-four": 24, "twenty-five": 25,
+		"twenty-six": 26, "twenty-seven": 27, "twenty-eight": 28,
+	}
+	m := regexp.MustCompile(`(?i)\*\*([a-z-]+) condition keys and ([a-z-]+) operators are`).
+		FindStringSubmatch(string(raw))
+	if m == nil {
+		t.Fatal("the roadmap no longer states the condition key and operator counts; " +
+			"either restore the sentence or delete this test, but do not leave it unchecked")
+	}
+
+	wantKeys, ok := words[strings.ToLower(m[1])]
+	if !ok {
+		t.Fatalf("cannot read %q as a number; add it to the table above", m[1])
+	}
+	wantOps, ok := words[strings.ToLower(m[2])]
+	if !ok {
+		t.Fatalf("cannot read %q as a number; add it to the table above", m[2])
+	}
+
+	if len(supportedConditionKeys) != wantKeys {
+		t.Errorf("the roadmap says %d condition keys and there are %d",
+			wantKeys, len(supportedConditionKeys))
+	}
+	if len(supportedConditionOps) != wantOps {
+		t.Errorf("the roadmap says %d operators and there are %d",
+			wantOps, len(supportedConditionOps))
+	}
+}
+
+// repoRootDir walks up from the package directory until it finds go.mod.
+func repoRootDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 6; i++ {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		dir = filepath.Dir(dir)
+	}
+	t.Fatal("could not find the repository root")
+	return ""
 }

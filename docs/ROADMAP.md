@@ -605,7 +605,9 @@ the work and Azure simply was not using it, and
   no Cloud Run jobs. `gcloud run deploy` is not implemented — the Knative
   API is served read-only, for `list` and `describe`.
 - **Pub/Sub messages live in memory and are bounded**, like CloudWatch
-  Logs': they do not survive a restart even with `--persist`. There is no
+  Logs' events: they do not survive a restart even with `--persist`. Log
+  Analytics rows DO, so the three are no longer alike — if a restart loses
+  something it should lose, it is one of these two. There is no
   ordering guarantee, no dead-letter topic, no `seek` and no snapshots;
   an `oidcToken` on a push subscription is recorded and never minted or
   verified. Push only reaches endpoints on this machine, by design.

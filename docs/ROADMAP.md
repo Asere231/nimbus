@@ -450,7 +450,7 @@ the work and Azure simply was not using it, and
   so enforcement answers "would these permissions work", never "is this
   caller genuine".
 - **The role catalogues are curations and the basic roles are
-  approximations.** Azure's 23 built-ins carry the real GUIDs but only the
+  approximations.** Azure's built-ins carry the real GUIDs but only the
   actions an example needs are exact; GCP's `roles/viewer`, `editor` and
   `owner` are expressed as the wildcard patterns they amount to, where the
   real documents are enormous explicit lists. Any role not in a catalogue
@@ -460,15 +460,27 @@ the work and Azure simply was not using it, and
   `roles/compute.networkAdmin` was granting `*.setIamPolicy` until a test
   caught it. The exclusions are added case by case as they are noticed,
   which means the ones nobody has noticed are still there.
-- **Only four condition keys and eight operators are supported**
-  (`aws:PrincipalArn`, `aws:username`, `aws:RequestedRegion`,
-  `aws:PrincipalAccount`; the String/Arn equality and wildcard pairs, and
-  `Bool`). Everything else REFUSES by name rather than passing, including
-  the `IfExists` and `ForAnyValue` variants, each of which has its own rule
-  about a missing key. Worth knowing: because AWS here is served over plain
-  HTTP, `aws:SecureTransport` is genuinely false, so a real-world bucket
-  policy denying non-TLS access would deny everything — which is one more
-  reason resource policies are not evaluated yet.
+- **Ten condition keys and twenty-six operators are supported**, and the
+  rule for what is in the list is "can the server answer it from the
+  request in front of it". So the caller's ARN, name, derived id, type and
+  account; the requested region; the source address; whether the transport
+  is encrypted; and the clock, in both spellings. The operators are the
+  String, Arn, Numeric and Date families, `IpAddress`/`NotIpAddress`,
+  `Bool` and `Null`, with the `IfExists` suffix on all of them but `Null`.
+
+  Everything else REFUSES by name rather than passing. The notable
+  exclusions are `aws:ResourceTag/*`, `aws:PrincipalOrgID`, `aws:TagKeys`
+  and `aws:MultiFactorAuthAge` — Nimbus has no tags in the authorization
+  path, no organisation and no MFA, and inventing an answer is how a policy
+  comes to look as though it protects something it does not — and the
+  `ForAllValues:`/`ForAnyValue:` prefixes, which quantify over a
+  multivalued key when every key here is a single string.
+
+  Worth knowing: `aws:SecureTransport` is answered truthfully, and because
+  AWS is served over plain HTTP the truth is **false**. The standard
+  hardening policy, a `Deny` on `aws:SecureTransport: false`, therefore
+  denies everything here. That is what the policy says, and it is pinned by
+  a test rather than smoothed over.
 - **Six AWS managed policies are bundled**, chosen because their real
   documents are short enough to transcribe exactly. They are
   transcriptions, not fetched, so they can drift as AWS revises a version,
@@ -513,11 +525,21 @@ the work and Azure simply was not using it, and
   written against the literal address cannot. Azure has no such override at
   all, so a VM there gets `NIMBUS_VM_*` environment variables instead. No
   cloud mints instance credentials, so the IAM-role paths answer nothing.
-- **GCP still has no Cloud Functions.** Cloud
-  Routers and their NAT configuration round-trip as state and nothing
-  routes. The project IAM policy IS enforced now, behind
-  `--enforce-iam`; resource-level policies (a bucket's or a topic's own
-  bindings) are recorded and not evaluated.
+- **GCP still has no Cloud Functions.** Cloud Run was the right first
+  choice for the same reason Container Apps was on Azure: it takes any
+  image, which is what the `run` engine does. A function would need a
+  per-language host, and Lambda only works here because AWS publishes base
+  images with the runtime interface emulator inside them. Google publishes
+  no equivalent to lean on.
+- **Cloud Routers and their NAT configuration round-trip as state and
+  nothing routes.** The same is true of every other GCP networking object
+  that implies traffic handling.
+- **GCP IAM is enforced**, behind `--enforce-iam`: the project policy since
+  Milestone 14 and a resource's own bindings — a bucket's, a topic's, a
+  Cloud Run service's — since Milestone 17. This entry used to end by
+  saying resource-level policies were "recorded and not evaluated", which
+  had been false for two milestones, while the AWS entry fifty lines above
+  said the opposite.
 - **GKE is k3s, so most of its surface is not modelled.** No Autopilot, no
   workload identity, no private clusters, no release channels, no
   autoscaling: those fields round-trip and nothing acts on them. Every
@@ -576,9 +598,14 @@ the work and Azure simply was not using it, and
   Every request to the cluster is authenticated as `system:masters`, because
   the token webhook says yes to everything; the aws-auth ConfigMap and IAM
   role mapping are not modelled.
-- **S3 has multipart upload but no object versioning.** `?versioning`
+- **S3 has multipart upload but no object versioning HISTORY.** `?versioning`
   round-trips as a setting, but every PUT overwrites: there is one version
-  of an object. An upload in flight is held in memory and bounded at 512 MB,
+  of an object. `?versions` lists each object once, as version `"null"` —
+  real S3's id for an object written before versioning was enabled — which
+  is what lets the provider empty a versioned bucket for `force_destroy`.
+  Until Nimbus answered that call at all, such a bucket could never be
+  destroyed: the destroy simply retried for ever. An upload in flight is
+  held in memory and bounded at 512 MB,
   so it does not survive a restart — real S3 keeps an incomplete upload
   until a lifecycle rule reaps it, and `ListMultipartUploads` here only ever
   shows what this process started. A ranged GET honours one range; a

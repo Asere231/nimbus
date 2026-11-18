@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Asere231/nimbus/internal/authz"
 )
@@ -89,17 +93,7 @@ func (s *Server) authorize(r *http.Request, service string) (*apiError, string) 
 		Principal: c.Principal,
 		Action:    tgt.Action,
 		Resource:  tgt.Resource,
-		Context: map[string]string{
-			"aws:PrincipalArn":     c.Principal.ID,
-			"aws:PrincipalAccount": s.cfg.AccountID,
-			"aws:RequestedRegion":  regionOf(r, s.cfg.Region),
-		},
-	}
-	// aws:username exists only for a user. Absent is not empty: a
-	// StringEquals on it must not match a role, which is what makes the
-	// key usable at all.
-	if c.Principal.Kind == "user" {
-		req.Context["aws:username"] = c.Principal.Name
+		Context:   s.conditionContext(r, c.Principal),
 	}
 
 	// The caller's documents AND the resource's own, in one set. That
@@ -314,7 +308,7 @@ func (s *Server) ExplainAccess(principal, resourceID, resourceType string) authz
 		// resource policy is gathered for whichever one is being asked
 		// about.
 		rules := s.policies.rules(s.rulesDocs(c, arn))
-		report.Checks = append(report.Checks, authz.Explain(c.Principal, arn, []string{action}, rules)...)
+		report.Checks = append(report.Checks, authz.Explain(c.Principal, arn, []string{action}, rules, s.explainContext(c.Principal))...)
 	}
 	return report
 }
@@ -323,7 +317,7 @@ func (s *Server) ExplainAccess(principal, resourceID, resourceType string) authz
 func (s *Server) ExplainOne(principal, action, resource string) authz.Check {
 	c := s.callerFor(principal)
 	rules := s.policies.rules(s.rulesDocs(c, resource))
-	return authz.Explain(c.Principal, resource, []string{action}, rules)[0]
+	return authz.Explain(c.Principal, resource, []string{action}, rules, s.explainContext(c.Principal))[0]
 }
 
 // rulesDocs is every document that bears on one request: the caller's own
@@ -360,4 +354,125 @@ func (s *Server) callerFor(principal string) caller {
 	// policies, rather than silently as root: "this principal does not
 	// exist" and "this principal may do anything" must not look alike.
 	return caller{Principal: authz.Principal{ID: principal, Name: principal, Kind: "unknown"}}
+}
+
+// principalTypeOf spells the caller's kind the way IAM does.
+//
+// AWS's vocabulary is not Nimbus's: a caller that assumed a role is an
+// "AssumedRole" to a policy, and the account root is "Account". Mapping
+// them here keeps the condition key answering what a real policy expects,
+// rather than leaking this codebase's own words into it.
+func principalTypeOf(p authz.Principal) string {
+	switch p.Kind {
+	case "user":
+		return "User"
+	case "role":
+		return "AssumedRole"
+	case "root":
+		return "Account"
+	case "anonymous":
+		return "Anonymous"
+	}
+	return "Unknown"
+}
+
+// userIDOf is the unique id a policy sees in aws:userid.
+//
+// Real AWS mints an opaque id per entity (AIDA... for a user, AROA... for a
+// role) and a role SESSION reports "AROA...:session-name". Nimbus derives
+// it from the ARN instead, as it derives every other id a client might
+// compare between reads -- a value that changed from one request to the
+// next would be a condition that passes and then fails for no reason.
+// Different from real AWS's, stable and unique here, which is the same
+// trade uniqueString() and the key-pair fingerprint already make.
+//
+// The account root has no userid in the sense a policy means, and nor does
+// an unidentified caller, so both are absent rather than invented -- absent
+// is a real answer, and Null is the operator that asks about it.
+func userIDOf(p authz.Principal) string {
+	switch p.Kind {
+	case "user":
+		return "AIDA" + strings.ToUpper(stableID(p.ID, 17))
+	case "role":
+		return "AROA" + strings.ToUpper(stableID(p.ID, 17))
+	}
+	return ""
+}
+
+// sourceIP is the address the request came from, with any port removed.
+//
+// RemoteAddr is "host:port" for TCP, and a policy's aws:SourceIp names a
+// host or a CIDR range, so the port has to go. An address Nimbus cannot
+// split is passed through unchanged rather than dropped: the condition
+// then refuses by naming what it could not read, which is more useful than
+// silently having no key at all.
+func sourceIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// conditionContext is every condition key Nimbus can answer, built from the
+// request in front of it.
+//
+// It lives in one function so there is exactly one place that decides what
+// a policy can see -- and so a test can assert that the SERVER really
+// populates these keys. Testing the operators against a context assembled
+// by the test itself would pass while nothing built it, which is this
+// repo's own "passes for the wrong reason" trap.
+//
+// A key that does not apply is ABSENT rather than empty. That is not
+// tidiness: absent and empty mean different things to IAM, Null is the
+// operator that asks which, and an empty aws:username would match a
+// StringEquals on "" that a role should never satisfy.
+func (s *Server) conditionContext(r *http.Request, p authz.Principal) map[string]string {
+	now := time.Now().UTC()
+	ctx := map[string]string{
+		"aws:PrincipalArn":     p.ID,
+		"aws:PrincipalAccount": s.cfg.AccountID,
+		"aws:PrincipalType":    principalTypeOf(p),
+		"aws:RequestedRegion":  regionOf(r, s.cfg.Region),
+		"aws:SourceIp":         sourceIP(r),
+		// The truth about the connection, not a convenience. AWS is served
+		// over plain HTTP here by design, so the standard hardening policy
+		// -- a Deny on aws:SecureTransport false -- really does deny
+		// everything, which is what it SAYS.
+		"aws:SecureTransport": strconv.FormatBool(r.TLS != nil),
+		"aws:CurrentTime":     now.Format(time.RFC3339),
+		"aws:EpochTime":       strconv.FormatInt(now.Unix(), 10),
+	}
+	// aws:username exists only for a user. A StringEquals on it must not
+	// match a role, which is what makes the key usable at all.
+	if p.Kind == "user" {
+		ctx["aws:username"] = p.Name
+	}
+	// aws:userid is derived from the ARN, as every other id a client might
+	// compare between reads is: one that changed from request to request
+	// would be a condition that passes and then fails for no reason.
+	if id := userIDOf(p); id != "" {
+		ctx["aws:userid"] = id
+	}
+	return ctx
+}
+
+// explainContext is the condition context the explainer evaluates against:
+// the one a real request to this Nimbus would carry.
+//
+// There is no *http.Request when answering `nimbus can` or drawing the
+// inspector, so one is stood in -- and what it stands for is not a guess.
+// Nimbus serves AWS over plain HTTP on this machine, so an explanation is
+// about a request that is unencrypted and arrives from loopback. Saying so
+// is what keeps the explainer and the enforcement giving the same answer,
+// which is the whole reason /api/authz is backed by this code rather than a
+// second implementation in JavaScript.
+func (s *Server) explainContext(p authz.Principal) map[string]string {
+	stand := &http.Request{
+		Method:     http.MethodGet,
+		URL:        &url.URL{Path: "/"},
+		RemoteAddr: "127.0.0.1:0",
+		Header:     http.Header{},
+		// TLS stays nil, which is the truth: AWS here is plain HTTP.
+	}
+	return s.conditionContext(stand, p)
 }

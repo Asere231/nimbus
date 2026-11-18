@@ -125,8 +125,19 @@ func TestASupportedConditionIsEvaluated(t *testing.T) {
 // evaluate must refuse and say so, never silently pass.
 func TestAnUnsupportedConditionRefusesAndNamesItself(t *testing.T) {
 	cases := []struct{ doc, want string }{
+		// An unsupported OPERATOR. This case used to be NumericLessThan,
+		// which is now implemented -- so it would have refused on its key
+		// instead and the test would have passed while testing nothing
+		// about operators. ForAllValues stays unsupported deliberately:
+		// it quantifies over a multivalued key and Nimbus has none.
 		{`{"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*",
-		   "Condition":{"NumericLessThan":{"aws:MultiFactorAuthAge":"300"}}}]}`, "NumericLessThan"},
+		   "Condition":{"ForAllValues:StringEquals":{"aws:RequestedRegion":"us-east-1"}}}]}`,
+			"ForAllValues:StringEquals"},
+		// An unsupported KEY, with an operator that IS supported, so the
+		// two halves of the check stay independent.
+		{`{"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*",
+		   "Condition":{"NumericLessThan":{"aws:MultiFactorAuthAge":"300"}}}]}`,
+			"aws:MultiFactorAuthAge"},
 		{`{"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*",
 		   "Condition":{"StringEquals":{"s3:x-amz-acl":"private"}}}]}`, "s3:x-amz-acl"},
 	}
@@ -151,8 +162,12 @@ func TestAnUnsupportedConditionOnlyAffectsItsOwnAction(t *testing.T) {
 	doc := `{"Statement":[
 	  {"Effect":"Allow","Action":"s3:GetObject","Resource":"*"},
 	  {"Effect":"Allow","Action":"ec2:RunInstances","Resource":"*",
-	   "Condition":{"DateGreaterThan":{"aws:CurrentTime":"2020-01-01T00:00:00Z"}}}
+	   "Condition":{"StringEquals":{"aws:PrincipalOrgID":"o-nimbus"}}}
 	]}`
+	// The second statement used to use DateGreaterThan on aws:CurrentTime,
+	// which are both supported now -- so it became evaluable and the test
+	// no longer exercised anything. An organisation id is something Nimbus
+	// genuinely cannot answer, and refuses.
 	if d := decide(t, doc, getObject()); !d.Allowed {
 		t.Errorf("an unrelated unsupported condition refused a granted action: %s", d.Reason)
 	}

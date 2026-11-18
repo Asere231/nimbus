@@ -5,9 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Asere231/nimbus/internal/authz"
 )
@@ -340,9 +343,10 @@ func (st *iamStatement) matchesResource(resource string) bool {
 // operator, and several operators, are all ANDed; several values for one
 // key are ORed. That is AWS's rule and it is easy to get backwards.
 type iamCondition struct {
-	op     string
-	key    string
-	values []string
+	op       string
+	key      string
+	values   []string
+	ifExists bool // the operator carried the IfExists suffix
 }
 
 // supportedConditionKeys are the keys Nimbus can genuinely answer, because
@@ -350,26 +354,93 @@ type iamCondition struct {
 // outside this list refuses rather than being ignored: a condition that
 // silently passes is how a policy appears to protect something it does
 // not.
+// Every key here is one the SERVER can answer from the request in front of
+// it -- who the caller is, where it came from, whether the connection is
+// encrypted, and the clock. Nothing is invented: there are no resource
+// tags, no organisation and no MFA in Nimbus's authorization path, so
+// `aws:ResourceTag/...`, `aws:PrincipalOrgID` and `aws:MultiFactorAuthAge`
+// still refuse by name.
+//
+// aws:SecureTransport deserves its own note. Nimbus serves AWS over plain
+// HTTP by design -- path-style S3 needs no certificate and no DNS -- so the
+// honest answer is "false", and the standard hardening policy (a Deny on
+// `aws:SecureTransport: false`) really does deny everything here. That is
+// what the policy says, and watching it happen teaches more than a refusal
+// claiming the key is unsupported. It is pinned by a test so nobody
+// "fixes" it to true.
 var supportedConditionKeys = map[string]bool{
 	"aws:principalarn":     true,
 	"aws:username":         true,
+	"aws:userid":           true,
+	"aws:principaltype":    true,
 	"aws:requestedregion":  true,
 	"aws:principalaccount": true,
+	"aws:sourceip":         true,
+	"aws:securetransport":  true,
+	"aws:currenttime":      true,
+	"aws:epochtime":        true,
 }
 
-// supportedConditionOps are the operators implemented below. The IfExists
-// and ForAllValues/ForAnyValue variants are deliberately absent -- each has
-// its own rule about a missing key, and guessing one wrong is a silent
-// change of meaning.
+// supportedConditionOps are the operators implemented below.
+//
+// The `IfExists` SUFFIX is supported on all of them except Null, which is
+// AWS's own rule and the reason it is handled at compile time rather than
+// listed here. Its meaning is not a guess: an absent key satisfies the
+// condition, full stop.
+//
+// The `ForAllValues:`/`ForAnyValue:` PREFIXES stay unsupported, and that is
+// a decision rather than a gap. They quantify over a MULTIVALUED context
+// key, and every key Nimbus can answer is a single string -- so treating
+// them as aliases of the base operator would be right today and silently
+// wrong the day a multivalued key is added. The policies that use them are
+// about `aws:TagKeys`, which is not a supported key either, so nothing that
+// worked is lost.
 var supportedConditionOps = map[string]bool{
-	"stringequals":    true,
-	"stringnotequals": true,
-	"stringlike":      true,
-	"stringnotlike":   true,
-	"arnequals":       true,
-	"arnlike":         true,
-	"arnnotequals":    true,
-	"bool":            true,
+	"stringequals":              true,
+	"stringnotequals":           true,
+	"stringequalsignorecase":    true,
+	"stringnotequalsignorecase": true,
+	"stringlike":                true,
+	"stringnotlike":             true,
+	"arnequals":                 true,
+	"arnlike":                   true,
+	"arnnotequals":              true,
+	"arnnotlike":                true,
+	"numericequals":             true,
+	"numericnotequals":          true,
+	"numericlessthan":           true,
+	"numericlessthanequals":     true,
+	"numericgreaterthan":        true,
+	"numericgreaterthanequals":  true,
+	"dateequals":                true,
+	"datenotequals":             true,
+	"datelessthan":              true,
+	"datelessthanequals":        true,
+	"dategreaterthan":           true,
+	"dategreaterthanequals":     true,
+	"ipaddress":                 true,
+	"notipaddress":              true,
+	"bool":                      true,
+	"null":                      true,
+}
+
+// negativeOps are the operators a MISSING key satisfies.
+//
+// AWS's rule: an absent key does not match a positive operator (so the
+// statement does not apply) and does match a negative one, which is the
+// only reading that makes `StringNotEquals` usable at all. This is an
+// explicit set rather than a prefix test, because a prefix test gets
+// `NotIpAddress` and `NumericNotEquals` wrong in opposite directions --
+// one starts with "not" and the other merely contains it.
+var negativeOps = map[string]bool{
+	"stringnotequals":           true,
+	"stringnotequalsignorecase": true,
+	"stringnotlike":             true,
+	"arnnotequals":              true,
+	"arnnotlike":                true,
+	"numericnotequals":          true,
+	"datenotequals":             true,
+	"notipaddress":              true,
 }
 
 // satisfied evaluates one condition against the request's context.
@@ -382,10 +453,36 @@ var supportedConditionOps = map[string]bool{
 // an edge one.
 func (c iamCondition) satisfied(ctx map[string]string) (bool, error) {
 	have, present := lookupKey(ctx, c.key)
-	negative := strings.HasPrefix(c.op, "stringnot") || strings.HasPrefix(c.op, "arnnot")
+
+	// Null comes first, because it is the one operator whose SUBJECT is
+	// whether the key exists -- so the "an absent key does not match" rule
+	// below would answer the wrong question for it.
+	if c.op == "null" {
+		for _, v := range c.values {
+			switch strings.ToLower(v) {
+			case "true":
+				if !present {
+					return true, nil
+				}
+			case "false":
+				if present {
+					return true, nil
+				}
+			default:
+				return false, fmt.Errorf("the Null condition on %s takes true or false, not %q",
+					c.key, v)
+			}
+		}
+		return false, nil
+	}
 
 	if !present {
-		return negative, nil
+		// IfExists has exactly one rule and it is not a guess: an absent
+		// key satisfies the condition, whatever the operator.
+		if c.ifExists {
+			return true, nil
+		}
+		return negativeOps[c.op], nil
 	}
 
 	switch c.op {
@@ -393,17 +490,186 @@ func (c iamCondition) satisfied(ctx map[string]string) (bool, error) {
 		return anyEqual(c.values, have), nil
 	case "stringnotequals", "arnnotequals":
 		return !anyEqual(c.values, have), nil
+	case "stringequalsignorecase":
+		return anyEqualFold(c.values, have), nil
+	case "stringnotequalsignorecase":
+		return !anyEqualFold(c.values, have), nil
 	case "stringlike", "arnlike":
 		return anyGlob(c.values, have), nil
-	case "stringnotlike":
+	case "stringnotlike", "arnnotlike":
 		return !anyGlob(c.values, have), nil
 	case "bool":
 		return anyEqual(c.values, strings.ToLower(have)), nil
+	case "numericequals", "numericnotequals", "numericlessthan",
+		"numericlessthanequals", "numericgreaterthan", "numericgreaterthanequals":
+		return c.numericSatisfied(have)
+	case "dateequals", "datenotequals", "datelessthan",
+		"datelessthanequals", "dategreaterthan", "dategreaterthanequals":
+		return c.dateSatisfied(have)
+	case "ipaddress", "notipaddress":
+		return c.addressSatisfied(have)
 	}
 	// Unreachable: an unsupported operator is caught at compile time and
 	// recorded on the statement. Refusing rather than returning true is
 	// the right failure anyway.
 	return false, fmt.Errorf("the condition operator %q is not supported by Nimbus", c.op)
+}
+
+// numericSatisfied compares the context value against each policy value.
+//
+// A value neither side can read as a number REFUSES rather than failing to
+// match. A non-match reads as "the statement does not apply", which is
+// indistinguishable from a policy that was never meant to match -- the same
+// trap an unparsed DynamoDB FilterExpression sets, one subsystem over.
+//
+// float64 is enough: these keys are ages, ports and epoch seconds. It is
+// not DynamoDB, where a number is a decimal string precisely because it
+// does not fit one.
+func (c iamCondition) numericSatisfied(have string) (bool, error) {
+	actual, err := strconv.ParseFloat(strings.TrimSpace(have), 64)
+	if err != nil {
+		return false, fmt.Errorf("%s is %q, which %s cannot read as a number",
+			c.key, have, c.op)
+	}
+	for _, v := range c.values {
+		want, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return false, fmt.Errorf("the %s condition on %s compares against %q, "+
+				"which is not a number", c.op, c.key, v)
+		}
+		if numericHolds(c.op, actual, want) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func numericHolds(op string, actual, want float64) bool {
+	switch op {
+	case "numericequals":
+		return actual == want
+	case "numericnotequals":
+		return actual != want
+	case "numericlessthan":
+		return actual < want
+	case "numericlessthanequals":
+		return actual <= want
+	case "numericgreaterthan":
+		return actual > want
+	case "numericgreaterthanequals":
+		return actual >= want
+	}
+	return false
+}
+
+// dateSatisfied compares times rather than strings, so the two spellings
+// AWS accepts for the same instant compare equal.
+func (c iamCondition) dateSatisfied(have string) (bool, error) {
+	actual, err := parseConditionTime(have)
+	if err != nil {
+		return false, fmt.Errorf("%s is %q, which %s cannot read as a time",
+			c.key, have, c.op)
+	}
+	for _, v := range c.values {
+		want, err := parseConditionTime(v)
+		if err != nil {
+			return false, fmt.Errorf("the %s condition on %s compares against %q, "+
+				"which is not a time", c.op, c.key, v)
+		}
+		if dateHolds(c.op, actual, want) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func dateHolds(op string, actual, want time.Time) bool {
+	switch op {
+	case "dateequals":
+		return actual.Equal(want)
+	case "datenotequals":
+		return !actual.Equal(want)
+	case "datelessthan":
+		return actual.Before(want)
+	case "datelessthanequals":
+		return !actual.After(want)
+	case "dategreaterthan":
+		return actual.After(want)
+	case "dategreaterthanequals":
+		return !actual.Before(want)
+	}
+	return false
+}
+
+// parseConditionTime reads the spellings AWS accepts in a Date condition:
+// full RFC 3339, a bare date, and epoch SECONDS -- which is why a policy
+// may legitimately compare `aws:CurrentTime` against a number.
+func parseConditionTime(v string) (time.Time, error) {
+	v = strings.TrimSpace(v)
+	if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
+		return time.Unix(secs, 0).UTC(), nil
+	}
+	for _, layout := range []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05.999999999Z07:00",
+		"2006-01-02T15:04Z07:00",
+		"2006-01-02",
+	} {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot read %q as a time", v)
+}
+
+// addressSatisfied matches the caller's address against each range.
+//
+// A bare address with no mask is a single host, which is how most policies
+// are written, and a range nothing can parse REFUSES rather than failing to
+// match -- a policy restricting access to a network nobody can read is not
+// a policy that should quietly let everything through.
+func (c iamCondition) addressSatisfied(have string) (bool, error) {
+	// The context carries a bare address; a host:port would mean the
+	// server put the wrong thing there, so no port is stripped here.
+	actual := net.ParseIP(strings.TrimSpace(have))
+	if actual == nil {
+		return false, fmt.Errorf("%s is %q, which is not an address", c.key, have)
+	}
+	negative := c.op == "notipaddress"
+	for _, v := range c.values {
+		v = strings.TrimSpace(v)
+		var contains bool
+		if strings.Contains(v, "/") {
+			_, network, err := net.ParseCIDR(v)
+			if err != nil {
+				return false, fmt.Errorf("the %s condition on %s names %q, "+
+					"which is not a CIDR range", c.op, c.key, v)
+			}
+			contains = network.Contains(actual)
+		} else {
+			want := net.ParseIP(v)
+			if want == nil {
+				return false, fmt.Errorf("the %s condition on %s names %q, "+
+					"which is not an address", c.op, c.key, v)
+			}
+			contains = want.Equal(actual)
+		}
+		// Values are ORed for a positive operator; for the negative one
+		// the whole set has to miss, so a single hit settles it.
+		if contains {
+			return !negative, nil
+		}
+	}
+	return negative, nil
+}
+
+func anyEqualFold(values []string, have string) bool {
+	for _, v := range values {
+		if strings.EqualFold(v, have) {
+			return true
+		}
+	}
+	return false
 }
 
 // lookupKey finds a context key case-insensitively.
@@ -525,6 +791,22 @@ func compileStatement(source string, raw rawStatement, kind policyKind, attached
 
 	for op, keys := range raw.Condition {
 		lowerOp := strings.ToLower(op)
+		// The IfExists suffix is stripped here so every operator below
+		// has one implementation. AWS allows it on any operator EXCEPT
+		// Null -- which makes sense, since Null is already the question
+		// "does this key exist" and NullIfExists would be asking it
+		// twice. Spelling it is a mistake worth naming rather than
+		// quietly treating as Null.
+		ifExists := strings.HasSuffix(lowerOp, "ifexists")
+		if ifExists {
+			lowerOp = strings.TrimSuffix(lowerOp, "ifexists")
+			if lowerOp == "null" {
+				st.unsupported = fmt.Errorf(
+					"the condition operator %q does not exist: IfExists cannot be added to Null, "+
+						"which already tests whether the key is present", op)
+				continue
+			}
+		}
 		for key, values := range keys {
 			lowerKey := strings.ToLower(key)
 			switch {
@@ -539,6 +821,7 @@ func compileStatement(source string, raw rawStatement, kind policyKind, attached
 			default:
 				st.conditions = append(st.conditions, iamCondition{
 					op: lowerOp, key: lowerKey, values: lowerIfBool(lowerOp, values),
+					ifExists: ifExists,
 				})
 			}
 		}

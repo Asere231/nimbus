@@ -352,7 +352,7 @@ func (s *Server) ExplainAccess(principal, resourceID, resourceType string) authz
 		resourceType + "/delete",
 	}
 	rules := s.rulesFor(p.ID)
-	report.Checks = authz.Explain(p, resourceID, actions, rules)
+	report.Checks = authz.Explain(p, resourceID, actions, rules, nil)
 
 	// A key vault's DATA actions, which are the interesting ones and
 	// are invisible from its control-plane permissions: a Contributor

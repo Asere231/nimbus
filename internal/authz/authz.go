@@ -293,10 +293,24 @@ type Check struct {
 
 // Explain evaluates several actions against one rule set, which is what a
 // report is made of.
-func Explain(p Principal, resource string, actions []string, rules []Rule) []Check {
+//
+// ctx is the condition context, and it is a parameter rather than being
+// left empty because an explainer that disagrees with the enforcement is
+// worse than one that says nothing. Explain used to pass no context at all,
+// so any policy carrying a condition was explained against keys the
+// evaluator could not see -- harmless while the supported keys were obscure
+// and actively misleading as soon as `aws:SecureTransport` became one,
+// since the standard hardening policy denies every real request here while
+// an empty context makes that Deny look inapplicable.
+//
+// A cloud with no condition keys of its own passes nil, which is an empty
+// context and the honest answer for it.
+func Explain(p Principal, resource string, actions []string, rules []Rule, ctx map[string]string) []Check {
 	out := make([]Check, 0, len(actions))
 	for _, action := range actions {
-		d := Evaluate(Request{Principal: p, Action: action, Resource: resource}, rules)
+		d := Evaluate(Request{
+			Principal: p, Action: action, Resource: resource, Context: ctx,
+		}, rules)
 		out = append(out, Check{
 			Action: action, Allowed: d.Allowed, Rule: d.Source,
 			Reason: d.Reason, Unevaluated: d.Unevaluated,

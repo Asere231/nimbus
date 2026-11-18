@@ -357,14 +357,14 @@ func (s *Server) ExplainAccess(principal, resourceID, resourceType string) authz
 			"storage.objects.list", "storage.objects.get",
 			"storage.objects.create", "storage.objects.delete")
 	}
-	report.Checks = authz.Explain(p, resourceID, actions, s.rulesFor(p.ID))
+	report.Checks = authz.Explain(p, resourceID, actions, s.rulesFor(p.ID), nil)
 	return report
 }
 
 // ExplainOne answers a single question, which is what `nimbus can` asks.
 func (s *Server) ExplainOne(principal, action, resource string) authz.Check {
 	p := s.principalFor(principal)
-	return authz.Explain(p, resource, []string{action}, s.rulesFor(p.ID))[0]
+	return authz.Explain(p, resource, []string{action}, s.rulesFor(p.ID), nil)[0]
 }
 
 func (s *Server) principalFor(principal string) authz.Principal {

@@ -108,12 +108,34 @@ permission. Real S3 is no better. The feed is where the reason lives.
   Enforcing there would mean requiring OAuth and breaking every storage
   example.
 - **ACLs.** Stored, never evaluated.
-- **The role catalogues are curations.** Azure ships 23 built-ins; GCP's
-  basic roles are approximations of enormous real ones. An unknown role
-  refuses by name.
-- **Conditions.** Only some operators and keys are supported. One that
-  cannot be evaluated refuses the requests it is about — and only those,
-  never unrelated ones.
+- **The role catalogues are curations.** Azure's built-ins and GCP's
+  predefined roles are hand-transcribed, and GCP's basic roles are
+  approximations of enormous real ones. An unknown role refuses by name.
+- **Conditions.** A key is supported when Nimbus can answer it from the
+  request: the caller's ARN, name, id, type and account, the requested
+  region, the source address, whether the transport is encrypted, and the
+  clock. Anything it would have to invent — resource tags, an organisation
+  id, an MFA age — refuses by name instead, and a condition that cannot be
+  evaluated refuses the requests it is about and only those, never
+  unrelated ones.
+
+  The operators are the String, Arn, Numeric and Date families,
+  `IpAddress`/`NotIpAddress`, `Bool` and `Null`, plus the `IfExists` suffix
+  on all but `Null`. `ForAllValues:` and `ForAnyValue:` are not supported.
+
+### `aws:SecureTransport` is false here
+
+Nimbus serves AWS over plain HTTP, so the connection genuinely is not
+encrypted and that key is answered `false`. The usual hardening statement
+
+```json
+{"Effect": "Deny", "Action": "s3:*", "Resource": "*",
+ "Condition": {"Bool": {"aws:SecureTransport": "false"}}}
+```
+
+therefore denies **everything**, which is exactly what it says to do. It is
+not a bug and it is not smoothed over: drop that statement while working
+against Nimbus, or keep it and watch it bite.
 
 ### A trap worth knowing
 

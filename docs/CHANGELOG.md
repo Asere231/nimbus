@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Condition keys and operators: four to ten, eight to twenty-six
+
+The rule for what belongs in the list is "can the server answer it from the
+request in front of it". Nimbus has the request, so it knows the caller's
+address, whether the connection is encrypted, what kind of principal it is,
+its derived id and the clock — so those are answered now instead of
+refused. Tags, organisations and MFA are things it would have to invent, so
+they still refuse by name.
+
+The operators gained the Numeric and Date families, `IpAddress`,
+`NotIpAddress`, `Null`, the IgnoreCase pair, the `IfExists` suffix, and the
+`ArnNotLike` that was simply missing while its three siblings were there.
+`ForAllValues:`/`ForAnyValue:` stay unsupported on purpose: they quantify
+over a multivalued key, and every key here is a single string.
+
+Two things worth calling out:
+
+- **`aws:SecureTransport` is false, truthfully**, because AWS is served over
+  plain HTTP. The standard hardening policy — a `Deny` on
+  `aws:SecureTransport: false` — therefore denies everything here. That is
+  what the policy says, and a test pins it so nobody smooths it over.
+- **The explainer disagreed with the enforcement.** `authz.Explain`
+  evaluated with an empty context, so `nimbus can` reported that hardening
+  policy as *allowed* while every real request was denied. It takes the
+  context now, built from a stand-in request that is honest about what
+  Nimbus is, and a test asserts the two paths agree rather than trusting
+  that they do.
+
 ### A real application, and the three bugs it found
 
 `examples/apps/url-shortener` is the first example here that is an

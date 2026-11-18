@@ -847,6 +847,176 @@ jobs:
             exit 1
           fi
 
+  url-shortener:
+    name: terraform url-shortener (the app, five services)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Docker and the Lambda base image
+        run: docker pull public.ecr.aws/lambda/python:3.12
+
+      - name: Start Nimbus with --persist
+        run: |
+          set -euo pipefail
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus start --clouds aws --persist &
+          echo $! > /tmp/nimbus.pid
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      # This is the only job that drives several services AGAINST EACH OTHER
+      # rather than one service family at a time, which is what the example
+      # exists for: building it turned up three bugs in an afternoon, and
+      # each of the three assertions below is one of them. None could have
+      # been caught by a single-service example.
+      - name: apply, drive the app, RESTART, destroy
+        working-directory: examples/apps/url-shortener
+        env:
+          AWS_ACCESS_KEY_ID: nimbus
+          AWS_SECRET_ACCESS_KEY: nimbus
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          set -euo pipefail
+          E="--endpoint-url http://localhost:4702"
+
+          # Not named `go`: a shell function by that name would shadow the
+          # Go toolchain for the rest of the step.
+          invoke() {
+            printf '%s' "$1" > payload.json
+            aws $E lambda invoke --function-name shortener \
+              --payload fileb://payload.json out.json >/dev/null
+            cat out.json
+          }
+          plan_is_clean() {
+            set +e; terraform plan -detailed-exitcode -input=false; local c=$?; set -e
+            if [ "$c" -ne 0 ]; then
+              echo "::error::$1: plan -detailed-exitcode returned $c, expected 0"
+              return 1
+            fi
+          }
+
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          # BUG 1: CloudWatch Logs tags were accepted and discarded, under a
+          # comment saying they were "never read back by anything that
+          # matters". The provider reads them on every refresh, so a log
+          # group with a tags block applied cleanly and then wanted the same
+          # change on every later plan, for ever.
+          plan_is_clean "after the first apply"
+
+          # The app itself, through the Lambda, reaching DynamoDB and S3 with
+          # no endpoint in the handler's own code.
+          first=$(invoke '{"action":"create","url":"https://go.dev","owner":"ci"}')
+          echo "$first"
+          short=$(echo "$first" | jq -r .code)
+          [ "$(echo "$first" | jq -r .created)" = "true" ] || {
+            echo "::error::the first create did not create anything"; exit 1; }
+
+          # A conditional write: the same url must not be stored twice.
+          again=$(invoke '{"action":"create","url":"https://go.dev","owner":"ci"}')
+          echo "$again"
+          [ "$(echo "$again" | jq -r .created)" = "false" ] || {
+            echo "::error::ConditionExpression did not refuse the second create"; exit 1; }
+          [ "$(echo "$again" | jq -r .code)" = "$short" ] || {
+            echo "::error::the same url shortened to a different code"; exit 1; }
+
+          invoke '{"action":"create","url":"https://terraform.io","owner":"ci"}' >/dev/null
+
+          # An atomic counter: ADD, not get-then-put.
+          invoke "{\"action\":\"resolve\",\"code\":\"$short\"}" >/dev/null
+          hits=$(invoke "{\"action\":\"resolve\",\"code\":\"$short\"}" | jq -r .hits)
+          [ "$hits" = "2" ] || {
+            echo "::error::the hit counter reads $hits after two resolves, expected 2"; exit 1; }
+
+          # A query against a secondary index, newest first.
+          listed=$(invoke '{"action":"list","owner":"ci"}')
+          echo "$listed"
+          [ "$(echo "$listed" | jq -r .count)" = "2" ] || {
+            echo "::error::the by-owner index returned $(echo "$listed" | jq -r .count) links, expected 2"
+            exit 1; }
+
+          # And S3, written by the handler and read back by the CLI.
+          invoke '{"action":"publish","owner":"ci"}'
+          aws $E s3 cp s3://shortener-assets/pages/ci/index.html page.html
+          grep -q "$short" page.html || {
+            echo "::error::the published page does not mention the link it should"
+            cat page.html; exit 1; }
+
+          aws $E logs filter-log-events --log-group-name /aws/lambda/shortener \
+            --query 'events[].message' --output text | tee logs.txt
+          grep -q "created $short" logs.txt || {
+            echo "::error::the handler's own output is not in its log group"; exit 1; }
+
+          # BUG 2: a log group did not survive a restart. Its existence lived
+          # both in the store, which persists, and in an in-memory index,
+          # which is what DescribeLogGroups reads -- so Terraform reported
+          # `# aws_cloudwatch_log_group.fn has been deleted` and recreated a
+          # resource that was right there.
+          echo "::group::restarting Nimbus"
+          kill "$(cat /tmp/nimbus.pid)"
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null || break
+            sleep 1
+          done
+          cd "$GITHUB_WORKSPACE"
+          ./bin/nimbus start --clouds aws --persist &
+          echo $! > /tmp/nimbus.pid
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          cd "$GITHUB_WORKSPACE/examples/apps/url-shortener"
+          echo "::endgroup::"
+
+          plan_is_clean "after the restart"
+
+          # The whole app still works, not just the plan: the Lambda's
+          # container has to have been adopted and the counter carried on.
+          after=$(invoke "{\"action\":\"resolve\",\"code\":\"$short\"}")
+          echo "$after"
+          [ "$(echo "$after" | jq -r .hits)" = "3" ] || {
+            echo "::error::the counter did not carry across the restart"; exit 1; }
+
+          # BUG 3: a VERSIONED bucket could never be destroyed. The provider
+          # empties one through ListObjectVersions, which fell through to the
+          # generic empty document for an unimplemented sub-resource -- so
+          # force_destroy deleted nothing and the destroy retried past ten
+          # minutes. A regression therefore HANGS rather than failing, which
+          # is why this one is bounded: five minutes is many times what the
+          # destroy takes and far short of the job's own limit.
+          timeout 300 terraform destroy -auto-approve -input=false || {
+            echo "::error::destroy did not finish; a versioned bucket that cannot be emptied hangs here"
+            aws $E s3api list-object-versions --bucket shortener-assets || true
+            exit 1; }
+
+          if aws $E s3api head-bucket --bucket shortener-assets 2>/dev/null; then
+            echo "::error::the bucket survived the destroy"
+            exit 1
+          fi
+
+      - name: No containers left behind
+        run: |
+          left=$(docker ps -aq --filter "name=nimbus-" | wc -l)
+          if [ "$left" -ne 0 ]; then
+            echo "::error::destroy left $left nimbus container(s) behind"
+            docker ps -a --filter "name=nimbus-"
+            exit 1
+          fi
+
   eks:
     name: terraform aws-eks (k3s)
     runs-on: ubuntu-latest

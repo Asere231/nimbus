@@ -2067,6 +2067,60 @@ jobs:
             echo "::error::the host did not record the invocation"
             cat logs.txt; exit 1; }
 
+          # Does a CONTAINER actually reach Azure's data plane?
+          #
+          # The unit tests prove Nimbus puts the right --add-host flags and
+          # CA mount on the command line, and the docker package's own
+          # real-Docker test proves an alias resolves to the host. Neither
+          # proves the AZURE WIRING end to end: that DataPlaneHosts emits
+          # the name a client really builds, that it resolves inside this
+          # container, and that the mounted CA verifies the certificate in
+          # front of it. Until this step existed a fully green run proved
+          # the flags were well formed, not that they worked -- and the one
+          # bug that did reach CI was a name carrying a port, which every
+          # assertion above is blind to.
+          #
+          # The suffix comes from the metadata document rather than being
+          # hard-coded, so the port is the running server's.
+          # --cacert explicitly: whether curl honours SSL_CERT_FILE
+          # depends on what it was built against, and a silent empty
+          # response here would fail further down naming the wrong thing.
+          META="https://localhost:4701/metadata/endpoints?api-version=2022-09-01"
+          SUFFIX=$(curl -sS --cacert "$SSL_CERT_FILE" "$META" | python -c 'import json,sys; print(json.load(sys.stdin)["suffixes"]["storage"])')
+          BLOB_HOST="stnimbusfunctions.blob.$SUFFIX"
+          echo "blob host: $BLOB_HOST"
+
+          docker exec -e BLOB_HOST="$BLOB_HOST" "$C" python -c '
+          import os, socket, sys, urllib.error, urllib.request
+
+          host = os.environ["BLOB_HOST"]
+          name = host.split(":")[0]
+
+          # The name must resolve, and NOT to loopback: nested *.localhost
+          # resolves to 127.0.0.1, which inside a container is the
+          # container, and that is the whole bug being guarded against.
+          addr = socket.gethostbyname(name)
+          print("resolved", name, "->", addr)
+          if addr.startswith("127.") or addr == "::1":
+              sys.exit("FAIL: %s resolves to loopback inside the container" % name)
+
+          # Then a request has to reach it over VERIFIED TLS. ANY http
+          # status is a pass: an unauthenticated request is refused by
+          # design, and a 40x still proves DNS, reachability and the
+          # certificate. Demanding 200 would couple this to auth it is not
+          # about. SSL_CERT_FILE is set by Nimbus and honoured by
+          # ssl.create_default_context, so this covers the mount too.
+          print("SSL_CERT_FILE =", os.environ.get("SSL_CERT_FILE"))
+          try:
+              with urllib.request.urlopen("https://%s/?comp=list" % host, timeout=30) as r:
+                  print("status", r.status)
+          except urllib.error.HTTPError as e:
+              print("status", e.code, "(a refusal still proves TLS and reachability)")
+          except Exception as e:
+              sys.exit("FAIL: could not reach %s: %s: %s" % (host, type(e).__name__, e))
+          print("the data plane was reached from inside the container")
+          ' || { echo "::error::a container could not reach the Azure data plane"; exit 1; }
+
           # A clean plan, which means every field round-tripped exactly as
           # sent. Several of this milestone's bugs were permanent diffs
           # that a "the resource exists" check would have missed:

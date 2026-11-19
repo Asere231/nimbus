@@ -329,6 +329,30 @@ bugs it turned up were none of them Windows-only.
   without a full reset. Budget for this on a fresh Windows machine; nothing in
   this repo can fix it, and a workaround that appears to work (building to a
   normal path) is coincidence rather than a rule.
+- **WSL2 is the obvious way round Smart App Control and it buys you the
+  control plane only.** A Linux build inside WSL is not a Windows PE
+  binary, so SAC never looks at it, and `--home /mnt/c/Users/<you>/.nimbus`
+  reuses the CA already trusted in the Windows store. Measured: from
+  Windows, the visualizer, AWS and ARM all answered 200, ARM with TLS
+  verified against that CA. **Containers cannot reach it.** Nimbus writes
+  `host.docker.internal` into a Lambda's `AWS_ENDPOINT_URL`, the k3s token
+  webhook kubeconfig and every `--add-host`, and that name resolves to
+  192.168.65.254 -- the WINDOWS host -- while Nimbus is listening in the
+  Ubuntu distro. Two different VMs.
+- **That failure is a NAMING problem, not a routing one**, which is the part
+  worth knowing before anyone tries to fix it: from the same container the
+  distro's own address (172.20.204.39) was REACHED on the same port. So the
+  path exists and only the name is wrong. Making it work would mean a way to
+  tell Nimbus which address containers should use, in all three places above
+  -- a feature with its own testing burden, not a documentation line, and it
+  is not built. Until it is, anyone who cannot disable SAC gets everything
+  except the resources that really run a container: Lambda, Functions,
+  Container Apps, Cloud Run and the k3s clusters are all out.
+- **The negative was checked against a control**, because a test that cannot
+  succeed proves nothing: with Nimbus moved back to Windows the identical
+  `docker run ... wget http://host.docker.internal:4702/` reported REACHED.
+  And WSL itself would not start at all beforehand (`WSAENOBUFS`, twice),
+  needing `wsl --shutdown` -- which also bounces Docker Desktop's VM.
 - **Go on Windows reads `Cert:\CurrentUser\Root`**, so `nimbus cert`'s "no
   admin needed" advice is correct. Verified with a one-request Go probe rather
   than inferred from a passing apply, because Go's `crypto/x509` is what

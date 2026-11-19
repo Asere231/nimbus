@@ -182,6 +182,31 @@ webhook. On Docker Engine (Linux), `host.docker.internal` does not exist;
 Nimbus passes `--add-host host.docker.internal:host-gateway` on every
 container, which needs **Docker 20.10+**.
 
+### Code in a container cannot reach Azure: `Connection refused`
+
+Azure's data plane is addressed by hostname, and nested `*.localhost`
+resolves to `127.0.0.1` — which inside a container is the container:
+
+```
+stxcloudnimbus.blob.storage.nimbus.localhost -> 127.0.0.1
+URLError [Errno 111] Connection refused
+```
+
+Nimbus aliases every addressable data-plane name into the containers it
+starts, so this means one of two things.
+
+**The resource was created after the container started.** `--add-host` is
+a start-time flag, so a container only resolves what existed when it ran.
+Usually this fixes itself, because a workload that uses a storage account
+references it and Terraform therefore creates it first; if your config does
+not reference it, add a `depends_on` or replace the container
+(`terraform apply -replace=…`).
+
+**Or it is a Kubernetes pod**, which gets none of it: kubelet generates
+each pod's `/etc/hosts`, so the node's aliases never reach it. Use
+`hostAliases` and mount the CA — [CROSS-CLOUD.md](CROSS-CLOUD.md#from-a-kubernetes-pod)
+has the manifest.
+
 ### A container is still running after `terraform destroy`
 
 Should not happen any more; every engine is adopted on startup, so a delete

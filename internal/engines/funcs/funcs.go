@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -172,12 +173,22 @@ func (e *Engine) Start(ctx context.Context, fn *Function) error {
 	_ = e.docker.Remove(ctx, fn.Container)
 
 	if _, err := e.docker.Run(ctx, docker.RunOptions{
-		Name:    fn.Container,
-		Image:   fn.Image,
-		Args:    fn.Command,
-		Ports:   map[string]string{fmt.Sprintf("127.0.0.1:%d", port): "8080"},
-		Env:     fn.Env,
-		Volumes: map[string]string{fn.Dir: "/var/task"},
+		Name:  fn.Container,
+		Image: fn.Image,
+		Args:  fn.Command,
+		Ports: map[string]string{fmt.Sprintf("127.0.0.1:%d", port): "8080"},
+		Env:   fn.Env,
+		// READ-ONLY, which is what real Lambda does: /var/task is not
+		// writable there and only /tmp is. It is also what stops a handler
+		// leaving root-owned files in the code directory -- Python writes
+		// __pycache__ on its first import -- which on any host that
+		// enforces Unix ownership made the directory unremovable by the
+		// ordinary user Nimbus runs as, so the next deploy of that
+		// function failed and the destroy before it failed silently.
+		// Invisible on Windows and macOS, where Docker Desktop presents a
+		// bind mount permissively; the Linux CI never saw it because no job
+		// deploys the same function twice.
+		VolumesRO: map[string]string{fn.Dir: "/var/task"},
 		Labels: map[string]string{
 			docker.LabelFunction: fn.Name,
 			docker.LabelResource: fn.ResourceID,
@@ -334,7 +345,15 @@ func (e *Engine) Forget(resourceID string) {
 // RemoveCode deletes a function's unpacked code.
 func (e *Engine) RemoveCode(resourceID string) {
 	dir := e.CodeDir(resourceID)
-	if dir != "" && dir != e.cfg.Dir {
-		_ = os.RemoveAll(dir)
+	if dir == "" || dir == e.cfg.Dir {
+		return
+	}
+	// NOT discarded. This used to be `_ = os.RemoveAll(dir)`, and the
+	// error it threw away was the one that mattered: a directory holding
+	// root-owned files could not be removed, the destroy reported success
+	// anyway, and the next apply of that function failed on a directory
+	// nothing said was still there.
+	if err := os.RemoveAll(dir); err != nil {
+		log.Printf("nimbus: could not remove the code for %s: %v", resourceID, err)
 	}
 }

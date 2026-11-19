@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+**A Lambda's code is mounted read-only, as it is in real AWS**, which fixes
+a bug that made redeploying a function impossible on Linux. The container
+runs as root, so a Python handler's first import left `__pycache__` owned
+by root in the code directory, and the ordinary user Nimbus runs as could
+not then remove it: `terraform apply` after editing a handler failed with
+`unlinkat .../app.cpython-312.pyc: permission denied`, and the `destroy`
+before it had already failed silently, because that error was discarded.
+
+Real Lambda's `/var/task` is read-only — only `/tmp` is writable — so this
+removes the cause rather than cleaning up after it. `RemoveCode` reports
+what it could not delete instead of discarding it, and a directory
+poisoned before this change now produces an error that says how to clear
+it.
+
+Windows and macOS never saw this, because Docker Desktop presents a bind
+mount permissively. CI never saw it because no job had ever deployed the
+same function twice: every one applies, invokes and destroys once.
+`TestRedeployingAFunctionThatHasRunSucceeds` is that sequence, and it
+fails on Linux without the fix.
+
 **Code in one cloud can reach a service in another, and now the real SDKs
 can too.** `docs/CROSS-CLOUD.md` is the measured write-up: five vantage
 points — a Lambda, an Azure Function App, a Cloud Run service, an EC2

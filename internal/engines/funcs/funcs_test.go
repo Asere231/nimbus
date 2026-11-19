@@ -119,6 +119,23 @@ func TestStartMountsTheCodeAndPassesTheHandler(t *testing.T) {
 	if !strings.Contains(calls, "/host/code:/var/task") {
 		t.Errorf("the code was not mounted at /var/task:\n%s", calls)
 	}
+	// And READ-ONLY, which is what real Lambda does -- /var/task is not
+	// writable there, only /tmp is. It is also what stops a handler
+	// leaving root-owned files in the code directory: Python writes
+	// __pycache__ on its first import, and on any host that enforces
+	// Unix ownership that made the directory unremovable by the user
+	// Nimbus runs as, so the NEXT deploy of the function failed and the
+	// destroy before it failed silently.
+	//
+	// Asserted on the RO map BY NAME, because the check above passes
+	// either way: the Fake prints both maps and that substring matches
+	// both of them.
+	if !strings.Contains(calls, "volumes-ro=map[/host/code:/var/task]") {
+		t.Errorf("the code is not mounted read-only: %s", calls)
+	}
+	if strings.Contains(calls, "volumes=map[/host/code:/var/task]") {
+		t.Errorf("the code is still mounted writable: %s", calls)
+	}
 	if !strings.Contains(calls, "args=[app.handler]") {
 		t.Errorf("the handler was not passed as the command:\n%s", calls)
 	}

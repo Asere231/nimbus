@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +31,22 @@ func Unpack(archive []byte, dir string) error {
 		return fmt.Errorf("the deployment package is not a readable zip: %w", err)
 	}
 	if err := os.RemoveAll(dir); err != nil {
+		// A directory a CONTAINER wrote into as root cannot be removed by
+		// the ordinary user Nimbus runs as, on any host that enforces Unix
+		// ownership -- Linux, and WSL. /var/task is mounted read-only now,
+		// so nothing new lands there, but a directory poisoned before that
+		// change is still on disk and the bare `permission denied` names
+		// neither the cause nor the cure.
+		if errors.Is(err, fs.ErrPermission) {
+			return fmt.Errorf(`%w
+
+This directory holds files a container wrote as root, which Nimbus cannot
+remove. It is left over from before a function's code was mounted
+read-only. Remove it once with:
+
+    docker run --rm -v %q:/w alpine rm -rf /w
+`, err, dir)
+		}
 		return err
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {

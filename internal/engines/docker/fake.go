@@ -109,7 +109,11 @@ func (f *Fake) Run(ctx context.Context, opts RunOptions) (string, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("run %s image=%s args=%v volumes=%v", opts.Name, opts.Image, opts.Args, opts.Volumes)
+	// Read-only mounts are recorded too, and distinguishably: the Fake
+	// agreeing with the real client is the whole point of it, and a
+	// mount it did not mention is one no test could assert about.
+	f.record("run %s image=%s args=%v volumes=%v volumes-ro=%v",
+		opts.Name, opts.Image, opts.Args, opts.Volumes, opts.VolumesRO)
 	if err := f.check(); err != nil {
 		return "", err
 	}

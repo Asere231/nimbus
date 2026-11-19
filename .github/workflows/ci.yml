@@ -321,6 +321,12 @@ jobs:
         run: |
           docker version --format '{{.Server.Version}}'
           docker pull rancher/k3s:v1.34.12-k3s1
+          # For TestRedeployingAFunctionThatHasRunSucceeds, which deploys a
+          # real function, runs it, and deploys again -- the sequence that
+          # was never exercised anywhere and where /var/task being writable
+          # left root-owned bytecode the next deploy could not remove.
+          docker pull public.ecr.aws/lambda/python:3.12
+          docker pull alpine:3.20
 
       - name: Engine tests against a real daemon
         run: |
@@ -338,7 +344,7 @@ jobs:
           # not evidence either way. Asking for them by name is.
           LOG=/tmp/engines.log
           NIMBUS_DOCKER_TESTS=1 go test ./internal/engines/... -count=1 -v > "$LOG" 2>&1 || { tail -100 "$LOG"; exit 1; }
-          REAL='TestARealContainerResolvesAnAliasToTheHost TestARealContainerCanReadTheMountedCA TestARealInstanceBootsRunsUserDataAndStaysUp'
+          REAL='TestARealContainerResolvesAnAliasToTheHost TestARealContainerCanReadTheMountedCA TestARealInstanceBootsRunsUserDataAndStaysUp TestRedeployingAFunctionThatHasRunSucceeds'
           for t in $REAL; do
             grep -q -- "--- PASS: $t" "$LOG" || {
               echo "::error::$t did not PASS -- skipped, or it never ran"

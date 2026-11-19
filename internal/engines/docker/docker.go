@@ -80,7 +80,12 @@ type RunOptions struct {
 	Env        map[string]string
 	Network    string
 	Volumes    map[string]string // host path or volume name -> container path
-	TmpFS      []string
+	// VolumesRO is mounted read-only. A container that cannot write into a
+	// bind mount cannot leave root-owned files in it, which on any host
+	// that enforces Unix ownership would make the directory unremovable by
+	// the ordinary user Nimbus runs as.
+	VolumesRO map[string]string
+	TmpFS     []string
 
 	// HostAliases and CAFile are filled by CLI.Run from the process-wide
 	// provider (SetHostExtras); a caller does not set them. They are
@@ -339,6 +344,9 @@ func runArgs(opts RunOptions) []string {
 	}
 	for src, dst := range opts.Volumes {
 		args = append(args, "-v", src+":"+dst)
+	}
+	for src, dst := range opts.VolumesRO {
+		args = append(args, "-v", src+":"+dst+":ro")
 	}
 	for _, t := range opts.TmpFS {
 		args = append(args, "--tmpfs", t)

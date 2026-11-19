@@ -343,12 +343,31 @@ bugs it turned up were none of them Windows-only.
 - **That failure is a NAMING problem, not a routing one**, which is the part
   worth knowing before anyone tries to fix it: from the same container the
   distro's own address (172.20.204.39) was REACHED on the same port. So the
-  path exists and only the name is wrong. Making it work would mean a way to
-  tell Nimbus which address containers should use, in all three places above
-  -- a feature with its own testing burden, not a documentation line, and it
-  is not built. Until it is, anyone who cannot disable SAC gets everything
-  except the resources that really run a container: Lambda, Functions,
-  Container Apps, Cloud Run and the k3s clusters are all out.
+  path exists and only the name is wrong.
+- **The naming fix was BUILT, it WORKED, and it was reverted for something
+  else entirely -- so the blocker this note was written about is gone.**
+  Keeping the NAME `host.docker.internal` and changing only what
+  `--add-host` points it at came to about forty lines in
+  `internal/engines/docker`, and left the nine callers and the certificate
+  untouched: TLS verifies the name a client asked for, not the address
+  behind it, so no IP SAN and no reissue-on-restart. Under it all five
+  engines worked, driven from Windows -- a Lambda wrote to DynamoDB, a
+  Container App answered 200 on its FQDN, a function app was built and
+  answered, the Azure blob data plane was reached from inside a container
+  over verified TLS, `kubectl` authenticated through the k3s webhook, a VM
+  ran its boot script, two plans came back clean and five stacks destroyed.
+  **What killed it was the Lambda read-only bug** -- the first REDEPLOY
+  failed on root-owned `__pycache__` -- and that bug is now fixed. The code
+  is still not in the tree: it was reverted WHOLE and deliberately, because
+  half a cloud emulator is not a workaround. Anyone who cannot disable SAC
+  still loses every resource that really runs a container.
+- **The matrix that passed was six FIRST applies, which is why it proved
+  less than it looked.** Every leg ran against a fresh directory, and the
+  very next thing tried -- deploying the same function twice -- failed. A
+  retry has to cover redeploys, restarts and `--persist` before it means
+  anything. Two edges would also remain, neither touched by the Lambda fix:
+  the distro's address changes across a `wsl --shutdown`, and `FreePort`
+  asks the WSL kernel while Docker publishes on the Windows host.
 - **The negative was checked against a control**, because a test that cannot
   succeed proves nothing: with Nimbus moved back to Windows the identical
   `docker run ... wget http://host.docker.internal:4702/` reported REACHED.

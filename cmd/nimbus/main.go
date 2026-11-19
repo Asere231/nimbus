@@ -33,6 +33,7 @@ import (
 	"github.com/Asere231/nimbus/internal/azure/keyvault"
 	"github.com/Asere231/nimbus/internal/azure/storage"
 	"github.com/Asere231/nimbus/internal/core"
+	"github.com/Asere231/nimbus/internal/engines/docker"
 	"github.com/Asere231/nimbus/internal/gcp"
 	"github.com/Asere231/nimbus/internal/ui"
 )
@@ -207,6 +208,10 @@ func start(args []string) {
 	// request, so the explanation cannot drift from the behaviour.
 	explainers := map[string]ui.Explainer{}
 
+	// Held outside the block so the docker host-extras provider can be
+	// wired to it once the certificate paths are known, below.
+	var azSrv *azure.Server
+
 	if running["azure"] {
 		azURL := fmt.Sprintf("https://%s:%d", *host, *azPort)
 		azCfg := azure.Config{PublicURL: azURL, KeepClusters: *persist,
@@ -215,6 +220,7 @@ func start(args []string) {
 			azCfg.DataDir = dataDir
 		}
 		az := azure.New(azCfg, store, bus)
+		azSrv = az
 		explainers["azure"] = az
 		blobs = blobBrowser{az.BlobBrowser()}
 		logs = logBrowser{az}
@@ -293,6 +299,24 @@ func start(args []string) {
 	tlsCfg, err := certs.TLSConfig()
 	if err != nil {
 		log.Fatalf("loading certificates: %v", err)
+	}
+
+	// Every container Nimbus starts now resolves Azure's ADDRESSABLE data
+	// planes and trusts the CA in front of them. Without this a real Azure
+	// SDK cannot reach blob storage from a Lambda, a Container App or a
+	// Cloud Run service: the account hostname resolves to 127.0.0.1, which
+	// inside a container is the container.
+	//
+	// Set in the one place that knows both the running clouds and the
+	// certificate paths, and consulted by docker itself rather than by
+	// each engine -- a per-cloud opt-in is what left two CI jobs red for
+	// three milestones. Only Azure contributes, because it is the only
+	// cloud here addressed by hostname and the only one served over TLS.
+	if azSrv != nil {
+		caFile := certs.CACert
+		docker.SetHostExtras(func() docker.HostExtras {
+			return docker.HostExtras{Aliases: azSrv.DataPlaneHosts(), CAFile: caFile}
+		})
 	}
 	for _, c := range servers {
 		if c.tls {

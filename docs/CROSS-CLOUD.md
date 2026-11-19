@@ -2,20 +2,21 @@
 
 All three clouds run in **one process**, sharing one store and one
 visualizer. So an Azure Function App can write to DynamoDB, a Lambda can
-read an Azure Key Vault secret, and a GKE pod can publish to Pub/Sub —
-things that in the real clouds would need VPC peering, cross-account
-roles and an egress bill.
+read an Azure Key Vault secret, and a pod can publish to Pub/Sub — things
+that in the real clouds would need VPC peering, cross-account roles and
+an egress bill.
 
 This page is the measured answer to "does that actually work", including
-the two places where it does not.
+where it still does not.
 
 - [What was measured](#what-was-measured)
 - [The results](#the-results)
 - [AWS from anywhere: one environment variable](#aws-from-anywhere-one-environment-variable)
-- [Azure from anywhere: a hostname and a certificate](#azure-from-anywhere-a-hostname-and-a-certificate)
-- [GCP from anywhere: endpoint overrides, and the link trap](#gcp-from-anywhere-endpoint-overrides-and-the-link-trap)
+- [Azure from anywhere: handled for you](#azure-from-anywhere-handled-for-you)
+- [GCP from anywhere: endpoint overrides and followed links](#gcp-from-anywhere-endpoint-overrides-and-followed-links)
 - [From a Kubernetes pod](#from-a-kubernetes-pod)
-- [Known shortcomings](#known-shortcomings)
+- [With IAM enforcement on](#with-iam-enforcement-on)
+- [Known limits](#known-limits)
 
 ---
 
@@ -23,7 +24,7 @@ the two places where it does not.
 
 One `nimbus start --clouds azure,aws,gcp`, one Terraform apply creating
 targets in all three clouds, and then the same probe run from **five
-different places** — each of which is a genuinely different network path.
+different places** — each a genuinely different network path.
 
 | Vantage point | What it is |
 |---|---|
@@ -33,11 +34,11 @@ different places** — each of which is a genuinely different network path.
 | EC2 instance | `vm` engine — a container that boots and runs a boot script |
 | EKS pod | `k3s` engine — a pod inside real Kubernetes in Docker |
 
-Seven targets, two writes-and-reads-back each where the service allows
-it:
+Ten targets, each written *and* read back where the service allows it:
 
-`aws:dynamodb` · `aws:s3` · `aws:logs` · `azure:blob` ·
-`azure:keyvault` · `gcp:storage` · `gcp:pubsub`
+`aws:dynamodb` · `aws:s3` · `aws:logs` · `aws:lambda` (an actual
+cross-cloud function call) · `azure:blob` · `azure:queue` ·
+`azure:table` · `azure:keyvault` · `gcp:storage` · `gcp:pubsub`
 
 Measured on Docker Desktop (WSL2) on Windows 11, 2026-11-18.
 
@@ -50,29 +51,27 @@ service in another.
 
 | From ↓ to → | AWS | Azure | GCP |
 |---|---|---|---|
-| AWS Lambda | ✅ 3/3 | ✅ 2/2 | ✅ 2/2 |
-| Azure Function App | ✅ 3/3 | ✅ 2/2 | ✅ 2/2 |
-| Cloud Run service | ✅ 3/3 | ✅ 2/2 | ✅ 2/2 |
-| EC2 instance | ✅ 3/3 | ✅ 2/2 | ✅ 2/2 |
-| EKS pod | ✅ 3/3 | ✅ 2/2 | ✅ 2/2 |
+| AWS Lambda | ✅ 3/3 (+ self-invoke skipped) | ✅ 4/4 | ✅ 2/2 |
+| Azure Function App | ✅ 4/4 | ✅ 4/4 | ✅ 2/2 |
+| Cloud Run service | ✅ 4/4 | ✅ 4/4 | ✅ 2/2 |
+| EC2 instance | ✅ 4/4 | ✅ 4/4 | ✅ 2/2 |
+| EKS pod | ✅ 4/4 | ✅ 4/4 | ✅ 2/2 |
 
-**35 of 35 reachable.** But reachability is the weaker question. The
-probe is deliberately stdlib-only, so it proves a service *answers*; it
-does not prove a real SDK can be pointed at it, because an SDK builds
-its own URLs and verifies its own TLS. So the SDKs were run too, from a
-pod:
+**49 of 49**, with one skip: a Lambda invoking itself does not terminate.
+Every Azure row uses the real data-plane hostname with the certificate
+**verified** — which is new, and is the point of the next section.
+
+Reachability is the weaker question, though: the probe is stdlib-only, so
+it proves a service *answers*. A real SDK builds its own URLs and
+verifies its own TLS, so the SDKs were run separately, in two languages:
 
 | SDK | Result |
 |---|---|
-| `boto3` → DynamoDB | ✅ wrote and read back |
-| `boto3` → S3 | ✅ put and got |
-| `azure-storage-blob` → blob | ✅ uploaded and downloaded — with a host alias and the CA mounted |
-| `google-cloud-storage` → upload | ✅ |
-| `google-cloud-storage` → **download** | ❌ followed `mediaLink` to `localhost:4703` |
-
-That last row is the one real failure, and the
-[link trap](#gcp-from-anywhere-endpoint-overrides-and-the-link-trap)
-explains it.
+| `boto3` → DynamoDB, S3 | ✅ no endpoint in the code |
+| `azure-storage-blob` → blob | ✅ real hostname, TLS verified |
+| `google-cloud-storage` → upload **and download** | ✅ |
+| `@aws-sdk/client-dynamodb` (Node) | ✅ no endpoint in the code |
+| `@azure/storage-blob` (Node) | ✅ Shared Key, TLS verified |
 
 ## AWS from anywhere: one environment variable
 
@@ -83,14 +82,17 @@ of the three whose SDKs all read a single endpoint variable:
 AWS_ENDPOINT_URL=http://host.docker.internal:4702
 ```
 
-Every current AWS SDK honours it, so **a handler written against real
-AWS reaches Nimbus unchanged**. No endpoint in the code, no client
-configuration:
+So **a handler written against real AWS reaches Nimbus unchanged**. No
+endpoint in the code, no client configuration:
 
 ```python
 import boto3
 boto3.client("dynamodb").put_item(...)   # goes to Nimbus
 ```
+
+That "every current SDK" claim was checked in a second language rather
+than repeated: the JavaScript v3 client, given no endpoint at all, read
+the variable and reached Nimbus.
 
 Two details:
 
@@ -100,26 +102,24 @@ Two details:
   starts, so the name resolves on Docker Engine as well as Docker
   Desktop.
 - S3 is addressed **path-style**, so set
-  `AWS_S3_FORCE_PATH_STYLE=true` (or the equivalent client config).
-  There is no bucket hostname, which is also why AWS needs no
-  certificate.
+  `AWS_S3_FORCE_PATH_STYLE=true` (or the client equivalent). There is no
+  bucket hostname, which is also why AWS needs no certificate.
 
-Nimbus already sets the AWS variables itself for a Lambda. For an Azure
-Function App or a Cloud Run service you set them as app settings or
-environment variables, which is what `examples/` does.
+Nimbus sets the AWS variables itself for a Lambda. For an Azure Function
+App or a Cloud Run service you set them as app settings or environment
+variables, which is what `examples/` does.
 
-## Azure from anywhere: a hostname and a certificate
+## Azure from anywhere: handled for you
 
-Azure is the hard one, for two reasons that are both structural rather
-than oversights.
+Azure is the hard one, for two structural reasons — and Nimbus now deals
+with both, so there is nothing to configure.
 
 **Its data plane is addressed by hostname.** A blob URL is
-`https://{account}.blob.storage.nimbus.localhost:4701/...`, and the SDK
-builds that from the account name. Nested `*.localhost` names resolve to
-loopback on macOS and Windows with nothing installed — which is what
-makes the storage data plane work on the host with no DNS tooling — but
-loopback *inside a container is the container*. Measured from inside a
-Function App container:
+`https://{account}.blob.storage.nimbus.localhost:4701/...`, built by the
+SDK from the account name. Nested `*.localhost` names resolve to loopback
+with nothing installed, which is what makes the data plane work on your
+machine with no DNS tooling — but loopback *inside a container is the
+container*:
 
 ```
 stxcloudnimbus.blob.storage.nimbus.localhost -> 127.0.0.1
@@ -127,124 +127,142 @@ URLError [Errno 111] Connection refused
 ```
 
 **And it is HTTPS.** Azure clients refuse plain HTTP, so Nimbus serves
-TLS from a CA it generates. That CA is trusted on your machine; it is
-not in any container's trust store.
+TLS from a CA it generates, and that CA is in no container's trust store.
 
-Both are fixable, and with both fixed the **real Azure SDK works** — the
-proof above is `azure-storage-blob` uploading and downloading from a
-pod. What it needs:
+Every container Nimbus starts now gets both:
 
-1. **Point the account hostname at the host.** In Kubernetes that is
-   `hostAliases`; for a plain container it is
-   `--add-host {account}.blob.storage.nimbus.localhost:host-gateway`.
-2. **Mount the CA** (`~/.nimbus/certs/nimbus-ca.pem`) and pass it to the
-   client — `connection_verify=` for the Python SDK,
-   `REQUESTS_CA_BUNDLE` for anything requests-based.
+- `--add-host {name}:host-gateway` for **every addressable data-plane
+  hostname that exists** — each storage account's blob, queue, table,
+  file and dfs endpoints, each Key Vault, each function app and its SCM
+  site, each container app's fqdn. A wildcard is no use here:
+  `/etc/hosts` holds names, not patterns, so these are the concrete ones.
+- the CA mounted read-only at `/etc/nimbus/nimbus-ca.pem`, with
+  `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and
+  `NODE_EXTRA_CA_CERTS` pointing at it. A value you set yourself wins.
 
-```yaml
-# the pod spec that made the real Azure SDK work
-hostAliases:
-  - ip: "192.168.65.254"          # Docker Desktop's gateway; differs on Engine
-    hostnames:
-      - "host.docker.internal"
-      - "stxcloudnimbus.blob.storage.nimbus.localhost"
-```
-
-Nimbus does **not** add the data-plane alias for you today — see
-[shortcomings](#known-shortcomings).
-
-## GCP from anywhere: endpoint overrides, and the link trap
-
-GCP is reachable with an endpoint override and no certificate, because
-it is served over plain HTTP and addressed by path:
+So this works from inside a Lambda, with no `Host` header and nothing
+disabled:
 
 ```python
-from google.cloud import storage
-from google.auth.credentials import AnonymousCredentials
-from google.api_core.client_options import ClientOptions
+from azure.storage.blob import BlobServiceClient
+svc = BlobServiceClient(
+    account_url="https://stxcloudnimbus.blob.storage.nimbus.localhost:4701",
+    credential={"account_name": "stxcloudnimbus", "account_key": key})
+svc.get_blob_client("data", "x.txt").upload_blob(b"...", overwrite=True)
+```
 
+Fixing only the hostname would have moved the failure from "cannot
+resolve" to "certificate verify failed", so both halves go together.
+
+Replacing the trust store is acceptable **here and nowhere else**: Nimbus
+is an offline emulator and the only TLS endpoint a container can reach is
+Nimbus itself. See the [ordering limit](#known-limits) for the one case
+this does not cover.
+
+## GCP from anywhere: endpoint overrides and followed links
+
+GCP needs an endpoint override and no certificate, because it is served
+over plain HTTP and addressed by path:
+
+```python
 client = storage.Client(
-    project="nimbus-local",
-    credentials=AnonymousCredentials(),
+    project="nimbus-local", credentials=AnonymousCredentials(),
     client_options=ClientOptions(api_endpoint="http://host.docker.internal:4703"))
 ```
 
-That uploads fine. The **download fails**, and the reason is worth
-understanding because it is not a bug in the override:
+An override alone was not enough, and the reason is worth understanding.
+A GCP response is full of absolute URLs, and clients treat them two very
+different ways: some are **identity** (a resource's self link *is* its
+id) and some are instructions to **go somewhere**, which a client follows
+verbatim. Uploads worked because the SDK composes that URL itself;
+downloads failed because they followed what Nimbus sent:
 
 ```
-HTTPConnectionPool(host='localhost', port=4703): Connection refused
+"mediaLink": "http://localhost:4703/storage/v1/b/{b}/o/{o}?alt=media"
+→ HTTPConnectionPool(host='localhost', port=4703): Connection refused
 ```
 
-A GCP resource's identity *is* its self link — the full URL it answers
-on — so every document Nimbus returns carries absolute URLs built from
-`--host`, which defaults to `localhost`:
+A **followed** link is now built from the host the request arrived on, so
+a client that reached Nimbus on `host.docker.internal` is told to come
+back there, while Terraform keeps reading `localhost` and sees no diff —
+which matters, because `media_link` and `self_link` are computed
+attributes it stores.
 
-```json
-"selfLink":  "http://localhost:4703/storage/v1/b/xcloud-gcs-nimbus/o/sdk-pod.txt",
-"mediaLink": "http://localhost:4703/storage/v1/b/xcloud-gcs-nimbus/o/sdk-pod.txt?alt=media"
-```
-
-The SDK **follows `mediaLink` verbatim** rather than rebuilding it from
-the endpoint override, so the request goes to the container's own
-loopback. Anything that *constructs* its URL works; anything that
-*follows a returned one* does not.
-
-The lever is `nimbus start --host`, which is what every self link is
-built from. Setting it to a name that resolves both on the host and
-inside containers makes the returned links usable from both — at the
-cost of your host-side clients needing that name too. The default
-favours the host, since that is where Terraform runs.
+Identity is deliberately untouched: Compute self links are store ids, so
+a per-request value would make one resource into two. Nothing known
+follows one — every client composes Compute URLs from its endpoint — but
+if something did, it would still go to `localhost`.
 
 ## From a Kubernetes pod
 
-A pod is the one vantage point that needs explicit configuration, and
-the reason is pure Kubernetes:
-
-**A pod does not inherit the node's `/etc/hosts`.** Nimbus starts the k3s
-node with `--add-host host.docker.internal:host-gateway`, and that entry
-really is on the node:
-
-```
-192.168.65.254  host.docker.internal
-```
-
-But kubelet *generates* each pod's `/etc/hosts` from scratch, so inside
-a pod:
+A pod is the one vantage point that needs configuration, and the reason
+is pure Kubernetes: **a pod does not inherit its node's `/etc/hosts`.**
+Nimbus writes every alias onto the k3s node, and kubelet *generates* each
+pod's hosts file from scratch, so none of it reaches a pod:
 
 ```
 host.docker.internal -> FAILED gaierror [Errno -2] Name or service not known
 192.168.65.254       -> 192.168.65.254          (routable)
 ```
 
-The gateway address is reachable; only the name is missing.
-`hostAliases` is Kubernetes' own way of writing a line into that
-generated file, and with it a pod reached all seven targets.
+The gateway address is reachable; only the names are missing. Write them
+with `hostAliases`, and mount the CA yourself:
 
 ```yaml
 spec:
   hostAliases:
-    - ip: "192.168.65.254"
-      hostnames: ["host.docker.internal"]
+    - ip: "192.168.65.254"   # Docker Desktop's gateway; differs on Engine
+      hostnames:
+        - "host.docker.internal"
+        - "stxcloudnimbus.blob.storage.nimbus.localhost"
+        - "kv-xcloud-nimbus.vault.nimbus.localhost"
+  containers:
+    - name: app
+      env:
+        - name: SSL_CERT_FILE
+          value: /ca/nimbus-ca.pem
+      volumeMounts:
+        - { name: ca, mountPath: /ca }
+  volumes:
+    - name: ca
+      configMap: { name: nimbus-ca }   # kubectl create configmap nimbus-ca --from-file=...
 ```
 
-The address is **Docker Desktop's** gateway. On Docker Engine it is the
-bridge gateway instead, usually `172.17.0.1` — check with
+With that, a pod reached all ten targets. On Docker Engine the address is
+the bridge gateway instead, usually `172.17.0.1` — check with
 `docker network inspect bridge`.
 
-## Known shortcomings
+## With IAM enforcement on
+
+`--enforce-iam` changes nothing about cross-cloud reachability: the whole
+17-resource stack applied, and all three container vantage points reached
+all ten targets.
+
+That is because an unmapped caller is the account root, which is the
+faithful default. Enforcement really does reach these calls — the same
+call from the same container, as a role carrying no permissions:
+
+```
+nimbus         -> ALLOWED (200)
+xcloud-probe   -> REFUSED 403: AccessDeniedException: role arn:aws:iam::000000000000:role/xcloud-probe
+                  is not authorized to perform dynamodb:PutItem
+```
+
+So a cross-cloud call is subject to exactly the same policies as any
+other call, and nothing special-cases it. See [IAM.md](IAM.md).
+
+## Known limits
 
 Stated rather than hidden, because each has a cause worth knowing.
 
-| Shortcoming | Why | Workaround |
+| Limit | Why | What to do |
 |---|---|---|
-| **Nimbus does not alias Azure data-plane hostnames into containers.** It adds `host.docker.internal` unconditionally but not `{account}.blob.storage.nimbus.localhost`, so the real Azure SDK cannot reach blob storage from a Lambda, Container App or Cloud Run service without help. | The alias list would have to be rebuilt as storage accounts are created, after the container already exists. One place would change: `runArgs` in `internal/engines/docker/docker.go`. | Add the alias yourself (`hostAliases` in Kubernetes), or address the data plane through `host.docker.internal:4701` with an explicit `Host` header, which is what the probe does. |
-| **The Nimbus CA is not in any container's trust store.** | Nothing mounts it. Azure is the only cloud this affects, because it is the only one served over TLS. | Mount `~/.nimbus/certs/nimbus-ca.pem` and point the client at it. |
-| **GCP SDK calls that follow a server-returned URL go to `localhost`.** Uploads work, media downloads do not. | A GCP id *is* its self link, so the links are absolute and built from `--host`. | `nimbus start --host <a name that resolves in both places>`, or fetch object bytes with a URL you build yourself. |
-| **Azure Storage cannot be reached with a bearer identity that Nimbus enforces.** Shared Key is verified; Bearer is accepted on shape alone. | Shared Key carries no principal, so enforcing data actions there would break every existing example. Key Vault *is* enforced, because its clients send a real token. | None needed for reachability; see [IAM.md](IAM.md) for what is and is not checked. |
+| **A container only resolves the names that existed when it started.** A storage account created *after* a container is not in that container's `/etc/hosts`. | `--add-host` is a start-time flag writing a hosts file, and there is no wildcard. | Nothing, usually: a workload that *uses* a resource references it, which makes Terraform create it first. Measured both ways — an EC2 instance with no reference to the storage account was created alongside it and could not reach Azure; recreated afterwards, it reached all ten targets. If you hit it, replace the container. |
+| **A pod gets none of it.** | kubelet generates each pod's `/etc/hosts`, so the node's aliases do not reach one. | [`hostAliases`](#from-a-kubernetes-pod) and mount the CA. A CoreDNS override would be the better fix and is not built. |
+| **A GCP *identity* link still says `localhost`.** | A Compute self link is a store id; rewriting it per request would split one resource into two. | Nothing follows one today. If something did, run `nimbus start --host <a name that resolves in both places>`. |
+| **Azure Storage data actions are not enforced.** | Shared Key carries no principal, so enforcing them would mean requiring OAuth and breaking every existing example. Key Vault *is* enforced, because its clients send a real token. | Nothing; see [IAM.md](IAM.md) for what is checked. |
 
-What is **not** a shortcoming: the probe disabling TLS verification and
-setting a `Host` header by hand. That is the probe being stdlib-only on
-purpose, so it could answer "is this reachable" from five runtimes
-without vendoring three SDKs. The SDK run is what answers the stricter
-question, and it is reported separately above.
+Still untested, so neither claimed nor denied: the Go and Java SDKs, and
+any service Nimbus does not emulate (there is no SQS, Secrets Manager or
+Firestore). Nimbus answers `InvalidAction` naming the service for those,
+rather than failing obscurely.

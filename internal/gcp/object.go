@@ -51,7 +51,7 @@ func (s *Server) serveObject(w http.ResponseWriter, r *http.Request, bucket, obj
 		if q.Get("alt") == "media" {
 			return s.downloadObject(w, bucket, object)
 		}
-		return s.getObjectMeta(w, bucket, object)
+		return s.getObjectMeta(w, r, bucket, object)
 
 	case http.MethodPost:
 		if object != "" {
@@ -101,7 +101,7 @@ func (s *Server) uploadObject(w http.ResponseWriter, r *http.Request, bucket str
 			return "storage upload: unreadable"
 		}
 		meta := map[string]any{"contentType": r.Header.Get("Content-Type")}
-		return s.storeObject(w, bucket, name, data, meta)
+		return s.storeObject(w, r, bucket, name, data, meta)
 	}
 }
 
@@ -152,7 +152,7 @@ func (s *Server) uploadMultipart(w http.ResponseWriter, r *http.Request, bucket 
 		writeError(w, badRequest("Required parameter 'name' not specified"))
 		return "storage upload: no name"
 	}
-	return s.storeObject(w, bucket, name, data, meta)
+	return s.storeObject(w, r, bucket, name, data, meta)
 }
 
 // startResumable answers with the session URI a client then PUTs to.
@@ -217,7 +217,7 @@ func (s *Server) resumableChunk(w http.ResponseWriter, r *http.Request, bucket s
 		return ""
 	}
 	s.objects.finishUpload(id)
-	return s.storeObject(w, bucket, up.name, up.data, up.meta)
+	return s.storeObject(w, r, bucket, up.name, up.data, up.meta)
 }
 
 // parseContentRange reads `bytes {start}-{end}/{total}`, where the total
@@ -240,24 +240,24 @@ func parseContentRange(header string, chunk int) (total int64, complete bool) {
 }
 
 // storeObject is where all three upload paths end.
-func (s *Server) storeObject(w http.ResponseWriter, bucket, name string, data []byte, meta map[string]any) string {
+func (s *Server) storeObject(w http.ResponseWriter, r *http.Request, bucket, name string, data []byte, meta map[string]any) string {
 	doc, aerr := s.objects.put(s, bucket, name, data, meta)
 	if aerr != nil {
 		writeError(w, aerr)
 		return "storage upload: " + aerr.Message
 	}
-	writeJSON(w, http.StatusOK, doc)
+	writeJSON(w, http.StatusOK, s.relinked(r, doc))
 	return ""
 }
 
-func (s *Server) getObjectMeta(w http.ResponseWriter, bucket, name string) string {
+func (s *Server) getObjectMeta(w http.ResponseWriter, r *http.Request, bucket, name string) string {
 	doc, ok := s.objects.meta(bucket, name)
 	if !ok {
 		writeError(w, errorf(http.StatusNotFound, "notFound", "NOT_FOUND",
 			"No such object: %s/%s", bucket, name))
 		return "storage object: not found"
 	}
-	writeJSON(w, http.StatusOK, doc)
+	writeJSON(w, http.StatusOK, s.relinked(r, doc))
 	return ""
 }
 
@@ -312,7 +312,7 @@ func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket stri
 	}
 	out := map[string]any{"kind": "storage#objects"}
 	if len(items) > 0 {
-		out["items"] = items
+		out["items"] = s.relinkedAll(r, items)
 	}
 	if len(prefixes) > 0 {
 		var list []string
@@ -337,7 +337,7 @@ func (s *Server) patchObject(w http.ResponseWriter, r *http.Request, bucket, nam
 			"No such object: %s/%s", bucket, name))
 		return "storage object patch: not found"
 	}
-	writeJSON(w, http.StatusOK, doc)
+	writeJSON(w, http.StatusOK, s.relinked(r, doc))
 	return ""
 }
 

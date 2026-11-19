@@ -341,13 +341,17 @@ func TestRealContainerLifecycle(t *testing.T) {
 func TestEveryContainerCanReachTheHostThatStartedIt(t *testing.T) {
 	args := runArgs(RunOptions{Name: "nimbus-test-1", Image: "alpine"})
 
-	found := ""
-	for i, a := range args {
-		if a == "--add-host" && i+1 < len(args) {
-			found = args[i+1]
+	// Searched for rather than compared against the LAST --add-host,
+	// which is what this asserted until data-plane aliases joined it on
+	// the same flag: a test that only passes while its subject happens to
+	// be last is one that breaks for the wrong reason.
+	found := false
+	for _, v := range addHosts(args) {
+		if v == "host.docker.internal:host-gateway" {
+			found = true
 		}
 	}
-	if found != "host.docker.internal:host-gateway" {
+	if !found {
 		t.Errorf("no host-gateway mapping in %v", args)
 	}
 }

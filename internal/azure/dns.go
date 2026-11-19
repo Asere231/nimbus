@@ -1,5 +1,12 @@
 package azure
 
+import (
+	"encoding/json"
+	"strings"
+
+	"github.com/Asere231/nimbus/internal/core"
+)
+
 // The hostnames Azure's data planes live under.
 //
 // These are Azure's business, not the core's: a client builds
@@ -40,4 +47,70 @@ func DNSNames() []string {
 		// own wildcard: the one above does not cover it.
 		"*." + ScmSuffix,
 	}
+}
+
+// DataPlaneHosts is every CONCRETE data-plane hostname that exists right
+// now: the names above are wildcards, which a certificate accepts and
+// /etc/hosts does not.
+//
+// A container cannot reach these otherwise. Nested *.localhost resolves to
+// 127.0.0.1, which inside a container is the container, and an SDK builds
+// its data-plane URL from the resource name and cannot be told to connect
+// elsewhere -- so without aliasing these to the host gateway, the real
+// Azure SDK could not reach blob storage from a Lambda or a Container App.
+// cmd/nimbus hands this to docker.SetHostExtras.
+//
+// Carries no port, because /etc/hosts holds hostnames. The metadata
+// document's suffixes DO carry our port, which is why they cannot be
+// reused here.
+//
+// Two limits worth stating rather than hiding:
+//   - A resource created AFTER a container started is not in that
+//     container's /etc/hosts. Nothing can be done from here; the container
+//     has to be replaced. In practice an apply creates the storage account
+//     before the thing that uses it, which is the common case.
+//   - A POD does not inherit its node's /etc/hosts, so this does not reach
+//     one. See docs/CROSS-CLOUD.md for the hostAliases a pod needs.
+func (s *Server) DataPlaneHosts() []string {
+	var out []string
+	for _, r := range s.store.List(func(r *core.Resource) bool { return r.Cloud == "azure" }) {
+		switch strings.ToLower(r.Type) {
+		case strings.ToLower(typeStorageAccount):
+			// Every service level is its own name, because a wildcard
+			// matches one label and these are each a level deeper.
+			for _, svc := range []string{"blob", "queue", "table", "file", "dfs"} {
+				out = append(out, r.Name+"."+svc+"."+StorageSuffix)
+			}
+		case strings.ToLower(typeKeyVault):
+			out = append(out, r.Name+"."+KeyVaultSuffix)
+		case strings.ToLower(typeFunctionApp):
+			// The deployment site is a second hostname, two labels deep.
+			out = append(out, r.Name+"."+FunctionsSuffix, r.Name+"."+ScmSuffix)
+		case strings.ToLower(typeContainerApp):
+			// Read back rather than recomposed: an app with no ingress
+			// block has no fqdn, as in real Azure, and inventing one
+			// here would disagree with what the client was told.
+			if fqdn := containerAppFQDN(r.Body); fqdn != "" {
+				out = append(out, fqdn)
+			}
+		}
+	}
+	return out
+}
+
+// containerAppFQDN reads properties.configuration.ingress.fqdn, or "".
+func containerAppFQDN(body []byte) string {
+	var doc struct {
+		Properties struct {
+			Configuration struct {
+				Ingress struct {
+					FQDN string `json:"fqdn"`
+				} `json:"ingress"`
+			} `json:"configuration"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return ""
+	}
+	return doc.Properties.Configuration.Ingress.FQDN
 }

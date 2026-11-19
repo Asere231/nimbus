@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased
+
+**Code in one cloud can reach a service in another, and now the real SDKs
+can too.** `docs/CROSS-CLOUD.md` is the measured write-up: five vantage
+points — a Lambda, an Azure Function App, a Cloud Run service, an EC2
+instance and an EKS pod — against ten targets in all three clouds, 49 of
+49, with the Azure legs using the real data-plane hostname and a verified
+certificate. Proven with `boto3`, `azure-storage-blob`,
+`google-cloud-storage` and, in a second language, `@aws-sdk/client-dynamodb`
+and `@azure/storage-blob`.
+
+Two things had to be fixed to get there.
+
+**Every container Nimbus starts now resolves Azure's addressable data
+planes and trusts the CA in front of them.** A blob URL is
+`{account}.blob.storage.nimbus.localhost`, built by the SDK from the
+account name, and nested `*.localhost` resolves to `127.0.0.1` — which
+inside a container is the container. So the real Azure SDK could not reach
+blob storage from a Lambda or a Container App at all; a pod could be fixed
+by hand with `hostAliases`, and nothing else could, because Nimbus builds
+the `docker run` command line. `docker.SetHostExtras` is a process-wide
+provider consulted before every run, rather than a field each cloud would
+have to remember, and `azure.DataPlaneHosts` supplies the concrete names.
+The CA is mounted at `/etc/nimbus/nimbus-ca.pem` in the same change,
+because fixing only the hostname moves the failure from "cannot resolve"
+to "certificate verify failed".
+
+**A GCP URL that a client FOLLOWS is built from the host the request came
+in on.** An endpoint override could not help here: `google-cloud-storage`
+uploaded fine, because it composes that URL itself, and then followed
+`mediaLink` to `localhost:4703` and was refused. Identity links are left
+alone — a Compute self link is a store id, and a per-request value would
+make one resource into two — so Terraform keeps reading the configured
+address and sees no diff.
+
+Also fixed: a PATCH may now create a site config (`Hook.PatchCreates`),
+which azurerm needs when it updates a function app.
+`internal/azure/functionapp_arm_test.go` had **never compiled** — Go reads
+a trailing `_arm` as the GOARCH suffix — so eight tests were silently
+excluded on every machine and all three CI legs;
+`TestNoGoFileIsExcludedFromTheBuild` now asks `go list` directly.
+
 ## 0.20.0 — 2026-11-18
 
 Milestone 20: Azure Functions. Azure runs a function now, which was the

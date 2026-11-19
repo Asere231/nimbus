@@ -81,6 +81,14 @@ type RunOptions struct {
 	Network    string
 	Volumes    map[string]string // host path or volume name -> container path
 	TmpFS      []string
+
+	// HostAliases and CAFile are filled by CLI.Run from the process-wide
+	// provider (SetHostExtras); a caller does not set them. They are
+	// fields rather than a call inside runArgs so that runArgs stays a
+	// pure function of its input, which is the only reason the flags can
+	// be asserted about at all.
+	HostAliases []string
+	CAFile      string
 }
 
 // Container is the subset of `docker inspect` Nimbus uses.
@@ -246,9 +254,26 @@ func (c *CLI) Available(ctx context.Context) error {
 	return nil
 }
 
+// runArgsFor is the command line Run really uses: the process-wide host
+// extras resolved onto the caller's options, then runArgs.
+//
+// It exists as its own step so a test can assert on the line Run passes to
+// docker instead of rebuilding it, which would only ever prove the test
+// agrees with itself. Resolved here rather than inside runArgs so that
+// stays a pure function of its input, and here rather than in each engine
+// so that no cloud can forget it.
+func (c *CLI) runArgsFor(opts RunOptions) []string {
+	extras := hostExtras()
+	opts.HostAliases = append(opts.HostAliases, extras.Aliases...)
+	if opts.CAFile == "" {
+		opts.CAFile = extras.CAFile
+	}
+	return runArgs(opts)
+}
+
 // Run starts a detached container.
 func (c *CLI) Run(ctx context.Context, opts RunOptions) (string, error) {
-	out, err := c.run(ctx, runArgs(opts)...)
+	out, err := c.run(ctx, c.runArgsFor(opts)...)
 	if err != nil {
 		return "", err
 	}
@@ -279,6 +304,22 @@ func runArgs(opts RunOptions) []string {
 	// it already has the main container's, which was started with one.
 	if !sharesNamespace(opts.Network) {
 		args = append(args, "--add-host", "host.docker.internal:host-gateway")
+		// The addressable data planes, for the same reason and with the
+		// same exclusion: a shared namespace has the main container's
+		// /etc/hosts, which was written with all of these.
+		for _, name := range opts.HostAliases {
+			args = append(args, "--add-host", name+":host-gateway")
+		}
+	}
+
+	// The CA goes in read-only, and the environment pointing at it is
+	// appended BEFORE opts.Env so a caller's own value wins -- docker
+	// takes the last -e for a given name.
+	if opts.CAFile != "" {
+		args = append(args, "-v", opts.CAFile+":"+CAPath+":ro")
+		for _, name := range caEnv() {
+			args = append(args, "-e", name+"="+CAPath)
+		}
 	}
 
 	if opts.Privileged {

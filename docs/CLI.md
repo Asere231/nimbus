@@ -202,6 +202,17 @@ nimbus can s3:GetObject arn:aws:s3:::nimbus-data/readme.txt
 nimbus can Microsoft.KeyVault/vaults/secrets/getSecret /subscriptions/.../vaults/kv
 ```
 
+## `nimbus gcp auth-token`
+
+Not for you to run. It is what the shim installed by
+`nimbus gcp install-auth-plugin` calls: it answers the Kubernetes
+ExecCredential protocol, reading `KUBERNETES_EXEC_INFO` so it only answers
+for clusters on this machine.
+
+It exists because `gke-gcloud-auth-plugin` cannot work offline — it swaps a
+Google OAuth credential for a Kubernetes token, and with
+`auth/disable_credentials` there is no credential to swap.
+
 ## `nimbus version`
 
 Prints the version. `--version` and `-v` work too.

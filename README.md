@@ -21,9 +21,11 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for what is and is not covered.
 
 | Document | For |
 |---|---|
+| **[docs/README.md](docs/README.md)** | **the handbook — start here, everything indexed** |
 | [INSTALL.md](docs/INSTALL.md) | requirements, build, certificates, where state lives, platform notes |
 | [CLIENTS.md](docs/CLIENTS.md) | pointing Terraform, `az`, `aws`, `gcloud` and `kubectl` at Nimbus |
 | [CLI.md](docs/CLI.md) | every `nimbus` command and flag |
+| [RESOURCES.md](docs/RESOURCES.md) | every resource type, data plane and endpoint, in all three clouds |
 | [IAM.md](docs/IAM.md) | permissions that are actually checked |
 | [CROSS-CLOUD.md](docs/CROSS-CLOUD.md) | calling one cloud from another, measured — and where it does not work |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | symptoms, causes and fixes |

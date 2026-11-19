@@ -345,14 +345,22 @@ jobs:
           LOG=/tmp/engines.log
           NIMBUS_DOCKER_TESTS=1 go test ./internal/engines/... -count=1 -v > "$LOG" 2>&1 || { tail -100 "$LOG"; exit 1; }
           REAL='TestARealContainerResolvesAnAliasToTheHost TestARealContainerCanReadTheMountedCA TestARealInstanceBootsRunsUserDataAndStaysUp TestRedeployingAFunctionThatHasRunSucceeds'
+          echo 'the real-daemon tests ran:'
           for t in $REAL; do
-            grep -q -- "--- PASS: $t" "$LOG" || {
+            # Printed from the SAME grep that verifies it, so the console
+            # shows exactly what was checked. A separate summary grep used
+            # to do this and matched only names beginning TestAReal, so a
+            # test outside that prefix was verified and then left out of
+            # the evidence -- green for the right reason, reported on the
+            # wrong one, which is the gap this whole step exists to close.
+            line=$(grep -- "--- PASS: $t" "$LOG" || true)
+            if [ -z "$line" ]; then
               echo "::error::$t did not PASS -- skipped, or it never ran"
               grep -- "$t" "$LOG" || echo '(the name appears nowhere)'
-              exit 1; }
+              exit 1
+            fi
+            echo "$line"
           done
-          echo 'the real-daemon tests ran:'
-          grep -E -- '--- (PASS|SKIP): TestAReal' "$LOG"
 
       - name: Start Nimbus
         run: |

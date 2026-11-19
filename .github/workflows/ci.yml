@@ -323,7 +323,30 @@ jobs:
           docker pull rancher/k3s:v1.34.12-k3s1
 
       - name: Engine tests against a real daemon
-        run: NIMBUS_DOCKER_TESTS=1 go test ./internal/engines/... -count=1
+        run: |
+          set -euo pipefail
+          # -v into a file, because a SKIPPED test passes and `go test`
+          # without -v says nothing about it. These tests exist to prove a
+          # REAL daemon behaves as the Fake claims, and each one skips
+          # ITSELF when NIMBUS_DOCKER_TESTS is unset or the daemon is
+          # unreachable -- so a typo in this step's environment, or a
+          # daemon that quietly went away, would leave the job green with
+          # nothing whatsoever to read.
+          #
+          # Measured, which is why this exists: adding two real-container
+          # tests moved this package from 15.554s to 16.369s, and +0.8s is
+          # not evidence either way. Asking for them by name is.
+          LOG=/tmp/engines.log
+          NIMBUS_DOCKER_TESTS=1 go test ./internal/engines/... -count=1 -v > "$LOG" 2>&1 || { tail -100 "$LOG"; exit 1; }
+          REAL='TestARealContainerResolvesAnAliasToTheHost TestARealContainerCanReadTheMountedCA TestARealInstanceBootsRunsUserDataAndStaysUp'
+          for t in $REAL; do
+            grep -q -- "--- PASS: $t" "$LOG" || {
+              echo "::error::$t did not PASS -- skipped, or it never ran"
+              grep -- "$t" "$LOG" || echo '(the name appears nowhere)'
+              exit 1; }
+          done
+          echo 'the real-daemon tests ran:'
+          grep -E -- '--- (PASS|SKIP): TestAReal' "$LOG"
 
       - name: Start Nimbus
         run: |

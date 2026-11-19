@@ -152,3 +152,65 @@ func TestNothingAddressableContributesNoNames(t *testing.T) {
 		t.Errorf("DataPlaneHosts() = %v with nothing addressable, want none", got)
 	}
 }
+
+// A container app WITH ingress contributes its fqdn, and WITHOUT the port.
+//
+// This is the case the test above did not cover, and CI found the bug for
+// me. `TestEveryAddressableDataPlaneGetsAConcreteHostname` already
+// asserted that no name carries a colon -- but it only created a storage
+// account and a vault, whose suffixes are constants, and the container
+// app test asserted the ABSENCE of a name. So the one source that really
+// does carry a port was never exercised by either, and docker refused the
+// flag outright:
+//
+//	invalid IP address in add-host: "4701:host-gateway"
+//
+// A container app's fqdn is read back from a body where the port is
+// already baked in -- the suffix carries it deliberately, as storage's
+// and keyVaultDns's do.
+func TestAContainerAppsFQDNContributesItsHostWithoutThePort(t *testing.T) {
+	s, rg := newTestServerWithGroup(t)
+	base := "/subscriptions/" + DefaultSubscriptionID + "/resourceGroups/" + rg + "/providers/"
+
+	putResource(t, s, base+"Microsoft.App/managedEnvironments/env1", `{"location":"eastus"}`)
+	putResource(t, s, base+"Microsoft.App/containerApps/app1",
+		`{"location":"eastus","properties":{"managedEnvironmentId":"`+base+
+			`Microsoft.App/managedEnvironments/env1","configuration":{"ingress":`+
+			`{"external":true,"targetPort":80}},"template":{"containers":`+
+			`[{"name":"c","image":"nginx:alpine"}]}}}`)
+
+	var found string
+	for _, h := range s.DataPlaneHosts() {
+		if strings.Contains(h, "app1") {
+			found = h
+		}
+	}
+	if found == "" {
+		t.Fatalf("an app with ingress contributed no name: %v", s.DataPlaneHosts())
+	}
+	if strings.Contains(found, ":") {
+		t.Errorf("%q carries a port; docker refuses it as an invalid IP address", found)
+	}
+	if !strings.HasPrefix(found, "app1."+ContainerAppsSuffix) {
+		t.Errorf("fqdn host = %q, want it under %q", found, ContainerAppsSuffix)
+	}
+}
+
+// hostOnly judges a NAME rather than parsing a URL, because these have no
+// scheme. A name it cannot read contributes nothing: a wrong alias is
+// worse than a missing one, since docker refuses the whole `docker run`
+// and the resource fails to start.
+func TestHostOnlyDropsAPortAndRefusesWhatItCannotRead(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"app1.containerapps.nimbus.localhost:4701", "app1.containerapps.nimbus.localhost"},
+		{"st1.blob.storage.nimbus.localhost", "st1.blob.storage.nimbus.localhost"},
+		{"", ""},
+		{"::1", ""},       // more than one colon: not a shape this understands
+		{"a:b:c", ""},     //
+		{"host:", "host"}, // a trailing separator still names the host
+	} {
+		if got := hostOnly(tc.in); got != tc.want {
+			t.Errorf("hostOnly(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

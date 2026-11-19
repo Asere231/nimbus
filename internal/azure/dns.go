@@ -73,26 +73,38 @@ func DNSNames() []string {
 //     one. See docs/CROSS-CLOUD.md for the hostAliases a pod needs.
 func (s *Server) DataPlaneHosts() []string {
 	var out []string
+	// Every name goes through hostOnly, by construction rather than by
+	// each case remembering. A container app's fqdn is read back from a
+	// body where the port was already baked in -- the suffix carries it
+	// deliberately, as storage's and keyVaultDns's do -- so one case
+	// genuinely needs stripping, and the next one to need it will not
+	// announce itself. CI found this with a flat refusal from docker:
+	// `invalid IP address in add-host: "4701:host-gateway"`.
+	add := func(names ...string) {
+		for _, n := range names {
+			if h := hostOnly(n); h != "" {
+				out = append(out, h)
+			}
+		}
+	}
 	for _, r := range s.store.List(func(r *core.Resource) bool { return r.Cloud == "azure" }) {
 		switch strings.ToLower(r.Type) {
 		case strings.ToLower(typeStorageAccount):
 			// Every service level is its own name, because a wildcard
 			// matches one label and these are each a level deeper.
 			for _, svc := range []string{"blob", "queue", "table", "file", "dfs"} {
-				out = append(out, r.Name+"."+svc+"."+StorageSuffix)
+				add(r.Name + "." + svc + "." + StorageSuffix)
 			}
 		case strings.ToLower(typeKeyVault):
-			out = append(out, r.Name+"."+KeyVaultSuffix)
+			add(r.Name + "." + KeyVaultSuffix)
 		case strings.ToLower(typeFunctionApp):
 			// The deployment site is a second hostname, two labels deep.
-			out = append(out, r.Name+"."+FunctionsSuffix, r.Name+"."+ScmSuffix)
+			add(r.Name+"."+FunctionsSuffix, r.Name+"."+ScmSuffix)
 		case strings.ToLower(typeContainerApp):
 			// Read back rather than recomposed: an app with no ingress
 			// block has no fqdn, as in real Azure, and inventing one
 			// here would disagree with what the client was told.
-			if fqdn := containerAppFQDN(r.Body); fqdn != "" {
-				out = append(out, fqdn)
-			}
+			add(containerAppFQDN(r.Body))
 		}
 	}
 	return out
@@ -113,4 +125,27 @@ func containerAppFQDN(body []byte) string {
 		return ""
 	}
 	return doc.Properties.Configuration.Ingress.FQDN
+}
+
+// hostOnly drops a :port, because /etc/hosts holds hostnames and docker
+// refuses anything else outright: `invalid IP address in add-host:
+// "4701:host-gateway"`. Several Nimbus suffixes carry the port on
+// purpose, so a name read back from a resource body may well have one.
+//
+// Judged as a NAME, not parsed as a URL: these have no scheme. The last
+// colon is the port separator, and a bracketed IPv6 literal cannot occur
+// here -- every one of these is a DNS name -- so a name with more than
+// one colon is refused rather than guessed at.
+func hostOnly(name string) string {
+	if name == "" {
+		return ""
+	}
+	i := strings.LastIndex(name, ":")
+	if i < 0 {
+		return name
+	}
+	if strings.Contains(name[:i], ":") {
+		return "" // not a shape this understands; better nothing than wrong
+	}
+	return name[:i]
 }

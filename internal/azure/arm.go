@@ -59,6 +59,18 @@ type Hook struct {
 	// delete. AfterDelete still runs synchronously for bookkeeping; this is
 	// for stopping engines, which can be slow.
 	Deprovision func(s *Server, t target)
+	// PatchCreates lets a PATCH create the resource instead of 404ing.
+	//
+	// Refusing a PATCH of something absent is right for an ordinary
+	// resource -- you cannot patch what is not there -- and wrong for a
+	// sub-resource that ARM treats as always existing alongside its
+	// parent. A site's `config/web` is one: azurerm PATCHes it when
+	// UPDATING a function app, nothing had ever been stored there, and
+	// the apply failed with
+	//
+	//	updating Site Config for Linux App Service ...: unexpected status
+	//	404 ... 'Microsoft.Web/sites/config/web' was not found
+	PatchCreates bool
 	// SkipSpecDefaults stops applySpecDefaults filling this type's fields
 	// from Microsoft's published specs.
 	//
@@ -247,11 +259,13 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request, t target, patch boo
 		_ = json.Unmarshal(res.Body, &existing)
 	}
 	if patch {
-		if existing == nil {
+		if existing == nil && !s.hookFor(t.Type).PatchCreates {
 			notFound(w, t)
 			return ""
 		}
-		body = mergeMaps(deepCopy(existing), body)
+		if existing != nil {
+			body = mergeMaps(deepCopy(existing), body)
+		}
 	}
 
 	// Canonical fields every ARM resource carries.

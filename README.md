@@ -25,6 +25,7 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for what is and is not covered.
 | [CLIENTS.md](docs/CLIENTS.md) | pointing Terraform, `az`, `aws`, `gcloud` and `kubectl` at Nimbus |
 | [CLI.md](docs/CLI.md) | every `nimbus` command and flag |
 | [IAM.md](docs/IAM.md) | permissions that are actually checked |
+| [CROSS-CLOUD.md](docs/CROSS-CLOUD.md) | calling one cloud from another, measured — and where it does not work |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | symptoms, causes and fixes |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | how it works, and how to add a resource type |
 | [GCLOUD.md](docs/GCLOUD.md) | the `gcloud` command set |

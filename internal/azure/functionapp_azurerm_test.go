@@ -219,3 +219,39 @@ func TestAZipDeployWithoutDependenciesIsRefused(t *testing.T) {
 		t.Errorf("the refusal does not say what is missing: %s", rec.Body)
 	}
 }
+
+// azurerm PATCHes a site's config on UPDATE, and a config view has
+// nothing stored to patch.
+//
+// `put(..., patch: true)` refuses when nothing exists, which is right for
+// an ordinary resource -- you cannot patch what is not there -- and wrong
+// for these: in ARM a site's `config/web` exists as soon as the site
+// does. So an update of a function app failed with
+//
+//	updating Site Config for Linux App Service ...: unexpected status 404
+//	(404 Not Found) ... 'Microsoft.Web/sites/config/web' was not found
+//
+// Found by adding app settings to an EXISTING function app, which is the
+// first time anything exercised the update path: create, plan, restart
+// and destroy were all covered and none of them PATCHes.
+func TestPatchingASiteConfigCreatesIt(t *testing.T) {
+	s, rg := newTestServerWithGroup(t)
+	site := "/subscriptions/" + DefaultSubscriptionID + "/resourceGroups/" + rg +
+		"/providers/Microsoft.Web/sites/fn9"
+	putResource(t, s, site, `{"location":"eastus","kind":"functionapp,linux",
+		"properties":{"siteConfig":{"linuxFxVersion":"PYTHON|3.11"}}}`)
+
+	// Nothing has ever been written to config/web: azurerm PATCHes it.
+	req := httptest.NewRequest(http.MethodPatch,
+		site+"/config/web?api-version=2024-11-01",
+		strings.NewReader(`{"properties":{"alwaysOn":false}}`))
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+
+	if rec.Code == 404 {
+		t.Fatalf("PATCH of a site config 404s, so updating a function app fails: %s", rec.Body)
+	}
+	if rec.Code != 200 {
+		t.Fatalf("PATCH config/web = %d, want 200: %s", rec.Code, rec.Body)
+	}
+}

@@ -377,6 +377,11 @@ func registerFunctionAppHooks(s *Server) {
 	// why the generated client accepts only that.
 	s.registerHook(typeSiteConfig, Hook{
 		CreateStatus: 200,
+		// A PATCH may CREATE one of these. azurerm patches config/web
+		// when it updates a function app, and in ARM a site's config
+		// exists as soon as the site does -- so refusing the patch
+		// because nothing was stored failed the update.
+		PatchCreates: true,
 		BeforePut:    beforeSiteConfigPut,
 	})
 

@@ -184,10 +184,28 @@ the server answered 503, which means it is not ready
 Check `docker logs nimbus-fnapp-...`
 ```
 
-Nothing in Nimbus can fix that; it is the Functions host under QEMU. Every
-other Nimbus feature works natively on Apple Silicon. If you need Azure
-Functions specifically, use an amd64 machine — CI runs this example on
-`ubuntu-latest` every push.
+**Rosetta does not help — do not spend time on it.** It is the obvious
+thing to try, since Docker's default emulator is poor at .NET and the
+Functions host is .NET. It was tried properly (Rosetta installed, Docker
+restarted, `UseVirtualizationFrameworkRosetta: true` confirmed) and the
+failure only *changed*:
+
+| Emulator | What the host reports |
+|---|---|
+| QEMU (default) | `1 functions loaded` → `Did not find functions with language [python]` |
+| Rosetta | `0 functions loaded` → `WorkerConfig for runtime: python not found` |
+
+Both are fatal and both sit at 503. It is not a missing file:
+`/azure-functions-host/workers/python/` holds `worker.config.json` and
+`3.11/` inside the running container. The host and the Python worker are
+separate processes negotiating over gRPC, and that is more than a
+translation layer gets right.
+
+Nothing in Nimbus can fix it. Every other Nimbus feature — all 19
+examples, three Kubernetes clusters, Lambda, Container Apps, Cloud Run,
+VMs and every data plane — works natively on Apple Silicon. If you need
+Azure Functions specifically, use an amd64 machine; CI runs this example
+on `ubuntu-latest` every push.
 
 ### A `*.localhost` address fails from inside a container, but only with curl
 

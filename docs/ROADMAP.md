@@ -16,7 +16,10 @@ is the only image Nimbus pulls that does not. A pull or build with no
 native manifest now retries under `linux/amd64`. Azure Functions still
 does not RUN under emulation -- the host faults and sits at 503 -- so an
 amd64 host is the requirement, proven not to be image drift because CI
-passed the identical digest on amd64 two days earlier. Two bugs found
+passed the identical digest on amd64 two days earlier. **Rosetta was
+tried and does not fix it**, only changes the failure; the decision is to
+accept the limitation rather than abandon "real clients are the spec" by
+serving the trigger ourselves. See CLAUDE.md for the alternatives weighed. Two bugs found
 alongside it were not about architecture at all: a failed build reported
 `Dockerfile:3` and nothing else on every platform, and the readiness
 probe accepted a 503 that means "not ready", which is how an emulated

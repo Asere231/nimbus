@@ -330,12 +330,40 @@ plainly as a bug; the exception was an architecture nobody had pulled on.
   `vm.Engine.Reattach`.
 - **Azure Functions still does not WORK under emulation, and that is the
   finding.** The image pulls, the build succeeds, the container runs and
-  the web host binds -- and the script host faults with `Did not find
-  functions with language [python]` and stays at 503 indefinitely, idle
-  at ~1% CPU rather than grinding. **Proven not to be image drift**: CI
-  passed the identical digest `sha256:5ba1aed559fb` on amd64 two days
-  earlier, so same image, different architecture. An amd64 host is the
-  requirement.
+  the web host binds -- and the script host faults and stays at 503
+  indefinitely, idle at ~1% CPU rather than grinding. **Proven not to be
+  image drift**: CI passed the identical digest `sha256:5ba1aed559fb` on
+  amd64 two days earlier, so same image, different architecture. An
+  amd64 host is the requirement.
+- **ROSETTA DOES NOT FIX IT, and that is worth knowing before anyone
+  spends an afternoon on it.** It was the obvious candidate -- QEMU is
+  poor at .NET and the Functions host is .NET -- so it was tried
+  properly: `softwareupdate --install-rosetta`, Docker Desktop restarted,
+  `UseVirtualizationFrameworkRosetta: true` confirmed in
+  `settings-store.json` afterwards. The failure **changed and persisted**:
+  under QEMU the host reports `1 functions loaded` then `Did not find
+  functions with language [python]`; under Rosetta it reports `0
+  functions loaded` then `WorkerConfig for runtime: python not found`.
+  Both are fatal and both sit at 503.
+- **It is not a missing file.** `/azure-functions-host/workers/python/`
+  holds `worker.config.json` and `3.11/` inside the running container, so
+  the image is intact and the .NET host simply cannot bring up its Python
+  worker under either emulator. The host and the worker are separate
+  processes negotiating over gRPC, which is more than a single binary
+  translation layer is being asked to get right.
+- **The decision is to ACCEPT it rather than work around it**, and the
+  alternatives were weighed rather than skipped. Switching base image is
+  impossible: python 3.11, 3.12, node, dotnet and base are all amd64-only.
+  Serving the HTTP trigger ourselves and invoking the handler directly
+  would work on arm64 and was rejected -- it abandons "real clients are
+  the spec", and Milestone 20's central finding was that the shortcut
+  (a bind mount) silently reported `0 functions found` while the real host
+  worked, so a second shortcut is exactly the wrong lesson to draw.
+  Building an arm64 host from source needs the .NET SDK and the network
+  at build time, which breaks the offline rule, and means maintaining a
+  fork of Microsoft's runtime. So: the apply fails naming what the server
+  answered, `docs/TROUBLESHOOTING.md` says an amd64 host is required, and
+  CI exercises the example on `ubuntu-latest` every push.
 - **`runCombined` kept only the FIRST line of a failed command, and
   BuildKit prints the cause LAST.** So every failed build on every
   platform reported `Dockerfile:3` and nothing else -- a helper quietly

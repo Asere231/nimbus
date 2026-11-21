@@ -11,6 +11,9 @@ run on Apple Silicon.
   manifest now retries under `linux/amd64`. Azure Functions still does not
   run under emulation — the host faults and stays at 503 — so an amd64
   host remains the requirement, and `docs/TROUBLESHOOTING.md` says so.
+  Rosetta was tried and does not help — it changes the failure without
+  fixing it — so that is recorded too, to save the next person the
+  afternoon.
 - **A failed `docker build` reported `Dockerfile:3` and nothing else**, on
   every platform: the helper kept only the first line of the output while
   BuildKit prints the cause last.

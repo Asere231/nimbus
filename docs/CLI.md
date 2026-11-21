@@ -171,6 +171,23 @@ is at `/var/log/nimbus-boot.log` on every cloud — EC2 calls it user data,
 GCE a startup script and Azure custom data, so the file is named after none
 of them.
 
+**The metadata service is not at `169.254.169.254`.** That address is
+link-local and a container cannot reach it without root, so Nimbus serves
+each instance's metadata on its own port and puts the address in the
+environment — which is where every current SDK looks anyway:
+
+```bash
+nimbus ssh web -- sh -c 'wget -qO- "$AWS_EC2_METADATA_SERVICE_ENDPOINT/latest/meta-data/instance-id"'
+```
+
+GCE's variable is `GCE_METADATA_HOST` and carries no scheme; the plugin
+decides, because the two clouds disagree about both. Reaching for the
+real IMDS address by hand gets `connection refused`, which looks like a
+broken metadata service and is not one.
+
+Note also that an instance is whatever image the configuration asked for,
+and the examples use `alpine`, which has **`wget` but no `curl`**.
+
 ## `nimbus plan-view PLAN`
 
 Overlays a `terraform plan` on the graph before you apply it.

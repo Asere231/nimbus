@@ -86,6 +86,15 @@ func sshCLI(args []string) {
 
 	cmd := exec.Command("docker", dockerArgs...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	// Docker Desktop prints a "What's next: Try Docker Debug ... ->
+	// docker debug nimbus-ec2-web-b640338a" hint after an interactive
+	// exec. It is addressed to someone who was thinking about a
+	// CONTAINER, and this command exists so that nobody has to: it
+	// leaks the generated container name as the parting words of a
+	// session about an instance. Measured on Docker Desktop 29.9.2 on
+	// macOS; the variable is the documented way to turn it off and is
+	// ignored by versions that never print it.
+	cmd.Env = append(os.Environ(), "DOCKER_CLI_HINTS=false")
 	if err := cmd.Run(); err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {

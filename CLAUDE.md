@@ -408,6 +408,28 @@ plainly as a bug; the exception was an architecture nobody had pulled on.
   (`%52eadme.txt` beside `readme.txt`), keys containing `:`, `?` and `*`
   store and read back, and all of it survives a restart with nothing
   reported as unservable.
+- **`nimbus ssh` interactively is the one thing a tool cannot drive, and a
+  person running it found two things in one session.** Tab completion
+  works, so the TTY is genuinely allocated -- that is the assertion worth
+  making, because a completion listing cannot be produced without one.
+  Ctrl-C interrupts the command rather than the session, and `exit`
+  returns cleanly. What a tool would never have seen: Docker Desktop
+  prints "What's next: Try Docker Debug ... -> docker debug
+  nimbus-ec2-web-b640338a" after an interactive exec, which ends a
+  session about an INSTANCE by naming the container, in a command that
+  exists so nobody has to think about one. `DOCKER_CLI_HINTS=false` is
+  the documented switch and is now set.
+- **The metadata service is deliberately NOT at `169.254.169.254`, and
+  reaching for it looks like a bug.** The address is link-local and a
+  container cannot reach it without root, so each instance's metadata is
+  served on its own port with the address in the environment --
+  `AWS_EC2_METADATA_SERVICE_ENDPOINT` for EC2, `GCE_METADATA_HOST` for
+  GCE, which disagree about both the name and whether the value carries a
+  scheme. The boot script has said so in a comment since Milestone 11 and
+  it was still the first thing tried by hand; `connection refused` reads
+  as a broken metadata service rather than the wrong address. Now in
+  `docs/CLI.md`, where someone reading about `nimbus ssh` will meet it.
+  The examples run `alpine`, which has `wget` and no `curl`.
 - **A GKE destroy briefly goes UP before going to zero.** Reproducible:
   one container while the cluster runs, TWO at the instant `terraform
   destroy` returns, none three seconds later. It converges, so nothing

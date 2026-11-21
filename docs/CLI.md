@@ -219,6 +219,42 @@ nimbus can s3:GetObject arn:aws:s3:::nimbus-data/readme.txt
 nimbus can Microsoft.KeyVault/vaults/secrets/getSecret /subscriptions/.../vaults/kv
 ```
 
+## `nimbus gcp install-auth-plugin`
+
+Installs a `gke-gcloud-auth-plugin` shim, so `gcloud container clusters
+get-credentials` and any kubeconfig that names the plugin work against
+Nimbus.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--dir PATH` | `~/.nimbus/bin` | where to write the shim |
+
+```bash
+nimbus gcp install-auth-plugin
+nimbus gcp install-auth-plugin --dir ~/bin    # somewhere already on PATH
+```
+
+The directory must be on your `PATH` for `kubectl` to find the shim; the
+command prints the line to add. The shim is a few lines of shell that
+`exec`s `nimbus gcp auth-token`, naming the Nimbus binary by absolute
+path — so upgrading Nimbus in place keeps working, and moving it does
+not.
+
+**It is safe on a machine that also talks to real GKE.** The cluster
+being authenticated arrives in `KUBERNETES_EXEC_INFO`, so the shim
+answers only for clusters on this machine and `exec`s the real
+`gke-gcloud-auth-plugin` for anything else. If a cluster is not a Nimbus
+one and no real plugin is installed, it says so rather than failing
+obscurely.
+
+Prefer `nimbus gcp kubeconfig CLUSTER` if you only want to talk to a
+cluster: it writes a kubeconfig that needs no plugin at all. This command
+is for the case where something else — a tool, a script, an existing
+kubeconfig — insists on the real plugin's name.
+
+See `nimbus gcp auth-token` below for what the shim calls and why the
+real plugin cannot work here.
+
 ## `nimbus gcp auth-token`
 
 Not for you to run. It is what the shim installed by
@@ -232,4 +268,21 @@ Google OAuth credential for a Kubernetes token, and with
 
 ## `nimbus version`
 
-Prints the version. `--version` and `-v` work too.
+Prints the version. `--version` and `-v` work too. Exits 0.
+
+## `nimbus help`
+
+Prints the command list. `--help` and `-h` do the same.
+
+| Where it goes | Exit code | When |
+|---|---|---|
+| stdout | 0 | you asked for help |
+| stderr | 2 | you typed something that is not a command |
+
+The split is deliberate, and it matters most in PowerShell, where writing
+to stderr is the difference between plain text and a red
+`NativeCommandError` block — so a script can tell a help request from a
+typo without parsing anything.
+
+Each command takes `--help` of its own, which prints that command's flags
+and exits 0.

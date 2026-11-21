@@ -25,9 +25,43 @@ alongside it were not about architecture at all: a failed build reported
 probe accepted a 503 that means "not ready", which is how an emulated
 function app reported a successful apply and served nothing.
 
-**Still to do:** Linux by hand (CI covers it only as far as its jobs go),
-and `nimbus ssh` interactively on every platform -- it allocates a TTY
-and cannot be driven by a tool, so a person has to try it.
+`nimbus ssh` interactively is **done on macOS**, and it had to be a
+person: the interactive form allocates a TTY, so no tool can drive it.
+Tab completion works, which is the assertion worth making -- a completion
+listing cannot be produced without a TTY. It also turned up the only bug
+a test could never have found: Docker Desktop printed
+`What's next: Try Docker Debug ... -> docker debug nimbus-ec2-web-...`
+on exit, ending a session about an INSTANCE by naming the container, in
+a command that exists so nobody has to think about one.
+
+**DELIBERATELY UNMET: Linux, by a person.** This is a gap, not an
+oversight, and it is recorded here rather than left looking finished.
+
+CI runs Linux on every push -- unit tests, `go test -race`, and every
+Docker-backed example, on Docker ENGINE rather than Desktop, which is the
+discriminator that caught the `host.docker.internal` bug. So the
+*mechanisms* are covered. What is NOT covered is the half that found
+three of this milestone's bugs on the other two platforms:
+
+- the interactive `nimbus ssh`, which no tool can drive;
+- `nimbus cert` followed as written, with a real `update-ca-certificates`
+  and a Terraform apply afterwards -- CI sets `SSL_CERT_FILE` instead,
+  which is a different mechanism and Milestone 18 proved the two are not
+  interchangeable;
+- the exploratory parts: running an example, reading the visualizer in a
+  browser, noticing something that was never asserted about.
+
+**What it would cost to close:** a session on a Linux machine with Docker
+and a browser, working through the same list
+(`docs/prompts/m21-cross-platform.md`) that macOS was held to. Anyone
+picking it up should start from the "THE CHANGES MADE FOR WINDOWS"
+section of that prompt, since those are the decisions whose cost on Linux
+is still unmeasured by a person.
+
+**What to distrust until then:** nothing specific is suspected -- which
+is exactly what was true of macOS before this milestone, and it had three
+bugs waiting. The honest statement is that Linux is proven to the depth
+CI reaches and no further.
 
 **Milestone 20 is done.** Azure runs a
 FUNCTION now, which was the last thing it could not do: an

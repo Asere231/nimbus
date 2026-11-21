@@ -167,6 +167,45 @@ The build itself needs no network — a local base image plus a `COPY` —
 which is why Nimbus pulls the base through its ordinary path first rather
 than letting `docker build` reach a registry.
 
+### Azure Functions on an Apple Silicon Mac
+
+**It does not work, and an amd64 host is the requirement.** Microsoft
+publishes the Functions host image for `linux/amd64` only — it is the one
+image Nimbus pulls without an arm64 build, where Lambda's base images,
+k3s, nginx, debian and registry all have one.
+
+Nimbus falls back to `--platform linux/amd64` so the pull and the build
+succeed, and under emulation the container starts and binds its port —
+but the script host faults with `Did not find functions with language
+[python]` and serves 503 for ever. The apply fails saying so:
+
+```
+the server answered 503, which means it is not ready
+Check `docker logs nimbus-fnapp-...`
+```
+
+Nothing in Nimbus can fix that; it is the Functions host under QEMU. Every
+other Nimbus feature works natively on Apple Silicon. If you need Azure
+Functions specifically, use an amd64 machine — CI runs this example on
+`ubuntu-latest` every push.
+
+### A `*.localhost` address fails from inside a container, but only with curl
+
+`curl` implements RFC 6761 itself: it resolves **any** `*.localhost` name
+straight to loopback without asking the resolver, so it ignores the
+`/etc/hosts` entries Nimbus adds for Azure data-plane hostnames. Inside a
+container that looks like the alias is broken:
+
+```
+* connect to ::1 port 4701 failed: Connection refused
+```
+
+while `getent ahosts acct.blob.storage.nimbus.localhost` plainly returns
+the gateway address. It is curl, not the alias, and not libc — measured
+the same on glibc and musl. Python, Node and Go use `getaddrinfo` and
+reach it normally. **Probe with a real client rather than curl**, or ask
+curl for the address explicitly with `--resolve`.
+
 ## Docker
 
 ### `docker is not available`

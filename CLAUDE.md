@@ -297,6 +297,106 @@ only ever show up on a machine you are not using.
 - **`--add-host` is a START-TIME flag, so a container resolves only what existed when it started — and the ordering fixes itself in practice.** Measured on the first run: an EC2 instance whose config never referenced the storage account was created alongside it and failed all four Azure targets with connection refused, while the Lambda, which names the account in its environment, had every alias and passed. Recreated afterwards, the instance passed 10/10. A workload that USES a resource references it, which is what orders the apply, so the gap is real and narrow. A POD gets none of this either way: kubelet GENERATES each pod's /etc/hosts, so the node's aliases never reach it and `hostAliases` is the only way in. A CoreDNS override would be the better fix and is not built.
 - **A CI job added in a close-out and never looked at can be red for three milestones.** The two AWS Docker jobs went in with M8 and had never once passed; the GKE job failed on its first run. All of it was the `host.docker.internal` gap, invisible on the Mac everything was proven on. Reading `gh run list` is part of closing out a milestone, not an optional extra.
 
+### macOS on Apple Silicon, actually run (Milestone 21)
+
+Milestones 18 to 20 were driven on one Windows machine. This is the other
+two platforms checking what those decisions cost. Most of the ten
+Windows-driven changes cost NOTHING here, which is worth recording as
+plainly as a bug; the exception was an architecture nobody had pulled on.
+
+- **`mcr.microsoft.com/azure-functions/python` has NO arm64 build, and it
+  is the only image Nimbus pulls that does not.** Measured against the
+  registry: Lambda's `public.ecr.aws/lambda/*`, `rancher/k3s`, `nginx`,
+  `debian` and `registry` all carry linux/arm64. So the blast radius is
+  exactly one feature, and on an Apple Silicon Mac -- most Macs now --
+  the apply died at the pull with docker's own `no matching manifest`.
+  Invisible from Windows (amd64) and from CI (every Docker job is
+  `ubuntu-latest`).
+- **The fallback is a RETRY, not a registry probe.** A probe would cost a
+  round trip on every pull to answer a question that is almost always
+  "yes, natively", and would need its own idea of this host's
+  architecture, which docker already has. Falling back only after docker
+  itself says the native image is missing is cheaper and self-correcting:
+  the day an arm64 build is published, the native pull succeeds and the
+  fallback never runs.
+- **The memo of what needed emulating cannot be the mechanism**, because
+  the thing that fills it is skipped. `Pull` only runs when the image is
+  NOT already local, so after one deploy -- or any restart -- nothing
+  records that the base needs emulating, and a build that trusted the
+  memo chose the host's architecture and failed on the Dockerfile's FROM.
+  Measured: the first apply succeeded and the second failed at
+  `Dockerfile:3`. State discovered in one place and needed in another,
+  lost across a restart; the same shape as the log-group index and
+  `vm.Engine.Reattach`.
+- **Azure Functions still does not WORK under emulation, and that is the
+  finding.** The image pulls, the build succeeds, the container runs and
+  the web host binds -- and the script host faults with `Did not find
+  functions with language [python]` and stays at 503 indefinitely, idle
+  at ~1% CPU rather than grinding. **Proven not to be image drift**: CI
+  passed the identical digest `sha256:5ba1aed559fb` on amd64 two days
+  earlier, so same image, different architecture. An amd64 host is the
+  requirement.
+- **`runCombined` kept only the FIRST line of a failed command, and
+  BuildKit prints the cause LAST.** So every failed build on every
+  platform reported `Dockerfile:3` and nothing else -- a helper quietly
+  defeating its only caller's own comment about output being "unreadable
+  with half of it missing". It also meant the new retry could not see the
+  text it matches on. Not an arm64 bug; arm64 is only where it got
+  noticed.
+- **`waitReady` accepted ANY HTTP status, including a 503 that means "not
+  ready".** Right for an ordinary service -- an image whose root path is
+  unserved is normal, and that comment stays true -- and wrong for the
+  Azure Functions host, which serves 503 "Function host is not running"
+  from the moment its web host binds and for ever if the script host
+  faults. That is how an emulated function app reported a SUCCESSFUL
+  apply and then served nothing. `Service.NotReadyStatus` is the opt-in;
+  a caller that does not set it is unchanged.
+- **`curl` bypasses `/etc/hosts` for any `*.localhost` name**, and it will
+  mislead anyone debugging the Azure data-plane aliases. RFC 6761 says
+  `.localhost` is loopback, and curl implements that itself rather than
+  asking the resolver -- so from inside a container `curl
+  https://acct.blob.storage.nimbus.localhost:4701/` reports connection
+  refused to `::1` and `127.0.0.1` while `/etc/hosts` plainly holds the
+  gateway address and `getent ahosts` returns it. Measured on both glibc
+  (debian) and musl (alpine), so it is curl and not libc. **Python,
+  Node and Go use `getaddrinfo` and get the gateway**, which is why the
+  cross-cloud matrix passed with real SDKs: a stdlib `urllib` request to
+  that same hostname, TLS verified against the mounted CA, answered 200
+  from inside a container on macOS. Probe with a real client, not curl.
+- **Everything else the Windows milestones added costs nothing here.** A
+  fresh clone is gofmt-clean with no CRLF anywhere; `nimbus cert` prints
+  the macOS `security add-trusted-cert` line and the keychain is what
+  Terraform then trusts; a fresh CA spans exactly 3653d and a fresh
+  server certificate exactly 397d, measured in a CST (-0600) zone so the
+  `AddDate` daylight-saving trap would have shown; `--add-host
+  host.docker.internal:host-gateway` reaches the host; the mounted CA is
+  readable; and redeploying a Lambda whose handler changed succeeds with
+  the NEW code running -- the read-only `/var/task` mount costs macOS
+  nothing, as expected, since Docker Desktop never had the bug.
+- **APFS is case-insensitive, so `internal/fsname` is load-bearing on
+  macOS and not overhead.** Confirmed directly -- `Case.txt` and
+  `case.txt` are one file on this disk -- and then end to end: two S3
+  keys differing only in case round-trip as two objects
+  (`%52eadme.txt` beside `readme.txt`), keys containing `:`, `?` and `*`
+  store and read back, and all of it survives a restart with nothing
+  reported as unservable.
+- **A GKE destroy briefly goes UP before going to zero.** Reproducible:
+  one container while the cluster runs, TWO at the instant `terraform
+  destroy` returns, none three seconds later. It converges, so nothing
+  leaks -- but a container count taken the moment destroy exits is not
+  zero, which is exactly what a CI step would do. The EC2 note above
+  records the same shape from the other direction.
+- **A stale Terraform state against a memory-only Nimbus that has
+  restarted produces a confusing failure in a DIFFERENT provider.**
+  `azure-app` failed with the kubernetes provider dialling
+  `http://localhost/api/...` -- its default when `host` is empty --
+  because the refresh found every Azure resource gone, planned a
+  recreate, and the provider was then configured from an unknown
+  `kube_config`. From a clean state it applies in ONE apply, 13
+  resources, with the pod Running. The lesson is about measurement
+  rather than code: restart Nimbus and `rm terraform.tfstate` together,
+  or not at all.
+
 ### Windows, actually run (Milestone 18)
 
 Nimbus had never been RUN on Windows before this. The CI leg compiled it and

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+Milestone 21: everything Milestones 18 to 20 built on one Windows machine,
+run on Apple Silicon.
+
+- **Nimbus could not build an image on arm64.**
+  `mcr.microsoft.com/azure-functions/python` has no arm64 build, and it is
+  the only image Nimbus pulls that does not. A pull or build with no native
+  manifest now retries under `linux/amd64`. Azure Functions still does not
+  run under emulation — the host faults and stays at 503 — so an amd64
+  host remains the requirement, and `docs/TROUBLESHOOTING.md` says so.
+- **A failed `docker build` reported `Dockerfile:3` and nothing else**, on
+  every platform: the helper kept only the first line of the output while
+  BuildKit prints the cause last.
+- **The readiness probe accepted a 503 that means "not ready"**, which is
+  how an emulated function app reported a successful apply and then served
+  nothing. Opt-in per service, so an ordinary one is unchanged.
+- Verified on macOS: all 19 Terraform examples apply, plan clean and
+  destroy leaving no containers; `examples/multicloud` brings up three
+  clusters; a Lambda redeploys with changed code; a container reaches all
+  three clouds with Azure over its real data-plane hostname, TLS verified.
+
 **A Lambda's code is mounted read-only, as it is in real AWS**, which fixes
 a bug that made redeploying a function impossible on Linux. The container
 runs as root, so a Python handler's first import left `__pycache__` owned

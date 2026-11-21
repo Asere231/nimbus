@@ -1,6 +1,32 @@
 # Roadmap
 
-**Current: nothing scheduled. Milestone 20 is done.** Azure runs a
+**Current: Milestone 21 is done on macOS; Linux by hand is what is
+left** (`docs/prompts/m21-cross-platform.md`). Everything Milestones 18
+to 20 added on one Windows machine has now been exercised on Apple
+Silicon: all 19 Terraform examples apply, plan clean and destroy with no
+containers left, `examples/multicloud` brings up three clusters in 33
+seconds, a Lambda redeploys with changed code, and a container reaches
+all three clouds -- Azure over its real data-plane hostname with TLS
+verified. Nine of the ten Windows-driven changes cost macOS **nothing**,
+which is recorded as plainly as a bug would be.
+
+The tenth was an architecture nobody had pulled on:
+**`mcr.microsoft.com/azure-functions/python` has no arm64 build**, and it
+is the only image Nimbus pulls that does not. A pull or build with no
+native manifest now retries under `linux/amd64`. Azure Functions still
+does not RUN under emulation -- the host faults and sits at 503 -- so an
+amd64 host is the requirement, proven not to be image drift because CI
+passed the identical digest on amd64 two days earlier. Two bugs found
+alongside it were not about architecture at all: a failed build reported
+`Dockerfile:3` and nothing else on every platform, and the readiness
+probe accepted a 503 that means "not ready", which is how an emulated
+function app reported a successful apply and served nothing.
+
+**Still to do:** Linux by hand (CI covers it only as far as its jobs go),
+and `nimbus ssh` interactively on every platform -- it allocates a TTY
+and cannot be driven by a tool, so a person has to try it.
+
+**Milestone 20 is done.** Azure runs a
 FUNCTION now, which was the last thing it could not do: an
 `azurerm_linux_function_app` applies, `curl` of its hostname returns what
 the handler returned, the plan afterwards is clean, it survives a restart,

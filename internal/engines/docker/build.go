@@ -40,23 +40,47 @@ import (
 // shell, so a Windows path with a drive letter or a space needs no
 // quoting and no conversion. That also means the Git Bash path-rewriting
 // trap from Milestone 18 cannot apply here.
-func buildArgs(tag, contextDir string) []string {
-	return []string{
-		"build",
+func buildArgs(tag, contextDir string, emulated bool) []string {
+	args := []string{"build"}
+	if emulated {
+		args = append(args, "--platform", EmulatedPlatform)
+	}
+	return append(args,
 		// Quiet: the build log is noise unless it fails, and a failure
 		// comes back in stderr either way.
 		"-q",
 		"-t", tag,
 		contextDir,
-	}
+	)
 }
 
 // Build builds an image from a directory containing a Dockerfile.
 func (c *CLI) Build(ctx context.Context, contextDir, tag string) error {
 	// Combined output, because a build's diagnostics go to stdout as well
 	// as stderr and a failure is unreadable with half of it missing.
-	if _, err := c.runCombined(ctx, buildArgs(tag, contextDir)...); err != nil {
+	// A build inherits its base image's architecture, so one FROM an
+	// emulated base must be emulated too.
+	//
+	// The memo is only a shortcut. It is NOT relied on, because the
+	// thing that fills it -- the pull -- is SKIPPED whenever the base is
+	// already local, which is every run after the first and every run
+	// after a restart. Trusting it produced exactly the failure this
+	// code exists to prevent, one step later: `docker build` chose the
+	// host's architecture for the FROM and failed on Dockerfile line 3.
+	// So the real mechanism is the same retry Pull uses, and it needs no
+	// state at all.
+	emulated := c.platforms.isEmulated(baseImageOf(contextDir))
+	_, err := c.runCombined(ctx, buildArgs(tag, contextDir, emulated)...)
+	if err != nil && !emulated && noNativeImage(err) {
+		emulated = true
+		_, err = c.runCombined(ctx, buildArgs(tag, contextDir, true)...)
+	}
+	if err != nil {
 		return fmt.Errorf("building %s: %w", tag, err)
+	}
+	if emulated {
+		c.platforms.note(tag)
+		c.platforms.note(baseImageOf(contextDir))
 	}
 	return nil
 }

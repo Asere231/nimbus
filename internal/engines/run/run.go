@@ -130,6 +130,17 @@ type Service struct {
 	// then produces the ordinary "pre-pull it while online" message
 	// rather than a build that silently needs the network.
 	BuildBase string
+	// NotReadyStatus is an HTTP status that means "answering, but NOT
+	// ready". Zero means any answer counts, which is right for an
+	// ordinary service: an image whose root path is unserved is normal.
+	//
+	// The Azure Functions host is the exception, and it is the one that
+	// needs saying. It serves 503 "Function host is not running" from
+	// the moment its web host binds until the script host has loaded the
+	// functions -- and for ever, if the script host faults. Accepting
+	// that is how an emulated function app on Apple Silicon reported a
+	// SUCCESSFUL apply while never serving a request.
+	NotReadyStatus int
 	// Replicas is how many copies of the whole group to run. 0 and 1 both
 	// mean one, so a caller that does not know about replicas is
 	// unchanged.
@@ -382,11 +393,27 @@ func (e *Engine) waitReady(ctx context.Context, svc *Service) error {
 		if err == nil {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
-			return nil
+			if svc.NotReadyStatus == 0 || resp.StatusCode != svc.NotReadyStatus {
+				return nil
+			}
+			// Answering, and saying it is not ready. Keep waiting, and
+			// remember this rather than the last transport error, so a
+			// timeout reports what the server actually said.
+			last = fmt.Errorf("the server answered %d, which means it is not ready", resp.StatusCode)
+		} else {
+			last = err
 		}
-		last = err
 		select {
 		case <-ctx.Done():
+			// With `last` attached: the caller's deadline usually
+			// fires first, and returning a bare "context deadline
+			// exceeded" throws away the only thing that says WHY --
+			// measured on an emulated function app, where the server
+			// was answering 503 the whole time and the error said
+			// nothing at all.
+			if last != nil {
+				return fmt.Errorf("%w: %v\n\nCheck `docker logs %s`", ctx.Err(), last, svc.Container)
+			}
 			return ctx.Err()
 		case <-time.After(250 * time.Millisecond):
 		}

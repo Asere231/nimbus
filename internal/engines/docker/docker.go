@@ -94,6 +94,12 @@ type RunOptions struct {
 	// be asserted about at all.
 	HostAliases []string
 	CAFile      string
+
+	// Platform is filled by CLI.Run from what the pull discovered; a
+	// caller does not set it. A container started without it against an
+	// emulated image fails with `exec format error`, which names neither
+	// the architecture nor the image.
+	Platform string
 }
 
 // Container is the subset of `docker inspect` Nimbus uses.
@@ -125,6 +131,10 @@ type CLI struct {
 	// and a hang is a much worse failure than an error, because Terraform
 	// just sits there.
 	Timeout time.Duration
+
+	// platforms remembers which images had no build for this machine and
+	// had to be emulated. Discovered by Pull, consulted by Build and Run.
+	platforms platforms
 }
 
 // NewCLI returns a Client using the docker binary on PATH.
@@ -193,9 +203,44 @@ func (c *CLI) runCombined(ctx context.Context, args ...string) ([]byte, error) {
 		case isNotFound(both.String()):
 			return nil, &NotFoundError{Name: lastArg(args)}
 		}
-		return nil, fmt.Errorf("docker %s: %s", strings.Join(args, " "), firstLine(both.String()))
+		// The DIAGNOSIS, not the first line.
+		//
+		// This is runCOMBINED: its whole reason to exist is that a
+		// build's output is unreadable with half of it missing, and
+		// keeping only the first line threw away more than half.
+		// BuildKit prints the Dockerfile excerpt first and the cause
+		// LAST, so every failed build reported `Dockerfile:3` and
+		// nothing else -- which also meant Build could not recognise
+		// the missing-architecture error it is now written to retry.
+		// Measured on Apple Silicon: the retry never fired because the
+		// text it matches on had been cut off.
+		return nil, fmt.Errorf("docker %s: %s", strings.Join(args, " "), diagnosis(both.String()))
 	}
 	return both.Bytes(), nil
+}
+
+// diagnosis keeps the part of a command's output that explains a
+// failure: the last error line if there is one, else the first line.
+//
+// Bounded, because a build log can be enormous and this ends up inside
+// an ARM error that Terraform prints.
+func diagnosis(s string) string {
+	const limit = 600
+	var errLines []string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ERROR") || strings.Contains(line, "error:") {
+			errLines = append(errLines, line)
+		}
+	}
+	out := firstLine(s)
+	if n := len(errLines); n > 0 {
+		out = errLines[n-1]
+	}
+	if len(out) > limit {
+		out = out[:limit] + "..."
+	}
+	return out
 }
 
 // isDaemonDown spots the daemon being unreachable. The wording differs between
@@ -273,6 +318,12 @@ func (c *CLI) runArgsFor(opts RunOptions) []string {
 	if opts.CAFile == "" {
 		opts.CAFile = extras.CAFile
 	}
+	// Filled here, from what the pull discovered, for the same reason
+	// the host extras are: a per-caller opt-in is what left --add-host
+	// missing from two clouds for three milestones.
+	if opts.Platform == "" {
+		opts.Platform = c.Platform(opts.Image)
+	}
 	return runArgs(opts)
 }
 
@@ -291,6 +342,9 @@ func (c *CLI) Run(ctx context.Context, opts RunOptions) (string, error) {
 // somewhere else entirely.
 func runArgs(opts RunOptions) []string {
 	args := []string{"run", "-d", "--name", opts.Name}
+	if opts.Platform != "" {
+		args = append(args, "--platform", opts.Platform)
+	}
 
 	// Every container Nimbus starts needs a route back to Nimbus --
 	// AWS_ENDPOINT_URL for a Lambda handler, the TokenReview webhook for a
@@ -534,10 +588,22 @@ func (c *CLI) ImagePresent(ctx context.Context, image string) (bool, error) {
 	return strings.TrimSpace(string(out)) != "", nil
 }
 
-// Pull fetches an image.
+// Pull fetches an image, falling back to an emulated platform when this
+// machine's architecture has no build. See platform.go for why the
+// fallback is a retry rather than a registry probe.
 func (c *CLI) Pull(ctx context.Context, image string) error {
-	_, err := c.run(ctx, "pull", image)
-	return err
+	_, err := c.run(ctx, pullArgs(image, false)...)
+	if !noNativeImage(err) {
+		return err
+	}
+	if _, err2 := c.run(ctx, pullArgs(image, true)...); err2 != nil {
+		// The ORIGINAL error is the one worth reporting: it says the
+		// image has no build for this machine, which is the real
+		// problem. The retry's failure is a consequence.
+		return err
+	}
+	c.platforms.note(image)
+	return nil
 }
 
 // sharesNamespace reports whether a network mode joins another container's

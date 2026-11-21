@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -304,4 +306,82 @@ func serviceAt(t *testing.T, raw string) *Service {
 	}
 	return &Service{ResourceID: "projects/p/locations/l/services/hello", Name: "hello",
 		Image: "nginx:alpine", Container: "nimbus-run-hello", Port: port}
+}
+
+// A server that ANSWERS and says it is not ready is not ready.
+//
+// Any HTTP status counts as ready for an ordinary service, and that is
+// right: an image whose root path is unserved is normal. The Azure
+// Functions host is the exception -- it serves 503 "Function host is not
+// running" from the moment its web host binds, and for ever if the
+// script host faults. Accepting that reported a SUCCESSFUL apply for a
+// function app that never served a request, measured on Apple Silicon
+// where the host faults under emulation.
+func TestAServiceAnsweringNotReadyIsNotReady(t *testing.T) {
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Not ready for the first few probes, then ready -- which is
+		// what a host that is still loading really does.
+		if hits.Add(1) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	port := portOfURL(t, srv.URL)
+
+	e := &Engine{cfg: Config{StartTimeout: 10 * time.Second}}
+	svc := &Service{Port: port, NotReadyStatus: http.StatusServiceUnavailable}
+	if err := e.waitReady(context.Background(), svc); err != nil {
+		t.Fatalf("a server that became ready was not waited for: %v", err)
+	}
+	if got := hits.Load(); got < 3 {
+		t.Errorf("returned after %d probes; the 503s were accepted as ready", got)
+	}
+}
+
+// ...and one that NEVER becomes ready times out saying what it answered,
+// rather than reporting a transport error that never happened.
+func TestAServiceStuckNotReadyTimesOutSayingSo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	e := &Engine{cfg: Config{StartTimeout: 600 * time.Millisecond}}
+	svc := &Service{Port: portOfURL(t, srv.URL), NotReadyStatus: http.StatusServiceUnavailable}
+	err := e.waitReady(context.Background(), svc)
+	if err == nil {
+		t.Fatal("a server stuck at 503 was reported ready")
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("the timeout does not say what the server answered: %v", err)
+	}
+}
+
+// An ordinary service is unchanged: a 404 at the root is ready.
+func TestAnOrdinaryServiceAcceptsAnyStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	e := &Engine{cfg: Config{StartTimeout: 5 * time.Second}}
+	if err := e.waitReady(context.Background(), &Service{Port: portOfURL(t, srv.URL)}); err != nil {
+		t.Errorf("a 404 at the root was not accepted as ready: %v", err)
+	}
+}
+
+func portOfURL(t *testing.T, raw string) int {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

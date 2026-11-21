@@ -23,7 +23,7 @@ import (
 // trap TestTheImageAndItsArgumentsComeLast pins for `docker run`, where a
 // flag after the image silently becomes the container's own argument.
 func TestTheBuildContextComesLast(t *testing.T) {
-	args := buildArgs("nimbus-fnapp-web-abc12345:latest", "/tmp/code")
+	args := buildArgs("nimbus-fnapp-web-abc12345:latest", "/tmp/code", false)
 
 	if args[0] != "build" {
 		t.Fatalf("not a build: %v", args)
@@ -46,7 +46,7 @@ func TestTheBuildContextComesLast(t *testing.T) {
 // does not apply, because Nimbus never goes through a shell.
 func TestAWindowsContextPathIsNotRewritten(t *testing.T) {
 	const win = `C:\Users\Someone\AppData\Local\Temp\nimbus fn\code`
-	args := buildArgs("tag:latest", win)
+	args := buildArgs("tag:latest", win, false)
 	if got := args[len(args)-1]; got != win {
 		t.Errorf("the context path was altered: %q", got)
 	}

@@ -492,7 +492,14 @@ func provisionFunctionApp(s *Server, t target, body map[string]any) error {
 		// The host listens on 80 inside the container, which is what
 		// ASPNETCORE_URLS in the image says. Not 8080.
 		ContainerPort: 80,
-		Env:           functionAppEnv(body),
+		// 503 is the Functions host saying its SCRIPT host has not
+		// loaded the functions. It answers that from the moment the web
+		// host binds, so treating any answer as ready reports a
+		// successful apply for an app that never serves -- measured on
+		// Apple Silicon, where the host faults under emulation and
+		// stays at 503 indefinitely.
+		NotReadyStatus: http.StatusServiceUnavailable,
+		Env:            functionAppEnv(body),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ClusterTimeout)

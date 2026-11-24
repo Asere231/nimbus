@@ -380,8 +380,20 @@ the work and Azure simply was not using it, and
 
 ## Design decisions still open
 
-- **Data-plane DNS (M2):** clients address storage as `{account}.blob.{suffix}`. Options: hosts-file entries written by `nimbus dns`, a tiny local DNS server, or path-style endpoints. Must work on both macOS and Windows without admin where possible.
-- **Engine lifecycle (M3):** whether k3s containers survive `nimbus stop` (faster restarts) or are always torn down (cleaner).
+None. Both entries that stood here were DECIDED and never struck off --
+found in Milestone 21 by someone asking "is there anything else?", which
+is the only thing that ever finds these. Recorded rather than silently
+deleted, because the decisions themselves are worth knowing:
+
+- **Data-plane DNS (M2) is settled: there is none, and none is needed.**
+  Nested `*.localhost` names resolve to loopback on macOS and Windows with
+  nothing installed, so `nimbus dns` was never built and must not be. See
+  CLAUDE.md's protocol facts; proven end to end on Windows in Milestone 18
+  and on macOS in Milestone 21.
+- **Engine lifecycle (M3) is settled by `--persist`.** Containers survive a
+  stop when it is set and are torn down when it is not. Milestone 18 pinned
+  the half that was genuinely wrong: `--persist` is about SHUTDOWN, not
+  about delete, so a destroyed resource always loses its container.
 
 ## Left to confirm
 
@@ -524,6 +536,13 @@ the work and Azure simply was not using it, and
   its hostname returns what the handler returned, the plan afterwards is
   clean, it survives a restart, and the destroy leaves no container and no
   built image. See `examples/terraform/azure-functions`.
+
+  **Except on Apple Silicon**, where they do not work at all: Microsoft
+  publishes the Functions host for linux/amd64 only, and under emulation
+  the host faults and serves 503 for ever. Rosetta does not fix it. An
+  amd64 host is the requirement -- `docs/TROUBLESHOOTING.md` has the
+  detail, and this paragraph exists because the line above said "WORK"
+  with nothing qualifying it, which on most Macs sold today is wrong.
 
   The host is Microsoft's own image, so the programming model is the real
   one -- both the classic `function.json` model and the v2 decorators were

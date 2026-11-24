@@ -381,7 +381,15 @@ jobs:
             -X PUT -H 'x-ms-blob-type: BlockBlob' -d ok \
             "$B""private/via-account.txt$(terraform output -raw account_sas)"
 
-          # 8-10. anonymous, which the CONTAINER decides. PublicAccess was
+          # 8. sip, the NEGATIVE case only. A token scoped to 127.0.0.1
+          #    passes or fails depending on whether the client resolved the
+          #    data-plane name to 127.0.0.1 or ::1, and the nested *.localhost
+          #    names commonly give ::1 -- so asserting that one SUCCEEDS would
+          #    be flaky. A token naming somebody else is refused either way.
+          probe "SAS bound to another source IP" 403 "203.0.113.7" \
+            "$B""private/secret.txt$(terraform output -raw wrong_ip_sas)"
+
+          # 9-11. anonymous, which the CONTAINER decides. PublicAccess was
           #    stored and echoed for eleven milestones and read by nothing.
           probe "anonymous reads a public blob" 200 "anyone may read this one" "$B""public/notice.txt"
           probe "anonymous cannot read a private blob" 404 "does not exist" "$B""private/secret.txt"

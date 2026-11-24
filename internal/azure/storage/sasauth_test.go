@@ -536,3 +536,56 @@ func TestATamperedButDecodableSASQuotesTheStringToSign(t *testing.T) {
 		t.Errorf("the refusal does not quote the string-to-sign it used: %s", body)
 	}
 }
+
+// An IPv4 `sip` does not match an IPv6 caller, and that is correct.
+//
+// `sip` is IPv4-only at the CLIENT: `az --ip ::1` is rejected by az itself
+// ("Please use the following format to specify ip range: '{ip1}-{ip2}'"), so
+// no client will ever produce an IPv6 sip and there is no IPv6 semantics to
+// implement. The consequence is a trap worth pinning, because it looks like a
+// bug: Nimbus's data-plane names are nested *.localhost, curl resolves them to
+// ::1 first, and a token scoped to 127.0.0.1 -- the obviously correct thing to
+// write when testing locally -- is then refused. Measured: with `curl --ipv4`
+// the same token answers 200.
+//
+// The refusal names the caller, so it is self-diagnosing. What must NOT happen
+// is someone "fixing" this into a loopback equivalence: that would let a token
+// pass under a rule real Azure cannot express, since it has no IPv6 sip at
+// all. Hence this test.
+func TestAnIPv4SourceIPDoesNotMatchAnIPv6Caller(t *testing.T) {
+	h, a := sasFixtureStore(t)
+	tok := &sasToken{perms: "r", expiry: sasFar, resource: "c", ip: "127.0.0.1"}
+	q := sasQuery(t, a, tok, sasService, "docs", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/docs/hello.txt?"+q, nil)
+	req.RemoteAddr = "[::1]:54321"
+	rec := httptest.NewRecorder()
+	h.Serve(rec, req, Target{Account: "stnimbus", Service: ServiceBlob})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("an IPv6 caller matched an IPv4 sip and got %d; ::1 is not 127.0.0.1", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "::1") {
+		t.Errorf("the refusal does not name the caller, which is the only thing that makes it diagnosable: %s", body)
+	}
+
+	// A loopback RANGE must not match either: the range is IPv4 and the
+	// caller is not, so there is nothing to compare.
+	tok = &sasToken{perms: "r", expiry: sasFar, resource: "c", ip: "127.0.0.0-127.255.255.255"}
+	req = httptest.NewRequest(http.MethodGet, "/docs/hello.txt?"+sasQuery(t, a, tok, sasService, "docs", ""), nil)
+	req.RemoteAddr = "[::1]:54321"
+	rec = httptest.NewRecorder()
+	h.Serve(rec, req, Target{Account: "stnimbus", Service: ServiceBlob})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("an IPv6 caller fell inside an IPv4 loopback range and got %d", rec.Code)
+	}
+
+	// And the same token from the IPv4 loopback it names DOES work, so the
+	// refusals above are about the address family and not about the parser.
+	req = httptest.NewRequest(http.MethodGet, "/docs/hello.txt?"+sasQuery(t, a, tok, sasService, "docs", ""), nil)
+	req.RemoteAddr = "127.0.0.1:54321"
+	rec = httptest.NewRecorder()
+	h.Serve(rec, req, Target{Account: "stnimbus", Service: ServiceBlob})
+	if rec.Code != 200 {
+		t.Errorf("an IPv4 caller inside the range was refused %d: %s", rec.Code, rec.Body.String())
+	}
+}

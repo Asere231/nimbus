@@ -148,6 +148,35 @@ data "azurerm_storage_account_blob_container_sas" "expired" {
   }
 }
 
+# The same token bound to a source IP that is NOT the caller. `sip` is
+# IPv4-only at the client -- `az --ip ::1` is rejected by az itself -- and the
+# two data sources spell the argument differently: `ip_address` here, and
+# `ip_addresses` on the account SAS below.
+#
+# Only the NEGATIVE case is demonstrated, on purpose. A token scoped to
+# 127.0.0.1 passes or fails depending on whether the client resolved the
+# data-plane name to 127.0.0.1 or ::1, and Nimbus's nested *.localhost names
+# commonly give ::1 -- see docs/IAM.md. A token naming somebody else is
+# refused either way, and it is the half that proves enforcement.
+data "azurerm_storage_account_blob_container_sas" "wrong_ip" {
+  connection_string = azurerm_storage_account.data.primary_connection_string
+  container_name    = azurerm_storage_container.private.name
+  https_only        = true
+  ip_address        = "203.0.113.7"
+
+  start  = "2024-01-01T00:00:00Z"
+  expiry = "2099-01-01T00:00:00Z"
+
+  permissions {
+    read   = true
+    list   = true
+    add    = false
+    create = false
+    write  = false
+    delete = false
+  }
+}
+
 # An ACCOUNT SAS signs a different string of a different length, and is scoped
 # by ss (which services) and srt (service, container or object level) rather
 # than by a resource. This one covers the blob service at every level.
@@ -261,6 +290,11 @@ output "queue_only_sas" {
   sensitive = true
 }
 
+output "wrong_ip_sas" {
+  value     = data.azurerm_storage_account_blob_container_sas.wrong_ip.sas
+  sensitive = true
+}
+
 # Ready-to-run probes. Each one is a single line, because Terraform's
 # local-exec runs under `cmd /C` on Windows where a newline ends the command --
 # these are for pasting into a shell, and the same rule keeps them portable.
@@ -300,5 +334,8 @@ output "try_it" {
 
     # 8. anonymous LISTING a blob-level public container -> 403: that needs level "container"
     curl --cacert $CA "$B""public?restype=container&comp=list"
+
+    # 9. a SAS bound to somebody else's IP -> 403, naming the address you came from
+    curl --cacert $CA "$B""private/secret.txt$(terraform output -raw wrong_ip_sas)"
   EOT
 }

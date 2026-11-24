@@ -205,6 +205,42 @@ therefore denies **everything**, which is exactly what it says to do. It is
 not a bug and it is not smoothed over: drop that statement while working
 against Nimbus, or keep it and watch it bite.
 
+### `sip` sees loopback, and often the IPv6 one
+
+A SAS can be bound to a source IP, and Nimbus enforces it because it can
+answer it. Two things make that surprising in practice.
+
+`sip` is **IPv4-only at the client** — `az --ip ::1` is refused by `az` itself
+— so there is no IPv6 form to write. And Nimbus's data plane is addressed by
+nested `*.localhost` names, which commonly resolve to `::1` first. So the
+obviously-correct thing to write when testing locally is refused:
+
+```
+$ az storage blob generate-sas --ip 127.0.0.1 ...
+$ curl --cacert $CA "https://acct.blob.storage.nimbus.localhost:4701/c/x.txt?$SAS"
+403  This SAS allows source IP "127.0.0.1" and the request came from ::1.
+```
+
+The refusal names the caller, which is the whole of the diagnosis. Force IPv4
+and the same token works:
+
+```bash
+curl --ipv4 --cacert $CA "https://acct.blob.storage.nimbus.localhost:4701/c/x.txt?$SAS"
+```
+
+From inside a container the caller is the Docker bridge gateway instead
+(`172.17.0.1` on Docker Engine, `192.168.65.254` on Desktop), so a `sip` has
+to name that.
+
+**`::1` deliberately does not match an IPv4 `sip`**, and a test pins it.
+Treating any loopback as equivalent would let a token pass under a rule real
+Azure cannot express, since it has no IPv6 `sip` at all — the same reasoning
+that keeps `aws:SecureTransport` answered `false`.
+
+Note also that the two azurerm data sources spell the argument differently:
+`ip_address` on `azurerm_storage_account_blob_container_sas`, `ip_addresses`
+on `azurerm_storage_account_sas`.
+
 ### A trap worth knowing
 
 Revoking a permission Terraform needs in order to **read** its own resources

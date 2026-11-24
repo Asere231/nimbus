@@ -125,6 +125,8 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, vaultName string
 		return h.serveCertificates(w, r, v, seg[1:])
 	case "keys":
 		return h.serveKeys(w, r, v, seg[1:])
+	case "deletedkeys":
+		return h.serveDeletedKeys(w, r, v, seg[1:])
 	case "storage", "rng":
 		// Deliberately an error, not an empty success: a client that thinks
 		// it wrapped a key with a key that does not exist is in a far worse

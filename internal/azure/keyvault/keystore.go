@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"fmt"
 	"sort"
 	"strings"
@@ -280,4 +281,74 @@ func curveFor(name string) (elliptic.Curve, error) {
 			"and Nimbus does not add cryptographic dependencies", name)
 	}
 	return nil, fmt.Errorf("unknown curve %q", name)
+}
+
+// persistKey and restoreKey convert a key to and from its on-disk form.
+//
+// The private half travels as PKCS#8 DER, which crypto/x509 can write and
+// read for both RSA and ECDSA -- so one field covers both key types and
+// nothing has to branch on kty to serialise. A version whose material cannot
+// be parsed back is DROPPED and counted as ignored rather than restored
+// without a private half: a key that exists and cannot sign is worse than one
+// that is reported missing, because the first fails at the moment it is used
+// and the second fails when it is looked for.
+func persistKey(k *Key) persistedKey {
+	out := persistedKey{
+		Name: k.Name, Deleted: k.Deleted,
+		RecoveryID: k.RecoveryID, ScheduledFor: k.ScheduledFor,
+	}
+	for _, ver := range k.Versions {
+		var priv any
+		switch {
+		case ver.RSA != nil:
+			priv = ver.RSA
+		case ver.EC != nil:
+			priv = ver.EC
+		default:
+			continue
+		}
+		der, err := x509.MarshalPKCS8PrivateKey(priv)
+		if err != nil {
+			continue
+		}
+		out.Versions = append(out.Versions, persistedKeyVersion{
+			Version: ver.Version, Kty: ver.Kty, Curve: ver.Curve, Ops: ver.Ops,
+			PKCS8: der, Tags: ver.Tags, Enabled: ver.Enabled,
+			NotBefore: ver.NotBefore, Expires: ver.Expires,
+			Created: ver.Created, Updated: ver.Updated,
+		})
+	}
+	return out
+}
+
+func restoreKey(p persistedKey) *Key {
+	k := &Key{
+		Name: p.Name, Deleted: p.Deleted,
+		RecoveryID: p.RecoveryID, ScheduledFor: p.ScheduledFor,
+	}
+	for _, pv := range p.Versions {
+		priv, err := x509.ParsePKCS8PrivateKey(pv.PKCS8)
+		if err != nil {
+			continue
+		}
+		ver := &KeyVersion{
+			Version: pv.Version, Kty: pv.Kty, Curve: pv.Curve, Ops: pv.Ops,
+			Tags: pv.Tags, Enabled: pv.Enabled,
+			NotBefore: pv.NotBefore, Expires: pv.Expires,
+			Created: pv.Created, Updated: pv.Updated,
+		}
+		switch t := priv.(type) {
+		case *rsa.PrivateKey:
+			ver.RSA = t
+		case *ecdsa.PrivateKey:
+			ver.EC = t
+		default:
+			continue
+		}
+		k.Versions = append(k.Versions, ver)
+	}
+	if len(k.Versions) == 0 {
+		return nil
+	}
+	return k
 }

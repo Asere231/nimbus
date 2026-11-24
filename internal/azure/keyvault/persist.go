@@ -32,10 +32,44 @@ func (s *Store) Persist(dir string) error {
 
 // vaultFile is the on-disk shape.
 type vaultFile struct {
-	Name     string            `json:"name"`
-	Contacts []Contact         `json:"contacts,omitempty"`
-	Secrets  []persistedSecret `json:"secrets,omitempty"`
-	Deleted  []persistedSecret `json:"deletedSecrets,omitempty"`
+	Name        string            `json:"name"`
+	Contacts    []Contact         `json:"contacts,omitempty"`
+	Secrets     []persistedSecret `json:"secrets,omitempty"`
+	Deleted     []persistedSecret `json:"deletedSecrets,omitempty"`
+	Keys        []persistedKey    `json:"keys,omitempty"`
+	DeletedKeys []persistedKey    `json:"deletedKeys,omitempty"`
+}
+
+// persistedKey carries a key's PRIVATE half to disk, which is the one place
+// it is allowed to go.
+//
+// That is not a contradiction of "the private half never leaves": it never
+// leaves in a RESPONSE, which is what a client could ever see. The data
+// directory already holds secret values in plain text, so a key stored there
+// is consistent with its neighbours -- and without it a restart loses every
+// key, which is the log-group-index bug one service over. The assertion that
+// matters is a CLEAN PLAN after a reload, not that the key is still listed.
+type persistedKey struct {
+	Name         string                `json:"name"`
+	Versions     []persistedKeyVersion `json:"versions"`
+	Deleted      time.Time             `json:"deleted,omitempty"`
+	RecoveryID   string                `json:"recoveryId,omitempty"`
+	ScheduledFor time.Time             `json:"scheduledPurge,omitempty"`
+}
+
+type persistedKeyVersion struct {
+	Version string            `json:"version"`
+	Kty     string            `json:"kty"`
+	Curve   string            `json:"crv,omitempty"`
+	Ops     []string          `json:"keyOps,omitempty"`
+	PKCS8   []byte            `json:"pkcs8"`
+	Tags    map[string]string `json:"tags,omitempty"`
+	Enabled bool              `json:"enabled"`
+
+	NotBefore *time.Time `json:"nbf,omitempty"`
+	Expires   *time.Time `json:"exp,omitempty"`
+	Created   time.Time  `json:"created"`
+	Updated   time.Time  `json:"updated"`
 }
 
 type persistedSecret struct {
@@ -69,6 +103,12 @@ func (s *Store) Save(v *Vault) {
 			Name: sec.Name, Versions: sec.Versions, Deleted: sec.Deleted,
 			RecoveryID: sec.RecoveryID, ScheduledFor: sec.ScheduledFor,
 		})
+	}
+	for _, k := range sortedKeys(v.Keys) {
+		file.Keys = append(file.Keys, persistKey(k))
+	}
+	for _, k := range sortedKeys(v.DeletedKeys) {
+		file.DeletedKeys = append(file.DeletedKeys, persistKey(k))
 	}
 	v.mu.Unlock()
 
@@ -134,6 +174,20 @@ func (s *Store) load() error {
 			v.Deleted[strings.ToLower(p.Name)] = &Secret{
 				Name: p.Name, Versions: p.Versions, Deleted: p.Deleted,
 				RecoveryID: p.RecoveryID, ScheduledFor: p.ScheduledFor,
+			}
+		}
+		for _, p := range file.Keys {
+			if k := restoreKey(p); k != nil {
+				v.Keys[strings.ToLower(p.Name)] = k
+			} else {
+				ignored++
+			}
+		}
+		for _, p := range file.DeletedKeys {
+			if k := restoreKey(p); k != nil {
+				v.DeletedKeys[strings.ToLower(p.Name)] = k
+			} else {
+				ignored++
 			}
 		}
 		v.mu.Unlock()

@@ -151,6 +151,14 @@ var gcpRoles = map[string]gcpRole{
 	"roles/iam.serviceAccountAdmin": {Permissions: []string{"iam.serviceAccounts.*"}},
 	"roles/run.admin":               {Permissions: []string{"run.*"}},
 	"roles/run.viewer":              {Permissions: []string{"run.*.get", "run.*.list"}},
+	// Cloud Functions' permissions are spelled `cloudfunctions.*`, which is
+	// what apiFor already calls the service -- so the classifier derives
+	// them with no table entry. These are the roles that grant them.
+	"roles/cloudfunctions.admin":     {Permissions: []string{"cloudfunctions.*"}},
+	"roles/cloudfunctions.developer": {Permissions: []string{"cloudfunctions.*"}},
+	"roles/cloudfunctions.viewer": {Permissions: []string{
+		"cloudfunctions.functions.get", "cloudfunctions.functions.list",
+	}},
 }
 
 // --- compiling a principal's bindings -------------------------------------

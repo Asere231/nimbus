@@ -31,6 +31,12 @@ import "strings"
 //     client for others, and nothing announces which.
 //   - Cloud Run's Admin API is `/v2`, and `gcloud run` does not use it at
 //     all; see run.go.
+//   - `/v2` has now stopped meaning one thing as well. Cloud Functions Gen 2
+//     answers under it too -- /v2/projects/{p}/locations/{l}/functions -- so
+//     it is disambiguated by the collection segment exactly as /v1 is. The
+//     OPERATIONS path is genuinely ambiguous between the two services and
+//     that does not matter: one registry holds every long-running operation,
+//     so either handler answers a poll identically.
 const (
 	apiCompute         = "compute"
 	apiStorage         = "storage"
@@ -40,6 +46,7 @@ const (
 	apiPubSub          = "pubsub"
 	apiRun             = "run"
 	apiKnative         = "knative"
+	apiFunctions       = "cloudfunctions"
 )
 
 // pubsubCollections are the segments that mean Pub/Sub when they follow a
@@ -76,7 +83,7 @@ func apiFor(parts []string) string {
 		}
 		return ""
 	case "v2":
-		return apiRun
+		return apiForV2(parts)
 	case "v3":
 		return apiResourceManager
 	case "v1", "v1beta1":
@@ -93,6 +100,17 @@ func apiFor(parts []string) string {
 		return apiForV1(append([]string{"v1"}, parts...))
 	}
 	return ""
+}
+
+// apiForV2 tells Cloud Run and Cloud Functions apart. Both are
+// /v2/projects/{p}/locations/{l}/{collection}, so the collection is the only
+// thing to go on -- and an operations path belongs to neither in particular,
+// which is fine because the operation registry is shared.
+func apiForV2(parts []string) string {
+	if len(parts) > 5 && parts[5] == "functions" {
+		return apiFunctions
+	}
+	return apiRun
 }
 
 // apiForV1 disambiguates the crowded prefix.

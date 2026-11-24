@@ -84,6 +84,10 @@ type Config struct {
 	// server. Above AWS's 6600, so three clouds' clusters never race for
 	// the same port in one process.
 	ClusterPortBase int
+	// FunctionPortBase is the first host port tried for a Cloud Function.
+	// Separate from ServicePortBase so the two engines never search the
+	// same range at the same time.
+	FunctionPortBase int
 	// ServicePortBase is the first host port tried for a Cloud Run
 	// container, clear of Lambda's range for the same reason.
 	ServicePortBase int
@@ -104,8 +108,9 @@ type Config struct {
 
 // Port bases, each above the cloud before it.
 const (
-	DefaultClusterPortBase = 6700
-	DefaultServicePortBase = 9300
+	DefaultClusterPortBase  = 6700
+	DefaultServicePortBase  = 9300
+	DefaultFunctionPortBase = 9400
 )
 
 // Server is the GCP emulator.
@@ -125,6 +130,12 @@ type Server struct {
 	// engines are shared with the other clouds and know about none of them.
 	k3s      *k3s.Engine
 	services *run.Engine
+	// functions is a SECOND instance of the run engine, with its own role
+	// label. Sharing one instance with Cloud Run would make each adopt the
+	// other's containers on a restart -- measured in Azure, where the
+	// container-app engine took the function app's container and every
+	// request answered "not running" while the container sat plainly Up.
+	functions *run.Engine
 	// vms runs the Compute instances, on the engine every cloud's
 	// instances use.
 	vms *vm.Engine
@@ -150,6 +161,9 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	}
 	if cfg.ClusterPortBase == 0 {
 		cfg.ClusterPortBase = DefaultClusterPortBase
+	}
+	if cfg.FunctionPortBase == 0 {
+		cfg.FunctionPortBase = DefaultFunctionPortBase
 	}
 	if cfg.ServicePortBase == 0 {
 		cfg.ServicePortBase = DefaultServicePortBase
@@ -186,6 +200,18 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		StartTimeout: cfg.ClusterTimeout,
 	}, docker.NewCLI())
 
+	s.functions = run.New(run.Config{
+		NamePrefix: "nimbus-gcf",
+		// A base of its own, not shared with Cloud Run's. FreePort asks the
+		// OS whether a port is free and a container that has just taken one
+		// has not necessarily bound it yet -- so two engines searching from
+		// the same base can hand out the same port, which against the Docker
+		// Fake they always would.
+		PortBase:     cfg.FunctionPortBase,
+		StartTimeout: cfg.ClusterTimeout,
+		Role:         "function",
+	}, docker.NewCLI())
+
 	s.vms = vm.New(vm.Config{
 		NamePrefix:   "nimbus-gce",
 		KeepRunning:  cfg.KeepClusters,
@@ -219,6 +245,9 @@ func (s *Server) Shutdown(ctx context.Context) {
 	for _, cl := range s.k3s.All() {
 		s.k3s.Stop(ctx, cl)
 	}
+	for _, fn := range s.functions.All() {
+		s.functions.Stop(ctx, fn)
+	}
 	for _, svc := range s.services.All() {
 		s.services.Stop(ctx, svc)
 	}
@@ -228,6 +257,7 @@ func (s *Server) Shutdown(ctx context.Context) {
 func (s *Server) UseDocker(d docker.Client) {
 	s.k3s.SetDocker(d)
 	s.services.SetDocker(d)
+	s.functions.SetDocker(d)
 	s.vms.SetDocker(d)
 }
 
@@ -236,6 +266,9 @@ func (s *Server) K3s() *k3s.Engine { return s.k3s }
 
 // Services exposes the Cloud Run engine, likewise.
 func (s *Server) Services() *run.Engine { return s.services }
+
+// Functions is the engine behind Cloud Functions, separate from Services.
+func (s *Server) Functions() *run.Engine { return s.functions }
 
 // VMs exposes the instance engine, likewise.
 func (s *Server) VMs() *vm.Engine { return s.vms }
@@ -312,6 +345,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 		return s.servePubSub(w, r, parts)
 	case apiRun:
 		return s.serveRun(w, r, parts)
+	case apiFunctions:
+		return s.serveFunctions(w, r, parts)
 	case apiKnative:
 		return s.serveKnative(w, r, parts)
 	default:
@@ -332,6 +367,8 @@ func (s *Server) routeNimbusOwn(w http.ResponseWriter, r *http.Request) (string,
 		return s.serveTokenReview(w, r), true
 	case strings.HasPrefix(r.URL.Path, RunProxyPrefix):
 		return s.serveRunProxy(w, r), true
+	case strings.HasPrefix(r.URL.Path, FunctionProxyPrefix):
+		return s.serveFunctionProxy(w, r), true
 	}
 	return "", false
 }
@@ -412,4 +449,5 @@ func (s *Server) reattach(ctx context.Context) {
 	}
 	s.vms.Reattach(ctx, s.store.Exists)
 	s.services.Reattach(ctx, s.store.Exists)
+	s.functions.Reattach(ctx, s.store.Exists)
 }

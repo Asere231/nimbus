@@ -38,6 +38,8 @@ type vaultFile struct {
 	Deleted     []persistedSecret `json:"deletedSecrets,omitempty"`
 	Keys        []persistedKey    `json:"keys,omitempty"`
 	DeletedKeys []persistedKey    `json:"deletedKeys,omitempty"`
+	Certs       []*Certificate    `json:"certificates,omitempty"`
+	DeletedCert []*Certificate    `json:"deletedCertificates,omitempty"`
 }
 
 // persistedKey carries a key's PRIVATE half to disk, which is the one place
@@ -110,6 +112,12 @@ func (s *Store) Save(v *Vault) {
 	for _, k := range sortedKeys(v.DeletedKeys) {
 		file.DeletedKeys = append(file.DeletedKeys, persistKey(k))
 	}
+	// Certificates need no conversion: a CertVersion holds DER bytes and raw
+	// policy JSON, both of which marshal and unmarshal as they are. Only a
+	// KEY needs a persisted form, because its private half is a crypto type
+	// rather than data.
+	file.Certs = sortedCerts(v.Certs)
+	file.DeletedCert = sortedCerts(v.DeletedCerts)
 	v.mu.Unlock()
 
 	raw, err := json.MarshalIndent(file, "", "  ")
@@ -189,6 +197,12 @@ func (s *Store) load() error {
 			} else {
 				ignored++
 			}
+		}
+		for _, c := range file.Certs {
+			v.Certs[strings.ToLower(c.Name)] = c
+		}
+		for _, c := range file.DeletedCert {
+			v.DeletedCerts[strings.ToLower(c.Name)] = c
 		}
 		v.mu.Unlock()
 	}

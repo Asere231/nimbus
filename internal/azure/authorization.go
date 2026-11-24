@@ -83,6 +83,50 @@ var builtInRoles = []builtInRole{
 			"Microsoft.KeyVault/vaults/secrets/readMetadata/action",
 		}},
 
+	// The crypto and certificate roles, transcribed from Microsoft's
+	// published definitions (learn.microsoft.com built-in-roles/security)
+	// rather than recalled. The dataActions are exact, because those are the
+	// axis that is enforced and the whole teaching point.
+	//
+	// The control-plane Actions are the local abbreviation the three Key
+	// Vault roles above already use. Real Azure gives Crypto User and Secrets
+	// User NO Actions at all -- they are data-plane-only roles -- but a
+	// principal with none cannot get as far as the data plane here, because
+	// azurerm populates a Resource Provider cache when the provider
+	// CONFIGURES. Stated rather than silently matched either way.
+	{"14b46e9e-c2b7-41b4-b07b-48a6ebf60603", "Key Vault Crypto Officer",
+		"Perform any action on the keys of a key vault, except manage permissions.",
+		[]string{"Microsoft.KeyVault/*/read"}, []string{
+			"Microsoft.KeyVault/vaults/keys/*",
+			"Microsoft.KeyVault/vaults/keyrotationpolicies/*",
+		}},
+	// Crypto User is the interesting one: it can USE a key and cannot create
+	// or delete one. Its dataActions are an explicit list in real Azure with
+	// no `create` and no `delete` in it, which is exactly the least-privilege
+	// case the whole data-action axis exists to express -- so the list is
+	// transcribed literally rather than collapsed into keys/* minus
+	// something, which would be a different and wrong role.
+	{"12338af0-0e69-4776-bea7-57ae8d297424", "Key Vault Crypto User",
+		"Perform cryptographic operations using keys.",
+		[]string{"Microsoft.KeyVault/*/read"}, []string{
+			"Microsoft.KeyVault/vaults/keys/read",
+			"Microsoft.KeyVault/vaults/keys/update/action",
+			"Microsoft.KeyVault/vaults/keys/backup/action",
+			"Microsoft.KeyVault/vaults/keys/encrypt/action",
+			"Microsoft.KeyVault/vaults/keys/decrypt/action",
+			"Microsoft.KeyVault/vaults/keys/wrap/action",
+			"Microsoft.KeyVault/vaults/keys/unwrap/action",
+			"Microsoft.KeyVault/vaults/keys/sign/action",
+			"Microsoft.KeyVault/vaults/keys/verify/action",
+		}},
+	{"a4417e6f-fecd-4de8-b567-7b0420556985", "Key Vault Certificates Officer",
+		"Perform any action on the certificates of a key vault, except manage permissions.",
+		[]string{"Microsoft.KeyVault/*/read"}, []string{
+			"Microsoft.KeyVault/vaults/certificatecas/*",
+			"Microsoft.KeyVault/vaults/certificates/*",
+			"Microsoft.KeyVault/vaults/certificatecontacts/write",
+		}},
+
 	{"7f951dda-4ed3-4680-a7ca-43fe172d538d", "AcrPull", "acr pull",
 		[]string{"Microsoft.ContainerRegistry/registries/pull/read"}, nil},
 	{"8311e382-0749-4cb8-b61a-304f252e45ec", "AcrPush", "acr push",

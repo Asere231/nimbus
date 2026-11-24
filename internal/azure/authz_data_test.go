@@ -358,3 +358,141 @@ func TestEveryDataActionIsRecognisedByTheExplainer(t *testing.T) {
 		t.Error("a control-plane delete was classified as a data action")
 	}
 }
+
+// --- keys and certificates -------------------------------------------------
+
+// A second principal, for the test that one role does not reach the other's
+// objects: the two grants have to land on different identities or the first
+// would satisfy the second.
+const otherPrincipal = "22222222-2222-2222-2222-222222222222"
+
+const (
+	roleKVCryptoOfficer = "14b46e9e-c2b7-41b4-b07b-48a6ebf60603"
+	roleKVCryptoUser    = "12338af0-0e69-4776-bea7-57ae8d297424"
+	roleKVCertsOfficer  = "a4417e6f-fecd-4de8-b567-7b0420556985"
+)
+
+// createKeyAsDefault makes a key as the unrestricted identity, so a test can
+// then exercise a limited role against something that already exists.
+func createKeyAsDefault(t *testing.T, srv *httptest.Server, host, name string) {
+	t.Helper()
+	code, out, _ := vaultCall(t, srv, host, http.MethodPost,
+		"/keys/"+name+"/create?api-version=7.4", `{"kty":"RSA","key_size":2048}`, true)
+	if code >= 300 {
+		t.Fatalf("creating the key: %d %v", code, out)
+	}
+}
+
+// Key Vault Crypto User may USE a key and may not MANAGE one.
+//
+// This is the least-privilege case the whole data-action axis exists to
+// express, and it is why the role's dataActions are transcribed as the
+// explicit list Microsoft publishes rather than collapsed to `keys/*`: that
+// list has no `create` and no `delete` in it. Writing it as a wildcard minus
+// something would be a different, and wrong, role.
+func TestKeyVaultCryptoUserMayUseAKeyButNotManageIt(t *testing.T) {
+	srv, _ := newEnforcingTestServer(t, "")
+	host, id := makeVault(t, srv, "kv-crypto")
+	createKeyAsDefault(t, srv, host, "signer")
+	assign(t, srv, id, roleKVCryptoUser, appPrincipal)
+
+	// It may read the key's public half...
+	if code, out := vaultAs(t, srv, host, appPrincipal, http.MethodGet,
+		"/keys/signer?api-version=7.4", ""); code != 200 {
+		t.Fatalf("Crypto User reading a key = %d %v, want 200", code, out)
+	}
+	// ...and sign with it, which is the point of the role.
+	digest := "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU" // base64url SHA-256 of ""
+	code, out := vaultAs(t, srv, host, appPrincipal, http.MethodPost,
+		"/keys/signer/sign?api-version=7.4", `{"alg":"RS256","value":"`+digest+`"}`)
+	if code != 200 {
+		t.Fatalf("Crypto User signing = %d %v, want 200", code, out)
+	}
+	// ...and may NOT create a key.
+	if code, out := vaultAs(t, srv, host, appPrincipal, http.MethodPost,
+		"/keys/another/create?api-version=7.4", `{"kty":"RSA"}`); code != 403 {
+		t.Errorf("Crypto User creating a key = %d %v, want 403", code, out)
+	}
+	// ...nor delete one.
+	if code, out := vaultAs(t, srv, host, appPrincipal, http.MethodDelete,
+		"/keys/signer?api-version=7.4", ""); code != 403 {
+		t.Errorf("Crypto User deleting a key = %d %v, want 403", code, out)
+	}
+}
+
+// Crypto Officer holds keys/*, so it manages them.
+func TestKeyVaultCryptoOfficerMayCreateAndDeleteKeys(t *testing.T) {
+	srv, _ := newEnforcingTestServer(t, "")
+	host, id := makeVault(t, srv, "kv-crypto")
+	assign(t, srv, id, roleKVCryptoOfficer, appPrincipal)
+
+	if code, out := vaultAs(t, srv, host, appPrincipal, http.MethodPost,
+		"/keys/mine/create?api-version=7.4", `{"kty":"RSA","key_size":2048}`); code != 200 {
+		t.Fatalf("Crypto Officer creating a key = %d %v, want 200", code, out)
+	}
+	if code, out := vaultAs(t, srv, host, appPrincipal, http.MethodDelete,
+		"/keys/mine?api-version=7.4", ""); code != 200 {
+		t.Errorf("Crypto Officer deleting a key = %d %v, want 200", code, out)
+	}
+}
+
+// A key role does not reach certificates, and vice versa.
+//
+// They are separate dataAction families, which is easy to assume and worth
+// pinning: Crypto Officer holds keys/* and nothing certificate-shaped.
+func TestKeyAndCertificateRolesDoNotReachEachOther(t *testing.T) {
+	srv, _ := newEnforcingTestServer(t, "")
+	host, id := makeVault(t, srv, "kv-split")
+	assign(t, srv, id, roleKVCryptoOfficer, appPrincipal)
+
+	policy := `{"policy":{"issuer":{"name":"Self"},"key_props":{"kty":"RSA","key_size":2048},` +
+		`"x509_props":{"subject":"CN=x","validity_months":12}}}`
+	if code, out := vaultAs(t, srv, host, appPrincipal, http.MethodPost,
+		"/certificates/c1/create?api-version=7.4", policy); code != 403 {
+		t.Errorf("Crypto Officer creating a certificate = %d %v, want 403", code, out)
+	}
+
+	// And the certificates role can.
+	assign(t, srv, id, roleKVCertsOfficer, otherPrincipal)
+	if code, out := vaultAs(t, srv, host, otherPrincipal, http.MethodPost,
+		"/certificates/c1/create?api-version=7.4", policy); code != 200 {
+		t.Fatalf("Certificates Officer creating a certificate = %d %v, want 200", code, out)
+	}
+}
+
+// Key Vault Reader lists KEYS with no entry of its own, and the reason is the
+// service's whole point.
+//
+// Its dataActions are `vaults/*/read` plus `secrets/readMetadata/action` --
+// and the second is there because a SECRET's metadata and its value are
+// different permissions, so a plain `*/read` cannot express "names but not
+// values". A KEY needs no such split: there is no value to withhold, because
+// the private half is never returned to anybody. So `keys/read` falls under
+// the wildcard and nothing had to be added.
+//
+// Asserted rather than assumed, because the obvious move when adding keys was
+// to give Reader a `keys/readMetadata/action` by analogy with secrets -- which
+// would have invented an action Azure does not have.
+func TestKeyVaultReaderListsKeysWithoutAnEntryOfItsOwn(t *testing.T) {
+	srv, _ := newEnforcingTestServer(t, "")
+	host, id := makeVault(t, srv, "kv-reader")
+	createKeyAsDefault(t, srv, host, "visible")
+	assign(t, srv, id, roleKVReader, appPrincipal)
+
+	if code, out := vaultAs(t, srv, host, appPrincipal, http.MethodGet,
+		"/keys?api-version=7.4", ""); code != 200 {
+		t.Errorf("Key Vault Reader listing keys = %d %v, want 200 -- its own description says "+
+			"it reads the metadata of a vault's keys", code, out)
+	}
+	// Reading the key is also fine: a key's public half IS its metadata.
+	if code, out := vaultAs(t, srv, host, appPrincipal, http.MethodGet,
+		"/keys/visible?api-version=7.4", ""); code != 200 {
+		t.Errorf("Key Vault Reader reading a key = %d %v, want 200", code, out)
+	}
+	// But it cannot USE the key, which is the line the role draws.
+	digest := "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+	if code, out := vaultAs(t, srv, host, appPrincipal, http.MethodPost,
+		"/keys/visible/sign?api-version=7.4", `{"alg":"RS256","value":"`+digest+`"}`); code != 403 {
+		t.Errorf("Key Vault Reader signing = %d %v, want 403", code, out)
+	}
+}

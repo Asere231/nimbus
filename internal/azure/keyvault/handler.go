@@ -127,6 +127,8 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, vaultName string
 		return h.serveKeys(w, r, v, seg[1:])
 	case "deletedkeys":
 		return h.serveDeletedKeys(w, r, v, seg[1:])
+	case "deletedcertificates":
+		return h.serveDeletedCertificates(w, r, v, seg[1:])
 	case "storage", "rng":
 		// Deliberately an error, not an empty success: a client that thinks
 		// it wrapped a key with a key that does not exist is in a far worse
@@ -647,13 +649,95 @@ func DataActionFor(r *http.Request, path string) string {
 		case r.Method == http.MethodGet:
 			return prefix + "secrets/readMetadata/action"
 		}
+	case "keys":
+		// A key needs no readMetadata/getSecret split, and the reason is
+		// the service's whole point: there is no "value" to withhold,
+		// because the private half is never returned to anybody. So a
+		// read is a read, and Key Vault Reader's `vaults/*/read` covers
+		// listing keys with no entry of its own -- unlike secrets, where
+		// the split exists precisely because a secret's VALUE is
+		// readable.
+		switch r.Method {
+		case http.MethodGet:
+			return prefix + "keys/read"
+		case http.MethodPut, http.MethodPatch:
+			return prefix + "keys/update/action"
+		case http.MethodDelete:
+			return prefix + "keys/delete"
+		case http.MethodPost:
+			if len(seg) > 2 {
+				switch strings.ToLower(seg[len(seg)-1]) {
+				case "create":
+					return prefix + "keys/create"
+				case "sign":
+					return prefix + "keys/sign/action"
+				case "verify":
+					return prefix + "keys/verify/action"
+				case "encrypt":
+					return prefix + "keys/encrypt/action"
+				case "decrypt":
+					return prefix + "keys/decrypt/action"
+				case "wrapkey":
+					return prefix + "keys/wrap/action"
+				case "unwrapkey":
+					return prefix + "keys/unwrap/action"
+				case "backup":
+					return prefix + "keys/backup/action"
+				}
+			}
+			return prefix + "keys/create"
+		}
+	case "deletedkeys":
+		switch r.Method {
+		case http.MethodDelete:
+			return prefix + "keys/purge"
+		case http.MethodPost:
+			return prefix + "keys/recover/action"
+		case http.MethodGet:
+			return prefix + "keys/read"
+		}
 	case "certificates":
-		// Contacts, which azurerm reads straight after every vault
-		// read. A plain read action, so anything that can read the
-		// vault's contents can read it -- a 403 here crashes the
-		// provider's Key Vault client, which is why it matters that
-		// this is not accidentally stricter than the vault itself.
-		return prefix + "certificatecontacts/read"
+		// CONTACTS is the one certificate path that must stay permissive.
+		// azurerm reads it straight after every read of the vault
+		// RESOURCE, and a 403 there crashes the provider's Key Vault
+		// client -- so it is a plain read action, deliberately no
+		// stricter than the vault itself.
+		//
+		// Everything else under /certificates is a real certificate
+		// operation and must NOT be authorized as a contacts read. That
+		// was the behaviour until certificates existed: this case
+		// returned certificatecontacts/read for every path beneath it, so
+		// the moment a create was implemented it would have been
+		// permitted by whatever could read a contact list. Latent for
+		// four milestones because nothing else was routed here.
+		if named && strings.EqualFold(seg[1], "contacts") {
+			return prefix + "certificatecontacts/read"
+		}
+		if !named {
+			if r.Method == http.MethodGet {
+				return prefix + "certificates/read"
+			}
+			return prefix + "certificates/create"
+		}
+		switch r.Method {
+		case http.MethodGet:
+			return prefix + "certificates/read"
+		case http.MethodPatch, http.MethodPut:
+			return prefix + "certificates/update/action"
+		case http.MethodDelete:
+			return prefix + "certificates/delete"
+		case http.MethodPost:
+			return prefix + "certificates/create"
+		}
+	case "deletedcertificates":
+		switch r.Method {
+		case http.MethodDelete:
+			return prefix + "certificates/purge"
+		case http.MethodPost:
+			return prefix + "certificates/recover/action"
+		case http.MethodGet:
+			return prefix + "certificates/read"
+		}
 	}
 	return ""
 }

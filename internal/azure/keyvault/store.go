@@ -42,6 +42,12 @@ type Vault struct {
 	// name, which is the whole of its three-way addressing.
 	Keys        map[string]*Key
 	DeletedKeys map[string]*Key
+	// Certs and DeletedCerts are the same again for certificates. A
+	// certificate shares its name with a key and a secret -- that is its
+	// three-way addressing -- so it needs maps of its own rather than a
+	// slot in either of theirs.
+	Certs        map[string]*Certificate
+	DeletedCerts map[string]*Certificate
 	// Contacts are the certificate contacts. They live here, oddly far from
 	// anything certificate-shaped, because azurerm reads them on every read of
 	// the vault RESOURCE -- see the comment on serveContacts.
@@ -105,6 +111,7 @@ func (s *Store) CreateVault(name string) *Vault {
 		Name:    name,
 		Secrets: map[string]*Secret{}, Deleted: map[string]*Secret{},
 		Keys: map[string]*Key{}, DeletedKeys: map[string]*Key{},
+		Certs: map[string]*Certificate{}, DeletedCerts: map[string]*Certificate{},
 	}
 	s.m[key] = v
 	return v

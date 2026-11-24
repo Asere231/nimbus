@@ -9,12 +9,14 @@ terraform apply  ──HTTPS──▶  Nimbus Azure (ARM) :4701 ──┐
 terraform apply  ──HTTP───▶  Nimbus AWS        :4702 ──┴▶ store ──▶ event bus ──SSE──▶  visualizer :4700
 ```
 
-**Status (v0.20.0):** all three clouds, in one process. Control planes,
+**Status (v0.23.0):** all three clouds, in one process. Control planes,
 storage data planes, real Kubernetes clusters, Lambda and **Azure
 Functions** that really execute, Cloud Run and Container Apps services,
 and compute instances that really boot — plus IAM, Azure RBAC and GCP IAM
-that actually refuse. Driven by Terraform, `az`, `aws`, `gcloud` and
-`kubectl`. Verified on macOS, Linux and Windows.
+that actually refuse, a Shared Access Signature that grants exactly what
+it says, and a Key Vault that **signs without exporting the key**. Driven
+by Terraform, `az`, `aws`, `gcloud` and `kubectl`. Verified on macOS,
+Linux and Windows.
 See [docs/ROADMAP.md](docs/ROADMAP.md) for what is and is not covered.
 
 ## Documentation

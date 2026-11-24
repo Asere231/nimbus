@@ -210,3 +210,46 @@ func readDoc(t *testing.T, path string) string {
 	}
 	return string(data)
 }
+
+// The version is stated in three places and they must agree.
+//
+// `cmd/nimbus/main.go` holds the constant that /api/info serves, README.md
+// says "Status (vX)", and docs/CHANGELOG.md's newest release heading names
+// it. Nothing checked that they matched, and a release is exactly the moment
+// they diverge: bumping the constant and forgetting the README, or cutting a
+// changelog heading without bumping the constant, are both one edit away.
+//
+// The invariant holds whether or not work is in flight. An "## Unreleased"
+// section above the newest version heading is the ordinary state between
+// releases, and the binary still reports the last RELEASED version — so the
+// check is against the newest VERSION heading, not the newest heading.
+func TestTheVersionIsTheSameEverywhere(t *testing.T) {
+	root := repoRoot(t)
+
+	src := readDoc(t, filepath.Join(root, "cmd", "nimbus", "main.go"))
+	m := regexp.MustCompile(`const version = "([0-9]+\.[0-9]+\.[0-9]+)"`).FindStringSubmatch(src)
+	if m == nil {
+		t.Fatal("could not find the version constant in cmd/nimbus/main.go")
+	}
+	version := m[1]
+
+	readme := readDoc(t, filepath.Join(root, "README.md"))
+	rm := regexp.MustCompile(`\*\*Status \(v([0-9]+\.[0-9]+\.[0-9]+)\)`).FindStringSubmatch(readme)
+	if rm == nil {
+		t.Fatal("could not find the \"Status (vX)\" line in README.md")
+	}
+	if rm[1] != version {
+		t.Errorf("README.md says v%s and cmd/nimbus says %s", rm[1], version)
+	}
+
+	changelog := readDoc(t, filepath.Join(root, "docs", "CHANGELOG.md"))
+	cm := regexp.MustCompile(`(?m)^## ([0-9]+\.[0-9]+\.[0-9]+) —`).FindStringSubmatch(changelog)
+	if cm == nil {
+		t.Fatal("could not find a released version heading in docs/CHANGELOG.md")
+	}
+	if cm[1] != version {
+		t.Errorf("the newest release in docs/CHANGELOG.md is %s and cmd/nimbus reports %s\n\n"+
+			"cutting a release means bumping the constant, the README's status line and the "+
+			"changelog heading together", cm[1], version)
+	}
+}

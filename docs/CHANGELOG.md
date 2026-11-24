@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.23.0 — 2026-11-24
+
+Three milestones in one release. The minor version tracks the milestone
+number here — 0.20.0 was Milestone 20 — so 0.21.0 and 0.22.0 do not
+exist as releases: Milestone 21 verified the Windows-driven work on
+Apple Silicon and Milestone 22 added SAS enforcement, and neither was
+cut at the time.
 
 ### Milestone 23: a Key Vault that does cryptography, not just storage
 

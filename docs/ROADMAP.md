@@ -1,7 +1,88 @@
 # Roadmap
 
 **Current: Milestone 23, Key Vault keys and certificates**
-(`docs/prompts/m23-keyvault-keys-certs.md`).
+(`docs/prompts/m23-keyvault-keys-certs.md`). **In progress** -- the
+measurement is done and the store is in; the handlers are not.
+
+### What is done
+
+The two create calls are MEASURED, which needed two passes. Both
+`azurerm_key_vault_key` and `azurerm_key_vault_certificate` check for the
+presence of an existing object BEFORE creating one, and aborted on the
+501 that used to be there -- so the create was never sent and its body
+could not be read. A 404 for a missing key or certificate is what lets
+the provider get as far as the POST:
+
+    POST //keys/{name}/create?api-version=7.4
+    {"attributes":{"enabled":true},
+     "key_ops":["sign","verify","wrapKey","unwrapKey","encrypt","decrypt"],
+     "key_size":2048,"kty":"RSA","tags":{}}
+
+    POST /certificates/{name}/create?api-version=7.4
+    {"policy":{"issuer":{"name":"Self"},
+      "key_props":{"exportable":true,"kty":"RSA","key_size":2048,"reuse_key":false},
+      "lifetime_actions":[],"secret_props":{"contentType":"application/x-pkcs12"},
+      "x509_props":{"subject":"CN=...","ekus":[],"sans":{},
+        "key_usage":["keyEncipherment","digitalSignature"],"validity_months":12}},
+     "tags":{}}
+
+Note `key_ops`, not `keyOps`; and the certificate policy mixes
+conventions -- `key_props`, `x509_props` and `validity_months` are
+snake_case while `contentType` INSIDE `secret_props` is camelCase. Note
+also the double slash and trailing slash azurerm sends on the key paths
+(`//keys/name/`), which `splitPath` already tolerates, and that the two
+resources use different SDK generations: the key reports "unexpected
+status 501" while the certificate reports `keyvault.BaseClient#...`,
+go-autorest's shape -- the same go-autorest that panics on a bare
+challenge origin.
+
+`internal/azure/keyvault/keystore.go` holds `Key`/`KeyVersion` and the
+full lifecycle (create, versions, soft delete, recover, purge, update),
+mirroring the secret shape so the recycle-bin machinery is reused rather
+than reinvented. The private half is held as a `crypto` key and has no
+path to a response. `P-256K` is refused by name: it is a real Azure curve
+and the standard library has no secp256k1.
+
+### What is left
+
+1. **Key handlers** in `keys.go`, which is still a measurement scaffold:
+   create, get, list, versions, update, delete, and `deletedkeys`
+   recover/purge. The JWK response is `kty`/`n`/`e` base64url for RSA and
+   `crv`/`x`/`y` for EC, and a test must assert directly that no response
+   body carries `d`, `p`, `q`, `dp`, `dq` or `qi`.
+2. **Persistence** in `persist.go`, or a restart loses every key. The
+   assertion is a CLEAN PLAN after a reload, not that the key is listed.
+3. **Crypto operations** in a new `crypto.go`: sign, verify, encrypt,
+   decrypt, wrapKey, unwrapKey for RSA and sign/verify for EC. Decided
+   deliberately rather than taking the prompt's narrower
+   recommendation, because azurerm stores and reads back
+   `key_opts = [all six]` -- a vault that advertises six capabilities and
+   501s on four lies about itself. An unsupported algorithm is refused by
+   name.
+4. **Certificates** in a new `certs.go`: create with a `Self` policy that
+   Nimbus signs, and the three-way addressing (certificate, key and
+   secret under one name). `issuer_name` of DigiCert or GlobalSign is
+   refused by name -- they need the network. Still unmeasured: whether
+   azurerm polls a certificate operation, and whether the secret under a
+   certificate returns a PEM chain or base64 PKCS#12.
+5. **`DataActionFor` has a latent bug that this milestone activates.** It
+   returns `certificatecontacts/read` for EVERY `certificates` path, so
+   the moment real certificate operations exist a cert create is
+   authorized as a contacts read. Contacts must keep its permissive
+   action, because a 403 there crashes azurerm's Key Vault client.
+6. **Three built-in roles** -- Key Vault Crypto Officer, Crypto User and
+   Certificates Officer -- with GUIDs verified against Microsoft's
+   published list rather than recalled. Also worth asserting: `Key Vault
+   Reader` should list keys with no new entry, because keys use
+   `keys/read` and its dataActions already include `vaults/*/read`. The
+   secrets split into `readMetadata`/`getSecret` exists only because a
+   secret's VALUE is readable; a key's private half never leaves, so
+   there is nothing to split. That asymmetry is the milestone's neatest
+   finding so far.
+7. UI (keys and certificates beside secrets in the vault inspector,
+   metadata only), an `examples/terraform/azure-keyvault`, a CI step, and
+   the close-out.
+
 
 Milestone 22 is done: an Azure **SAS now decides**. The signature is
 verified against the account keys, the window is enforced, `sp` is

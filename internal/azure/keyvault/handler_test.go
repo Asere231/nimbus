@@ -256,9 +256,16 @@ func TestSecretSoftDeleteRecoverPurge(t *testing.T) {
 // Keys and certificates are not emulated, and must say so rather than
 // returning an empty success: a client that believes it wrapped a key with a
 // key that does not exist is in a much worse place.
-func TestKeysAndCertificatesAreRefusedClearly(t *testing.T) {
+// What Nimbus does not implement is refused BY NAME, not with an empty
+// success. A client that thinks it wrapped a key with a key that does not
+// exist is in a far worse position than one that was told so.
+//
+// `storage` and `rng` stay out of scope: managed storage account keys are a
+// feature nothing here can meaningfully emulate, and a random-number
+// generator from an emulator is actively misleading.
+func TestUnimplementedKeyVaultSurfacesAreRefusedByName(t *testing.T) {
 	srv, _ := newTestVault(t)
-	for _, path := range []string{"/keys/k1/create?api-version=7.4", "/certificates/c1?api-version=7.4"} {
+	for _, path := range []string{"/storage/sa1?api-version=7.4", "/rng?api-version=7.4"} {
 		code, body, _ := call(t, srv, "POST", path, "{}")
 		if code != 501 {
 			t.Errorf("%s = %d, want 501: %v", path, code, body)
@@ -416,10 +423,27 @@ func TestCertificateContacts(t *testing.T) {
 
 // Everything else under /certificates is still unimplemented, and still says
 // so rather than pretending.
-func TestOtherCertificateOperationsStillRefused(t *testing.T) {
+// A key or certificate that is not there answers 404 with its OWN code.
+//
+// This is what azurerm needs before it will create one: both resources check
+// for the presence of an existing object first, and a 501 on that check fails
+// the apply with a message about the CHECK rather than the create -- so the
+// create body was never sent and could not be measured. The two resources
+// also use different SDK generations, which is visible in the errors: the key
+// reports "unexpected status 501" while the certificate reports
+// "keyvault.BaseClient#GetCertificate", go-autorest's shape.
+func TestAMissingKeyOrCertificateIsNotFound(t *testing.T) {
 	srv, _ := newTestVault(t)
-	code, body, _ := call(t, srv, "GET", "/certificates/my-cert?api-version=7.4", "")
-	if code != 501 || body["error"].(map[string]any)["code"] != "NotSupported" {
-		t.Errorf("certificate get = %d %v", code, body)
+	for _, tc := range []struct{ path, code string }{
+		{"/keys/missing-key?api-version=7.4", "KeyNotFound"},
+		{"/certificates/missing-cert?api-version=7.4", "CertificateNotFound"},
+	} {
+		code, body, _ := call(t, srv, "GET", tc.path, "")
+		if code != 404 {
+			t.Errorf("%s = %d, want 404: %v", tc.path, code, body)
+		}
+		if got := body["error"].(map[string]any)["code"]; got != tc.code {
+			t.Errorf("%s error code = %v, want %s", tc.path, got, tc.code)
+		}
 	}
 }

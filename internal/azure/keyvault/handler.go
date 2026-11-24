@@ -122,15 +122,15 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, vaultName string
 		if len(seg) == 2 && strings.EqualFold(seg[1], "contacts") {
 			return h.serveContacts(w, r, v)
 		}
-		WriteError(w, 501, "NotSupported",
-			"Nimbus emulates Key Vault secrets only; certificates are not implemented.")
-		return "unimplemented Key Vault operation: certificates"
-	case "keys", "storage", "rng":
+		return h.serveCertificates(w, r, v, seg[1:])
+	case "keys":
+		return h.serveKeys(w, r, v, seg[1:])
+	case "storage", "rng":
 		// Deliberately an error, not an empty success: a client that thinks
 		// it wrapped a key with a key that does not exist is in a far worse
 		// position than one that was told Nimbus cannot do this yet.
 		WriteError(w, 501, "NotSupported",
-			"Nimbus emulates Key Vault secrets only; %q is not implemented.", seg[0])
+			"Nimbus emulates Key Vault secrets, keys and certificates; %q is not implemented.", seg[0])
 		return "unimplemented Key Vault operation: " + seg[0]
 	}
 	WriteError(w, 404, "NotFound", "Unknown Key Vault path %q.", r.URL.Path)

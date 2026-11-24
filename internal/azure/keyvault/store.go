@@ -2,9 +2,10 @@
 // lives on {vault}.vault.nimbus.localhost rather than on the Resource Manager,
 // and that actually holds secret values.
 //
-// Only secrets are emulated. Keys and certificates answer with a clear error
-// instead of an empty success, because a cryptographic operation that silently
-// does nothing is worse than one that fails.
+// Secrets, keys and certificates are emulated. Managed storage accounts and
+// the random-number generator answer with a clear error instead of an empty
+// success, because a cryptographic operation that silently does nothing is
+// worse than one that fails.
 package keyvault
 
 import (
@@ -35,6 +36,12 @@ type Vault struct {
 	// names are case-insensitive for lookup but reported as created.
 	Secrets map[string]*Secret
 	Deleted map[string]*Secret
+	// Keys and DeletedKeys are the same arrangement for keys. They are
+	// separate maps rather than one keyed by kind because a key and a
+	// secret may share a name -- a CERTIFICATE creates all three under one
+	// name, which is the whole of its three-way addressing.
+	Keys        map[string]*Key
+	DeletedKeys map[string]*Key
 	// Contacts are the certificate contacts. They live here, oddly far from
 	// anything certificate-shaped, because azurerm reads them on every read of
 	// the vault RESOURCE -- see the comment on serveContacts.
@@ -94,7 +101,11 @@ func (s *Store) CreateVault(name string) *Vault {
 	if v, ok := s.m[key]; ok {
 		return v
 	}
-	v := &Vault{Name: name, Secrets: map[string]*Secret{}, Deleted: map[string]*Secret{}}
+	v := &Vault{
+		Name:    name,
+		Secrets: map[string]*Secret{}, Deleted: map[string]*Secret{},
+		Keys: map[string]*Key{}, DeletedKeys: map[string]*Key{},
+	}
 	s.m[key] = v
 	return v
 }

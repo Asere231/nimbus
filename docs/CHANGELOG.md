@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+### Milestone 23: a Key Vault that does cryptography, not just storage
+
+- **`azurerm_key_vault_key` and `azurerm_key_vault_certificate` could not
+  be applied at all.** Keys, certificates, `storage` and `rng` all
+  answered 501, so the half of Key Vault that is about *cryptography*
+  rather than *storage* was absent. Both resources now apply, plan clean
+  and destroy, and `az keyvault key create/show/list/sign/verify` and
+  `az keyvault certificate create/show` work.
+- **The private half never leaves, and that is asserted rather than
+  hoped for.** A test walks every response body a key can produce —
+  bundle, list, versions, crypto result, patch, delete, recycle bin — at
+  any depth, for the private JWK members RFC 7518 names. A signature the
+  vault makes is verified with `crypto` against the public key the vault
+  *published*, and the vault decrypts what that same published key
+  encrypted. All of it with `crypto/rsa`, `crypto/ecdsa` and
+  `crypto/x509` — no dependency, no network.
+- **The full RSA operation set**, not just sign/verify: sign, verify,
+  encrypt, decrypt, wrapKey and unwrapKey. azurerm's `key_opts` asks for
+  all six and Nimbus returns them in `key_ops`, so refusing four would
+  have been a vault lying about itself. EC keys sign and verify and
+  cannot encrypt — arithmetic, not a gap, and the refusal says so.
+- **A certificate is three objects under one name**: the certificate, a
+  key whose private half never leaves, and a secret carrying the whole
+  thing for a TLS stack. Creating one writes all three, deleting takes
+  all three, recovering restores all three.
+- **Two clients were needed and they found different bugs.** Three faults
+  were invisible to Terraform: a key *list* entry keeps `kid` flat where
+  a bundle nests the JWK under `key` (azurerm never lists keys), a
+  certificate create must answer **202** and not 200 (azurerm tolerates
+  200), and the sign/verify round trip, which azurerm never performs.
+- **An authorization bug this milestone activated is fixed.**
+  `DataActionFor` returned `certificatecontacts/read` for *every* path
+  under `/certificates`, so a certificate create would have been
+  authorized by whatever could read a contact list. Contacts keeps its
+  permissive action deliberately — a 403 there crashes azurerm's Key
+  Vault client.
+- **Three built-in roles**, transcribed from Microsoft's published
+  definitions: Key Vault Crypto Officer, Crypto User and Certificates
+  Officer. Crypto User may *use* a key and not manage one, which is the
+  least-privilege case the data-action axis exists to express.
+- **Refused by name rather than approximated**: key import, HSM key
+  types, the P-256K curve, rotation policies, backup, and any certificate
+  issuer other than `Self`. A certificate's secret reports
+  `application/x-pem-file` rather than claiming the PKCS#12 its policy
+  asks for, because the standard library has no PKCS#12 encoder — a
+  stated divergence that azurerm never sees, since it does not read the
+  secret.
+- **New example** `examples/terraform/azure-keyvault`, and a CI job
+  driving it with both Terraform and `az`.
+
 ### Milestone 22: an Azure Shared Access Signature now decides
 
 - **A SAS was accepted on shape alone.** `Authenticate` checked that

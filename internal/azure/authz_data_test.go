@@ -454,9 +454,11 @@ func TestKeyAndCertificateRolesDoNotReachEachOther(t *testing.T) {
 
 	// And the certificates role can.
 	assign(t, srv, id, roleKVCertsOfficer, otherPrincipal)
+	// 202: a certificate create answers with an OPERATION, as real Key Vault
+	// does, and `az` refuses a 200 outright.
 	if code, out := vaultAs(t, srv, host, otherPrincipal, http.MethodPost,
-		"/certificates/c1/create?api-version=7.4", policy); code != 200 {
-		t.Fatalf("Certificates Officer creating a certificate = %d %v, want 200", code, out)
+		"/certificates/c1/create?api-version=7.4", policy); code != 202 {
+		t.Fatalf("Certificates Officer creating a certificate = %d %v, want 202", code, out)
 	}
 }
 

@@ -22,7 +22,7 @@ knows none of their policy languages.
 
 ## How to try it
 
-Five examples exist for exactly this:
+Six examples exist for exactly this:
 
 | Example | Shows |
 |---|---|
@@ -31,6 +31,7 @@ Five examples exist for exactly this:
 | `examples/terraform/azure-rbac-enforced` | a secret readable only with "Key Vault Secrets User" |
 | `examples/terraform/gcp-iam-enforced` | a binding on a bucket reaching its objects |
 | `examples/terraform/azure-storage-sas` | a SAS granting exactly what it says, and four ways of being refused |
+| `examples/terraform/azure-keyvault` | keys and certificates, and a vault that signs without exporting |
 
 Each applies against an enforcing server and is written to be read. The last
 one needs **no flag**, for the reason the SAS section below gives.
@@ -74,7 +75,20 @@ assignment excludes is still allowed if another grants it. Scope inheritance
 is segment-aligned, so an assignment at `.../rg` does not govern
 `.../rg-two`. `dataActions` are enforced on Key Vault's data plane, which is
 why **a Contributor can delete a vault and not read a secret out of it** —
-the most surprising true thing about Azure RBAC.
+the most surprising true thing about Azure RBAC. Keys and certificates are
+covered too: **Key Vault Crypto User may use a key and not manage one**,
+because its published dataActions are an explicit list with no `create` and
+no `delete` in it.
+
+A key and a secret need different permissions, and the asymmetry is the
+model rather than an oversight. A secret has `getSecret` **and**
+`readMetadata`, because its metadata and its value are separately grantable
+— that is how Key Vault Reader sees that `db-password` exists without
+seeing what it is. A key has only `keys/read`, because there is no value to
+withhold: the private half is never returned to anybody. So Key Vault
+Reader lists keys with no entry of its own, which a test asserts, because
+the obvious move when adding keys was to invent a `keys/readMetadata` by
+analogy with secrets.
 
 **GCP.** Project and resource bindings, concatenated. The three basic roles
 plus about a dozen predefined ones, expressed as the wildcard patterns they

@@ -270,7 +270,10 @@ func selfSignedPolicy(subject string) string {
 func mustCreateCert(t *testing.T, srv *httptest.Server, name, body string) map[string]any {
 	t.Helper()
 	code, out, _ := call(t, srv, "POST", "/certificates/"+name+"/create?api-version=7.4", body)
-	if code != 200 {
+	// 202, not 200: `az keyvault certificate create` refuses a 200 with
+	// "Operation returned an invalid status 'OK'" while quoting a correct
+	// body back, so it reads as a content problem and is a status problem.
+	if code != 202 {
 		t.Fatalf("create certificate %s = %d: %v", name, code, out)
 	}
 	return out

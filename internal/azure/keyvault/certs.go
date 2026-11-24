@@ -242,8 +242,14 @@ func (h *Handler) createCertificate(w http.ResponseWriter, r *http.Request, v *V
 	// /certificates/{name}/pending. Nimbus signs synchronously, so the
 	// operation is already complete -- but it must still be shaped like one,
 	// or a client waits for something that never arrives.
+	//
+	// And it must be 202, not 200. azurerm tolerates a 200; `az keyvault
+	// certificate create` does NOT, and fails with "Operation returned an
+	// invalid status 'OK'" while quoting the entirely correct body back --
+	// so it reads as a content problem and is a status problem. The second
+	// time this exact confusion has come up, after Microsoft.Web's creates.
 	_ = ver
-	writeJSON(w, 200, h.certOperationJSON(v, v.Certificate(name)))
+	writeJSON(w, 202, h.certOperationJSON(v, v.Certificate(name)))
 	return "created certificate " + name
 }
 

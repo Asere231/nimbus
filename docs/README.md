@@ -114,6 +114,7 @@ with its reasoning in the comments:
 | `aws-instance`, `azure-vm`, `gcp-instance` | VMs that boot and run a script |
 | `aws-iam-enforced`, `azure-rbac-enforced`, `gcp-iam-enforced`, `aws-bucket-policy-enforced` | IAM actually refusing things |
 | `azure-storage-sas` | a SAS granting exactly what it says, and four ways to be refused |
+| `azure-keyvault` | keys and certificates; the vault signs and the private half never leaves |
 | `../multicloud` | one apply, three clouds, three clusters |
 | `../apps/url-shortener` | five services wired together as an application |
 

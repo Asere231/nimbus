@@ -360,14 +360,30 @@ func (h *Handler) keyID(v *Vault, name, version string) string {
 	return id
 }
 
-// keyBundleJSON is what every read of a key returns: the public JWK, the
-// attributes and the tags. There is no "value" field and there is nowhere for
+// keyBundleJSON is what a READ of one key returns: the public JWK nested under
+// "key", plus attributes and tags. There is no "value" field and nowhere for
 // one to go -- see jwkJSON.
+//
+// A LIST entry is a DIFFERENT shape, and the difference is not cosmetic: a
+// KeyItem carries `kid` flat at the top level while a KeyBundle nests the
+// whole JWK under `key`. Returning the bundle shape from a listing made
+// `az keyvault key list` fail with "'None' is not a valid ID" -- the SDK
+// looked for kid where a KeyItem keeps it, found nothing, and could not build
+// an id. azurerm never lists keys, so nothing but a real CLI could catch it.
 func (h *Handler) keyBundleJSON(v *Vault, k *Key, ver *KeyVersion) map[string]any {
-	return h.keyItemJSON(v, k, ver)
+	out := h.keyAttributesJSON(v, k, ver)
+	out["key"] = h.jwkJSON(v, k, ver)
+	return out
 }
 
+// keyItemJSON is a LIST entry: kid flat, no nested key object.
 func (h *Handler) keyItemJSON(v *Vault, k *Key, ver *KeyVersion) map[string]any {
+	out := h.keyAttributesJSON(v, k, ver)
+	out["kid"] = h.keyID(v, k.Name, ver.Version)
+	return out
+}
+
+func (h *Handler) keyAttributesJSON(v *Vault, k *Key, ver *KeyVersion) map[string]any {
 	attrs := map[string]any{
 		"enabled":         ver.Enabled,
 		"created":         ver.Created.Unix(),
@@ -381,10 +397,7 @@ func (h *Handler) keyItemJSON(v *Vault, k *Key, ver *KeyVersion) map[string]any 
 	if ver.Expires != nil {
 		attrs["exp"] = ver.Expires.Unix()
 	}
-	out := map[string]any{
-		"key":        h.jwkJSON(v, k, ver),
-		"attributes": attrs,
-	}
+	out := map[string]any{"attributes": attrs, "managed": false}
 	if len(ver.Tags) > 0 {
 		out["tags"] = ver.Tags
 	}
@@ -425,7 +438,7 @@ func (h *Handler) jwkJSON(v *Vault, k *Key, ver *KeyVersion) map[string]any {
 func (h *Handler) deletedKeyJSON(v *Vault, k *Key) map[string]any {
 	out := map[string]any{}
 	if ver := k.Latest(); ver != nil {
-		out = h.keyItemJSON(v, k, ver)
+		out = h.keyBundleJSON(v, k, ver)
 	}
 	out["recoveryId"] = k.RecoveryID
 	if !k.Deleted.IsZero() {

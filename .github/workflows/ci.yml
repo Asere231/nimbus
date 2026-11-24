@@ -224,6 +224,152 @@ jobs:
           az network vnet show -g rg-ci -n nimbus-vnet -o json > after.json
           diff before.json after.json || { echo "a redeploy changed the VNet"; exit 1; }
 
+  # Key Vault's CRYPTOGRAPHY half, driven by Terraform and then by az.
+  #
+  # Both clients, because they found different bugs. azurerm exercises the
+  # resources; `az` exercises the operations, and three things it caught were
+  # invisible to Terraform: a key LIST entry keeps `kid` flat where a bundle
+  # nests the JWK under `key` (azurerm never lists keys), a certificate create
+  # must answer 202 and not 200 (azurerm tolerates 200), and the sign/verify
+  # round trip itself, which azurerm never performs.
+  keyvault:
+    name: terraform azure-keyvault (keys, certs, az crypto)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus cert
+          ./bin/nimbus start &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: Apply the example
+        working-directory: examples/terraform/azure-keyvault
+        env:
+          # Go on Linux honours SSL_CERT_FILE; azurerm inherits it.
+          SSL_CERT_FILE: /home/runner/.nimbus/certs/nimbus-ca.pem
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+          # Clean, because a key's JWK or a certificate's policy that differed
+          # between reads would be a permanent diff.
+          terraform plan -detailed-exitcode -input=false
+
+      # The az CLI is preinstalled on GitHub's Ubuntu runners.
+      - name: Register Nimbus as a cloud and sign in
+        run: |
+          export REQUESTS_CA_BUNDLE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          ./bin/nimbus az register --run
+          az login --service-principal \
+            -u 00000000-0000-0000-0000-000000000002 -p nimbus \
+            --tenant 00000000-0000-0000-0000-000000000001 --allow-no-subscriptions
+
+      - name: The vault signs, and the private half never leaves
+        run: |
+          set -euo pipefail
+          export REQUESTS_CA_BUNDLE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          V=kv-nimbus-demo
+
+          # A key LIST must work. It is a different shape from a bundle --
+          # `kid` flat rather than a nested `key` -- and returning the bundle
+          # shape made this fail with "'None' is not a valid ID".
+          az keyvault key list --vault-name $V --query "[].kid" -o tsv | tee /tmp/keys.txt
+          grep -q "signing-key" /tmp/keys.txt
+          grep -q "ec-key" /tmp/keys.txt
+
+          # NO private material, anywhere in a key read. The nulls az prints
+          # for p/q/qi are its own SDK struct fields, not fields Nimbus sent,
+          # so the check is on the RAW response rather than az's rendering.
+          curl -sf --cacert "$REQUESTS_CA_BUNDLE" \
+            -H "Authorization: Bearer x" \
+            "https://$V.vault.nimbus.localhost:4701/keys/signing-key?api-version=7.4" > /tmp/key.json
+          cat /tmp/key.json
+          for member in '"d"' '"p"' '"q"' '"dp"' '"dq"' '"qi"'; do
+            if grep -q "$member" /tmp/key.json; then
+              echo "FAIL: the key response carries the private JWK member $member"; exit 1
+            fi
+          done
+
+          # Sign, then verify. The digest is STANDARD base64 WITH padding: az
+          # decodes it client-side and re-encodes for the wire, so stripping
+          # the padding fails inside az with "Incorrect padding" before a
+          # request is sent. The fields are `signature` and `isValid`.
+          D=$(printf 'hello' | openssl dgst -sha256 -binary | openssl base64 -A)
+          S=$(az keyvault key sign --vault-name $V --name signing-key \
+                --algorithm RS256 --digest "$D" --query signature -o tsv)
+          test -n "$S"
+          ok=$(az keyvault key verify --vault-name $V --name signing-key \
+                 --algorithm RS256 --digest "$D" --signature "$S" --query isValid -o tsv)
+          test "$ok" = "true"
+
+          # An EC key cannot encrypt, and the refusal says why rather than no.
+          set +e
+          out=$(az keyvault key encrypt --vault-name $V --name ec-key \
+                  --algorithm RSA-OAEP-256 --value "aGk=" 2>&1)
+          set -e
+          echo "$out" | grep -q "do not encrypt"
+
+      - name: A certificate is three objects under one name
+        run: |
+          set -euo pipefail
+          export REQUESTS_CA_BUNDLE="$HOME/.nimbus/certs/nimbus-ca.pem"
+          V=kv-nimbus-demo
+
+          az keyvault certificate show --vault-name $V --name web \
+            --query "{cert:id, key:kid, secret:sid}" -o json | tee /tmp/cert.json
+          # kid and sid must be VERSIONED: azurerm fails the apply with
+          # "expected a versioned ID" otherwise, after creating the thing --
+          # an error naming neither the field nor the resource. A versioned id
+          # is .../{collection}/{name}/{version}, so it has one more path
+          # segment than an unversioned one.
+          # A `case` inside $(...) does not work here: the ")" of a pattern
+          # closes the command substitution. Pairs instead.
+          for pair in certificate:id key:kid secret:sid; do
+            field=${pair%%:*}
+            id=$(az keyvault certificate show --vault-name $V --name web \
+                   --query "${pair##*:}" -o tsv)
+            segs=$(printf '%s' "$id" | tr -cd '/' | wc -c | tr -d ' ')
+            if [ "$segs" -lt 5 ]; then
+              echo "FAIL: the $field id is not versioned: $id"; exit 1
+            fi
+            echo "ok   $field -> $id"
+          done
+          # The key and the secret really exist under the same name.
+          az keyvault key show --vault-name $V --name web --query key.kid -o tsv
+          # PEM, not the PKCS#12 the policy asked for: the Go standard library
+          # has no PKCS#12 encoder, so the content type says what it is.
+          test "$(az keyvault secret show --vault-name $V --name web --query contentType -o tsv)" = "application/x-pem-file"
+
+          # Deleting the certificate takes its key and its secret with it.
+          az keyvault certificate delete --vault-name $V --name web -o none
+          set +e
+          az keyvault key show --vault-name $V --name web -o none 2>/dev/null
+          test $? -ne 0 || { echo "FAIL: the key outlived its certificate"; exit 1; }
+          set -e
+          echo "the key went with the certificate"
+
+      - name: Destroy
+        working-directory: examples/terraform/azure-keyvault
+        env:
+          SSL_CERT_FILE: /home/runner/.nimbus/certs/nimbus-ca.pem
+        run: terraform destroy -auto-approve -input=false
+
   sdkcompat:
     name: go-azure-sdk harness
     runs-on: ubuntu-latest

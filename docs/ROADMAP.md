@@ -1,337 +1,33 @@
 # Roadmap
 
-**Current: Milestone 23, Key Vault keys and certificates**
-(`docs/prompts/m23-keyvault-keys-certs.md`). **In progress** -- the
-measurement is done and the store is in; the handlers are not.
+**Current: Milestone 24, GCP Cloud Functions**
+(`docs/prompts/m24-gcp-functions.md`).
 
-### What is done
+Milestone 23 is done: a Key Vault now does **cryptography**, not just
+storage. `azurerm_key_vault_key` and `azurerm_key_vault_certificate`
+apply, plan clean and destroy; `az keyvault key create/show/list/sign/
+verify` and `az keyvault certificate create/show` all work.
 
-The two create calls are MEASURED, which needed two passes. Both
-`azurerm_key_vault_key` and `azurerm_key_vault_certificate` check for the
-presence of an existing object BEFORE creating one, and aborted on the
-501 that used to be there -- so the create was never sent and its body
-could not be read. A 404 for a missing key or certificate is what lets
-the provider get as far as the POST:
+The property the service exists for is asserted directly rather than
+hoped for: no response carries private key material, checked by walking
+every response body a key can produce -- bundle, list, versions, crypto
+result, patch, delete and recycle bin -- for the private JWK members RFC
+7518 names. A signature the vault makes is verified with `crypto` against
+the public key the vault PUBLISHED, and the vault decrypts what that same
+published key encrypted.
 
-    POST //keys/{name}/create?api-version=7.4
-    {"attributes":{"enabled":true},
-     "key_ops":["sign","verify","wrapKey","unwrapKey","encrypt","decrypt"],
-     "key_size":2048,"kty":"RSA","tags":{}}
+A certificate turned out to be the interesting part: it is **three
+objects under one name** -- the certificate, a key whose private half
+never leaves, and a secret carrying the whole thing for a TLS stack to
+load. Creating one writes all three, deleting takes all three, recovering
+restores all three.
 
-    POST /certificates/{name}/create?api-version=7.4
-    {"policy":{"issuer":{"name":"Self"},
-      "key_props":{"exportable":true,"kty":"RSA","key_size":2048,"reuse_key":false},
-      "lifetime_actions":[],"secret_props":{"contentType":"application/x-pkcs12"},
-      "x509_props":{"subject":"CN=...","ekus":[],"sans":{},
-        "key_usage":["keyEncipherment","digitalSignature"],"validity_months":12}},
-     "tags":{}}
-
-Note `key_ops`, not `keyOps`; and the certificate policy mixes
-conventions -- `key_props`, `x509_props` and `validity_months` are
-snake_case while `contentType` INSIDE `secret_props` is camelCase. Note
-also the double slash and trailing slash azurerm sends on the key paths
-(`//keys/name/`), which `splitPath` already tolerates, and that the two
-resources use different SDK generations: the key reports "unexpected
-status 501" while the certificate reports `keyvault.BaseClient#...`,
-go-autorest's shape -- the same go-autorest that panics on a bare
-challenge origin.
-
-`internal/azure/keyvault/keystore.go` holds `Key`/`KeyVersion` and the
-full lifecycle (create, versions, soft delete, recover, purge, update),
-mirroring the secret shape so the recycle-bin machinery is reused rather
-than reinvented. The private half is held as a `crypto` key and has no
-path to a response. `P-256K` is refused by name: it is a real Azure curve
-and the standard library has no secp256k1.
-
-### What is left
-
-1. **Key handlers** in `keys.go`, which is still a measurement scaffold:
-   create, get, list, versions, update, delete, and `deletedkeys`
-   recover/purge. The JWK response is `kty`/`n`/`e` base64url for RSA and
-   `crv`/`x`/`y` for EC, and a test must assert directly that no response
-   body carries `d`, `p`, `q`, `dp`, `dq` or `qi`.
-2. **Persistence** in `persist.go`, or a restart loses every key. The
-   assertion is a CLEAN PLAN after a reload, not that the key is listed.
-3. **Crypto operations** in a new `crypto.go`: sign, verify, encrypt,
-   decrypt, wrapKey, unwrapKey for RSA and sign/verify for EC. Decided
-   deliberately rather than taking the prompt's narrower
-   recommendation, because azurerm stores and reads back
-   `key_opts = [all six]` -- a vault that advertises six capabilities and
-   501s on four lies about itself. An unsupported algorithm is refused by
-   name.
-4. **Certificates** in a new `certs.go`: create with a `Self` policy that
-   Nimbus signs, and the three-way addressing (certificate, key and
-   secret under one name). `issuer_name` of DigiCert or GlobalSign is
-   refused by name -- they need the network. Still unmeasured: whether
-   azurerm polls a certificate operation, and whether the secret under a
-   certificate returns a PEM chain or base64 PKCS#12.
-5. **`DataActionFor` has a latent bug that this milestone activates.** It
-   returns `certificatecontacts/read` for EVERY `certificates` path, so
-   the moment real certificate operations exist a cert create is
-   authorized as a contacts read. Contacts must keep its permissive
-   action, because a 403 there crashes azurerm's Key Vault client.
-6. **Three built-in roles** -- Key Vault Crypto Officer, Crypto User and
-   Certificates Officer -- with GUIDs verified against Microsoft's
-   published list rather than recalled. Also worth asserting: `Key Vault
-   Reader` should list keys with no new entry, because keys use
-   `keys/read` and its dataActions already include `vaults/*/read`. The
-   secrets split into `readMetadata`/`getSecret` exists only because a
-   secret's VALUE is readable; a key's private half never leaves, so
-   there is nothing to split. That asymmetry is the milestone's neatest
-   finding so far.
-7. UI (keys and certificates beside secrets in the vault inspector,
-   metadata only), an `examples/terraform/azure-keyvault`, a CI step, and
-   the close-out.
-
-
-Milestone 22 is done: an Azure **SAS now decides**. The signature is
-verified against the account keys, the window is enforced, `sp` is
-compared against the operation, and `sr`/`ss`/`srt`, `sip` and `spr` all
-scope what a token reaches -- unconditionally, since a SAS needs no
-principal and nothing else here generates one. Every refusal names what
-was wrong.
-
-Two findings shaped it. **Microsoft documents no string-to-sign for the
-`sv` that `az` sends**, so a real client's token signed with a key we
-chose became the oracle: each layout was confirmed offline by reproducing
-the signature byte for byte, and the tokens are fixtures now. And **three
-clients emit three different service versions with two different field
-counts** -- `az` 2026-04-06 (16 fields), azurerm's account SAS 2022-11-02,
-and azurerm's container SAS 2018-11-09 (15) -- so supporting only what
-`az` emits would have refused a token the Terraform provider generates by
-default.
-
-It also closed a hole that had been open for eleven milestones: a
-container's `PublicAccess` was stored, persisted, listed and echoed back
-and **read in no decision**, so anonymous requests to private containers
-were served.
-
-The tenth was an architecture nobody had pulled on:
-**`mcr.microsoft.com/azure-functions/python` has no arm64 build**, and it
-is the only image Nimbus pulls that does not. A pull or build with no
-native manifest now retries under `linux/amd64`. Azure Functions still
-does not RUN under emulation -- the host faults and sits at 503 -- so an
-amd64 host is the requirement, proven not to be image drift because CI
-passed the identical digest on amd64 two days earlier. **Rosetta was
-tried and does not fix it**, only changes the failure; the decision is to
-accept the limitation rather than abandon "real clients are the spec" by
-serving the trigger ourselves. See CLAUDE.md for the alternatives weighed. Two bugs found
-alongside it were not about architecture at all: a failed build reported
-`Dockerfile:3` and nothing else on every platform, and the readiness
-probe accepted a 503 that means "not ready", which is how an emulated
-function app reported a successful apply and served nothing.
-
-`nimbus ssh` interactively is **done on macOS**, and it had to be a
-person: the interactive form allocates a TTY, so no tool can drive it.
-Tab completion works, which is the assertion worth making -- a completion
-listing cannot be produced without a TTY. It also turned up the only bug
-a test could never have found: Docker Desktop printed
-`What's next: Try Docker Debug ... -> docker debug nimbus-ec2-web-...`
-on exit, ending a session about an INSTANCE by naming the container, in
-a command that exists so nobody has to think about one.
-
-**DELIBERATELY UNMET: Linux, by a person.** This is a gap, not an
-oversight, and it is recorded here rather than left looking finished.
-
-CI runs Linux on every push -- unit tests, `go test -race`, and every
-Docker-backed example, on Docker ENGINE rather than Desktop, which is the
-discriminator that caught the `host.docker.internal` bug. So the
-*mechanisms* are covered. What is NOT covered is the half that found
-three of this milestone's bugs on the other two platforms:
-
-- the interactive `nimbus ssh`, which no tool can drive;
-- `nimbus cert` followed as written, with a real `update-ca-certificates`
-  and a Terraform apply afterwards -- CI sets `SSL_CERT_FILE` instead,
-  which is a different mechanism and Milestone 18 proved the two are not
-  interchangeable;
-- the exploratory parts: running an example, reading the visualizer in a
-  browser, noticing something that was never asserted about.
-
-**What it would cost to close:** a session on a Linux machine with Docker
-and a browser, working through the same list
-(`docs/prompts/m21-cross-platform.md`) that macOS was held to. Anyone
-picking it up should start from the "THE CHANGES MADE FOR WINDOWS"
-section of that prompt, since those are the decisions whose cost on Linux
-is still unmeasured by a person.
-
-**What to distrust until then:** nothing specific is suspected -- which
-is exactly what was true of macOS before this milestone, and it had three
-bugs waiting. The honest statement is that Linux is proven to the depth
-CI reaches and no further.
-
-**Milestone 20 is done.** Azure runs a
-FUNCTION now, which was the last thing it could not do: an
-`azurerm_linux_function_app` applies, `curl` of its hostname returns what
-the handler returned, the plan afterwards is clean, it survives a restart,
-and the destroy leaves no container and no built image.
-
-The feasibility study in `docs/prompts/m20-functions.md` corrected this
-file's own reasoning before a line was written -- Microsoft's Functions
-host image DOES run offline, and what makes it hard is that it needs a
-DEPLOY rather than a mount, so Nimbus builds an image per deployment. Of
-the dozen things azurerm then insisted on, the one worth remembering is
-that a **501 from the deployment site makes it retry for ever** while a
-404 makes it fail fast: Cloud Storage's `anywhereCaches` lesson one step
-worse, because a polite failure that never terminates beats one that
-merely misleads.
-
-**Milestone 19 is done.** CI now restarts
-Nimbus and proves the resource still WORKS — `restart-control-plane`
-requires a clean plan afterwards, `restart-docker` requires the Lambda to
-answer and leaves no container behind. Until those existed, every Terraform
-job was apply, verify and destroy inside ONE process, which is why four of
-Milestone 18's six bugs lived in the reload path and all four were found by
-hand.
-
-Six suspicions were checked and **five were disproved**: two restarts are
-no different from one, a restart invents no runs in the journal, a stray
-file in the data directory is ignored rather than fatal, a container
-removed behind Nimbus's back is correctly not adopted, and an apply
-SURVIVES the process being killed mid-flight as long as it comes back. What
-the exercise actually found was one wrong error message — a function with
-no container claimed to be "still starting. State: Active" — and one
-divergence sharper than documented: a port change makes GCP accumulate a
-duplicate resource, because an id is the self link.
-
-Two milestones running, the pattern has held: **most suspicions are wrong,
-and the bugs you find are rarely the ones you went looking for.**
-
-**Milestone 18 is done.** Nimbus was run on
-Windows for the first time, and everything on the list was run rather than
-reasoned about: every example applies, plans clean and destroys there;
-Terraform, `az`, `aws`, `gcloud` and `kubectl` all drive it; Lambda,
-Container Apps and all three k3s clouds work; `az deployment` compiles real
-Bicep; Microsoft's Python SDKs drive the storage data plane; and interactive
-`nimbus ssh` was checked by hand at a TTY. What differs about the platform
-is in CLAUDE.md under "Windows, actually run", including the suspicions that
-were checked and **disproved** — among them the one the prompt called
-sharpest.
-
-The lesson worth keeping is what the bugs turned out to be. Six were found,
-and only two were about Windows: a case-insensitive filesystem merging two
-object keys into one file (also true on macOS, silently, for ten
-milestones), every S3 key ending in `.json` lost on restart, `--persist`
-leaking a container on every delete, a blob name escaping its container,
-only `aggregated/instances` implemented, and a `local-exec` truncated by
-`cmd /C`. **Running real clients on an untried platform is what found them;
-most were not platform bugs at all.**
-
-**The next three milestones are chosen**, from "Later" below:
-
-| # | Milestone | Why it is next |
-|---|---|---|
-| 22 | **Azure Storage SAS that decides** — **DONE** (`docs/prompts/m22-storage-sas.md`) | A SAS is accepted on SHAPE alone -- no signature check, no expiry, no permission check -- so it cannot be used to test that permissions are wired correctly, which is the emulator's whole purpose. It also corrects a Milestone 17 conclusion that was right about Shared Key and wrong to generalise: a SAS carries its own authorization and needs no principal. |
-| 23 | **Key Vault keys and certificates** (`docs/prompts/m23-keyvault-keys-certs.md`) | A vault holds secrets and answers 501 for the half that is about CRYPTOGRAPHY. "The private key never leaves" is the reason the service exists, and it is a property Nimbus can really have -- `crypto/rsa` and `crypto/x509` are stdlib. |
-| 24 | **GCP Cloud Functions** (`docs/prompts/m24-gcp-functions.md`) | The only cloud that cannot run code. Gen 2 is Cloud Run underneath and the `run` engine already fits, so the three clouds' three different answers end up side by side -- which is most of why this project exists. Its base images carry arm64, unlike Azure Functions'. |
-
-
-**Phase 4 is complete.** Milestone 11 gave all three clouds instances that
-really boot, Milestone 12 cleared the defects that made Nimbus quietly
-wrong, Milestone 13 built the decision engine, and Milestone 14 finished
-it: Azure RBAC, GCP IAM and AWS IAM are all enforced behind
-`--enforce-iam`, the inspector explains why, and `nimbus can` answers the
-question directly. "Permissions are recorded but never enforced" is no
-longer true of any cloud.
-
-Milestones 1 to 14 are done, on macOS 27 (arm64) with azurerm 4.81.0,
-aws 5.100.0, google 6.50.0, az 2.90.0, aws-cli 1.40.33, gcloud 592.0.0 and
-Terraform 1.16.4.
-
-- `examples/terraform/azure-basic` applies, plans clean (`-detailed-exitcode`
-  = 0) and destroys; survives a `--persist` restart; every resource imports
-  into a fresh state with a clean plan.
-- `examples/terraform/azure-storage` does the same for a storage account,
-  container and blob, with real bytes behind it. `az storage blob
-  upload/download/list` works, and `test/storage-sdk` drives blob, queue and
-  table with Microsoft's Python SDKs. Storage accounts and containers are the
-  first `Backing: "real"` resources.
-- `examples/terraform/azure-aks` starts a real Kubernetes cluster: k3s in
-  Docker, `kubectl get nodes` showing the nodes, `node_count` scaling by
-  adding agent containers, and pods and services appearing live in the
-  visualizer. Apply, clean plan, scale, clean plan, destroy all verified.
-- `examples/terraform/azure-app` ties them together: an image pushed to an
-  emulated ACR, pulled by the cluster through a containerd mirror, running a
-  pod that reads a secret from the emulated Key Vault data plane. Apply, clean
-  plan, destroy, and a re-apply of the purged vault name all verified.
-- `nimbus az register` makes the `az` CLI talk to Nimbus: `az login`,
-  `az account list`, and `az keyvault secret show`/`set` against the vault
-  Terraform created, all verified on macOS with az 2.90.0.
-- 53 resource types are modelled from Microsoft's own OpenAPI specs rather
-  than hand-written hooks: `tools/specgen` emits the table, `put()` applies it,
-  and a test matrix round-trips every one of them through PUT, GET, list and
-  DELETE. The visualizer counts what is still accepted-only.
-- ARM template deployments work at resource-group scope, including the Bicep
-  expression subset, resource and property copy loops, dependency ordering,
-  outputs, `validate` and `what-if`. `az deployment group create
-  --template-file main.bicep` was run on macOS with az 2.90.0 and Bicep
-  0.48.1: it deploys, the outputs resolve, and a second what-if reports
-  NoChange for every resource.
-- The visualizer has three views (topology, network, Kubernetes), replays a
-  `terraform apply` step by step from a persisted event journal, overlays a
-  `terraform plan` before it is applied, and exports any view as SVG or PNG.
-  It is ES modules with no build step, and its pure parts have unit tests run
-  by `node --test 'test/ui/*.test.js'`. All of it verified on the owner's
-  machine against the `azure-app` apply: the run replays in dependency
-  order and ends where the live graph is, the cluster's pods appear behind
-  the service they are selected by, and the exported SVG opens standalone.
-- `examples/terraform/aws-basic` is the second cloud: a VPC with two
-  subnets, an internet gateway, a route table, a security group, an S3
-  bucket with versioning and an object, and an IAM role with a policy and
-  an instance profile. Fourteen resources, applying against the same
-  process that serves Azure, with a clean plan and a clean destroy.
-  `aws sts get-caller-identity`, `aws s3 cp/ls` and `aws ec2 describe-vpcs`
-  all verified with aws-cli 1.40.33.
-- `examples/terraform/aws-serverless` runs a Python Lambda for real: AWS's
-  own base image, the Runtime Interface Emulator it ships, and a handler
-  that writes to the emulated DynamoDB through `AWS_ENDPOINT_URL` with no
-  endpoint in its code. Apply, clean plan, invoke, scan, read the log group
-  and destroy all verified.
-- `examples/terraform/aws-eks` brings up a cluster `kubectl` can reach:
-  `aws eks update-kubeconfig` then `kubectl get nodes` shows two nodes, and
-  a deployment created in it appears in the visualizer's Kubernetes view —
-  the same view AKS uses, with no AWS-specific code. Apply, clean plan,
-  destroy verified.
-- The k3s engine lives in `internal/engines/k3s` and serves both clouds; the
-  function runner is `internal/engines/funcs`, equally cloud-neutral.
-- `examples/terraform/gcp-basic` is the third cloud: a custom VPC, two
-  subnetworks with a secondary range, a firewall rule, a service account
-  and a versioned bucket holding an object. Seven resources, applying
-  against the same process that serves Azure and AWS, with a clean plan
-  and a clean destroy. The GCP tab came from a type table and one line in
-  `types.js`, which was the point of Milestone 7's refactor.
-- `gcloud` works against the same server, with endpoint overrides and
-  `auth/disable_credentials`: `compute networks list`, `networks subnets
-  list`, `firewall-rules list`, `iam service-accounts list`,
-  `projects describe`, `storage ls/cp/cat`, all verified on macOS with
-  gcloud 592.0.0 and written up in `docs/GCLOUD.md`. The CLI found a bug
-  Terraform never would: it quotes its multipart boundary in a way RFC
-  2045 forbids and Go refuses.
-- `examples/terraform/gcp-gke` runs a real GKE cluster: k3s in Docker,
-  `kubectl get nodes` showing two nodes through a token authentication
-  webhook, a node pool whose count really adds and removes agent
-  containers, and a clean plan and destroy. `nimbus gcp kubeconfig`
-  writes the kubeconfig; `gcloud container clusters get-credentials`
-  works too, after `nimbus gcp install-auth-plugin`.
-- `examples/terraform/gcp-run-pubsub` ties Pub/Sub to Cloud Run: a Python
-  container that really runs, a push subscription, and a published
-  message arriving in the handler's own log. Verified with Terraform, a
-  plain curl and `gcloud pubsub topics publish`.
-- `examples/multicloud` creates a network and a managed Kubernetes
-  cluster on all three clouds in one apply, against one Nimbus process:
-  twelve resources, three k3s containers, three tabs, `kubectl get nodes`
-  against each. Applies, plans clean and destroys.
-- The GKE cluster needed one entry in `types-gcp.js` and one name in
-  `render.js`'s clouds list to appear in the Kubernetes view — no new
-  drawing code at all, which is what Milestones 7 and 8 were for.
-- CI is green on ubuntu, macos and windows, plus the SDK harness, the
-  generator's tests, the visualizer's node tests, the Terraform
-  apply/plan/destroy jobs (Azure AND AWS against one server), the two
-  Docker-backed AWS jobs (Lambda + DynamoDB, EKS + kubectl) and an az +
-  Bicep deployment job.
-
-Each milestone has a session prompt in `docs/prompts/` (see its README).
-
-Each milestone ends with a Terraform config that applies and destroys cleanly against Nimbus, and the visualizer showing it.
+**Two clients were needed, and they found different bugs.** azurerm
+exercises the resources; `az` exercises the operations. Three faults were
+invisible to Terraform: a key LIST entry keeps `kid` flat where a bundle
+nests the JWK under `key` (azurerm never lists keys), a certificate
+create must answer **202** and not 200 (azurerm tolerates 200), and the
+sign/verify round trip itself, which azurerm never performs.
 
 ## Phase 1 — Azure
 
@@ -917,9 +613,22 @@ deleted, because the decisions themselves are worth knowing:
   and `Microsoft.Sql/servers/firewallRules` genuinely declare no read-only
   field and no default, so the table skips them.
 
-- **Only secrets are emulated in Key Vault.** Keys and certificates answer 501
-  NotSupported, except the certificate CONTACTS list, which exists because
-  azurerm reads it on every vault read.
+- **Key Vault emulates secrets, keys and certificates** since Milestone 23,
+  including the cryptographic operations: sign, verify, encrypt, decrypt,
+  wrapKey and unwrapKey for RSA, and sign/verify for EC, which cannot encrypt.
+  No response carries private key material and a test walks every response
+  body to prove it. What is refused BY NAME rather than approximated: key
+  IMPORT (PKCS#12 is not comfortably stdlib-only, and a silent fallback would
+  hand back a key that is not the one supplied), HSM key types (a key made in
+  software must not claim an HSM holds its private half), the P-256K curve
+  (the standard library has no secp256k1), key rotation policies, key and
+  secret BACKUP, `storage` and `rng`, and any certificate issuer other than
+  `Self` — DigiCert and GlobalSign need a network call.
+- **A certificate's SECRET returns PEM, not the PKCS#12 its policy asks for.**
+  The Go standard library has no PKCS#12 encoder, so the secret reports
+  `application/x-pem-file` rather than claiming a format it is not. azurerm
+  never reads the secret, so nothing in Terraform sees the difference; `az
+  keyvault secret download` would.
 - **The registry has no authentication.** `registry:2` runs open, and
   `listCredentials` returns decorative values; an imagePullSecret built from
   them works because nothing checks it.

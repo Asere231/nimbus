@@ -289,11 +289,17 @@ func TestEveryModuleImportResolves(t *testing.T) {
 // fakeSecrets stands in for the Key Vault data plane.
 type fakeSecrets struct{ reads int }
 
-func (f *fakeSecrets) ListSecrets(vault string) []SecretInfo {
+func (f *fakeSecrets) ListVaultObjects(vault string) []SecretInfo {
 	if vault != "kv1" {
 		return nil
 	}
-	return []SecretInfo{{Name: "db-password", Version: "abc", Versions: 2, Enabled: true, Updated: time.Now()}}
+	// A vault holds three kinds of thing, and only a secret has a value the
+	// reveal endpoint could ever return.
+	return []SecretInfo{
+		{Kind: "secret", Name: "db-password", Version: "abc", Versions: 2, Enabled: true, Updated: time.Now()},
+		{Kind: "key", Name: "signing-key", Version: "def", Versions: 1, ContentType: "RSA", Enabled: true, Updated: time.Now()},
+		{Kind: "certificate", Name: "web", Version: "ghi", Versions: 1, Enabled: true, Updated: time.Now()},
+	}
 }
 
 func (f *fakeSecrets) ReadSecret(vault, name string) (string, bool) {

@@ -10,19 +10,24 @@ import (
 // internal/ui knows nothing about Key Vault, and AWS Secrets Manager can
 // implement the same thing later.
 type SecretBrowser interface {
-	// ListSecrets returns the secrets in one vault. Names and metadata only.
-	ListSecrets(vault string) []SecretInfo
+	// ListVaultObjects returns the secrets, keys and certificates in one
+	// vault. Names and metadata only -- never a value, and a key has no
+	// value to return at all.
+	ListVaultObjects(vault string) []SecretInfo
 	// ReadSecret returns one secret's current value. Called only when
 	// somebody asks for it explicitly.
 	ReadSecret(vault, name string) (value string, ok bool)
 }
 
-// SecretInfo is what the inspector shows for a secret.
+// SecretInfo is what the inspector shows for one object in a vault.
 //
 // Deliberately not the value: the list is drawn whenever a vault is selected,
 // so a value in it would end up on screen -- and in any screenshot -- without
-// anyone asking. The value has its own endpoint behind a button.
+// anyone asking. The value has its own endpoint behind a button, and only a
+// secret has one: a key's private half is never returned by anything.
 type SecretInfo struct {
+	// Kind is "secret", "key" or "certificate".
+	Kind        string    `json:"kind"`
 	Name        string    `json:"name"`
 	Version     string    `json:"version"`
 	Versions    int       `json:"versions"`
@@ -45,7 +50,7 @@ func registerSecretRoutes(mux *http.ServeMux, secrets SecretBrowser) {
 			http.Error(w, "vault is required", 400)
 			return
 		}
-		list := secrets.ListSecrets(vault)
+		list := secrets.ListVaultObjects(vault)
 		if list == nil {
 			list = []SecretInfo{}
 		}

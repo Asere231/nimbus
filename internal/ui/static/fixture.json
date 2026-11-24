@@ -1764,10 +1764,39 @@
   "secrets": {
     "kv-nimbus-app": [
       {
+        "kind": "secret",
         "name": "app-password",
         "versions": 1,
         "contentType": "",
         "deleted": false
+      },
+      {
+        "kind": "key",
+        "name": "signing-key",
+        "versions": 2,
+        "contentType": "RSA",
+        "deleted": false
+      },
+      {
+        "kind": "key",
+        "name": "ec-key",
+        "versions": 1,
+        "contentType": "EC P-256",
+        "deleted": false
+      },
+      {
+        "kind": "certificate",
+        "name": "web",
+        "versions": 1,
+        "contentType": "",
+        "deleted": false
+      },
+      {
+        "kind": "secret",
+        "name": "rotated-password",
+        "versions": 3,
+        "contentType": "",
+        "deleted": true
       }
     ]
   },

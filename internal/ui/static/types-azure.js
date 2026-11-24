@@ -293,3 +293,28 @@ export const NETWORK = {
     return !t.includes("/virtualnetworks/"); // subnets, peerings
   },
 };
+
+// vaultCount summarises a vault's mixed contents by kind, because "4 secrets"
+// would be wrong for a vault holding one secret, two keys and a certificate.
+//
+// It lives here rather than in inspector-azure.js for the reason CLAUDE.md
+// gives: the pure parts stay out of the DOM so they can be tested. The
+// inspector imports api.js, which reads `location` at module load, so nothing
+// that imports it can be loaded under node at all -- which is why the other
+// tests read that file as TEXT instead.
+export function vaultCount(objects) {
+  if (!objects.length) return "empty";
+  const n = {};
+  for (const o of objects) {
+    const kind = o.kind || "secret";
+    n[kind] = (n[kind] || 0) + 1;
+  }
+  const plural = { secret: "secrets", key: "keys", certificate: "certificates" };
+  const parts = [];
+  // A FIXED order, so the panel does not reshuffle as a vault's contents
+  // change -- the same argument the grouped KQL result needed.
+  for (const kind of ["secret", "key", "certificate"]) {
+    if (n[kind]) parts.push(`${n[kind]} ${n[kind] === 1 ? kind : plural[kind]}`);
+  }
+  return parts.join(", ");
+}

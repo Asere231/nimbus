@@ -707,10 +707,11 @@ func (b logBrowser) ListLogs(workspace, app string, limit int) []ui.LogRow {
 
 type secretBrowser struct{ h *keyvault.Handler }
 
-func (b secretBrowser) ListSecrets(vault string) []ui.SecretInfo {
+func (b secretBrowser) ListVaultObjects(vault string) []ui.SecretInfo {
 	out := []ui.SecretInfo{}
-	for _, s := range b.h.ListSecrets(vault) {
+	for _, s := range b.h.ListVaultObjects(vault) {
 		out = append(out, ui.SecretInfo{
+			Kind: s.Kind,
 			Name: s.Name, Version: s.Version, Versions: s.Versions,
 			ContentType: s.ContentType, Enabled: s.Enabled,
 			Updated: s.Updated, Deleted: s.Deleted,

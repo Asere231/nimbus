@@ -7,6 +7,7 @@
 
 import { $ } from "./dom.js";
 import { getBlobs, blobURL, getSecrets, getSecret, getLogs, getResource } from "./api.js";
+import { vaultCount } from "./types-azure.js";
 
 // Blobs are not graph nodes -- a container can hold thousands -- so they are
 // fetched for whichever container is selected and listed here instead.
@@ -51,10 +52,18 @@ async function showBlobs(r) {
   $("#i-blobs-list").appendChild(list);
 }
 
-// Secrets are listed for whichever vault is selected, like blobs are for a
-// container. Only NAMES and metadata are fetched: the value has its own
-// endpoint, called when someone presses reveal, so a selected vault never
-// puts secrets on screen -- or in a screenshot -- unasked.
+// A vault's CONTENTS are listed for whichever vault is selected, like blobs
+// are for a container: secrets, keys and certificates together.
+//
+// Only NAMES and metadata are fetched. A secret's value has its own endpoint,
+// called when someone presses reveal, so a selected vault never puts one on
+// screen -- or in a screenshot -- unasked. A KEY gets no reveal button at all,
+// and not because the button would be inconvenient: there is nothing to
+// reveal, because the private half is never returned by anything. A
+// certificate's public half is not a secret either.
+//
+// Before keys and certificates were listed here, a vault holding only keys
+// reported itself EMPTY.
 async function showSecrets(r) {
   const panel = $("#i-secrets");
   if (!r || (r.type || "").toLowerCase() !== "microsoft.keyvault/vaults") {
@@ -63,56 +72,79 @@ async function showSecrets(r) {
   }
   panel.hidden = false;
   $("#i-secrets-list").innerHTML = "<div class='muted'>Loading…</div>";
-  let secrets = [];
+  let objects = [];
   try {
-    secrets = await getSecrets(r.name);
+    objects = await getSecrets(r.name);
   } catch (e) {
-    $("#i-secrets-list").innerHTML = "<div class='muted'>Could not load secrets.</div>";
+    $("#i-secrets-list").innerHTML = "<div class='muted'>Could not load this vault's contents.</div>";
     return;
   }
-  $("#i-secrets-count").textContent = secrets.length === 1 ? "1 secret" : `${secrets.length} secrets`;
-  if (!secrets.length) {
+  $("#i-secrets-count").textContent = vaultCount(objects);
+  if (!objects.length) {
     $("#i-secrets-list").innerHTML = "<div class='muted'>This vault is empty.</div>";
     return;
   }
   const list = document.createElement("div");
-  for (const s of secrets) {
+  for (const s of objects) {
     const row = document.createElement("div");
     row.className = "secret-row";
+
     const name = document.createElement("span");
     name.className = "secret-name" + (s.deleted ? " secret-deleted" : "");
     name.textContent = s.name;
     name.title = s.deleted ? "Deleted, recoverable" : (s.contentType || "");
+
+    const kind = document.createElement("span");
+    kind.className = "kv-kind kv-kind-" + (s.kind || "secret");
+    kind.textContent = s.kind || "secret";
+
+    const left = document.createElement("span");
+    left.className = "secret-name-cell";
+    left.append(kind, document.createTextNode(" "), name);
+
     const right = document.createElement("span");
     right.className = "secret-meta";
     const versions = document.createElement("span");
     versions.textContent = s.versions === 1 ? "1 version" : `${s.versions} versions`;
-    const reveal = document.createElement("button");
-    reveal.className = "btn ghost small";
-    reveal.textContent = "Reveal";
-    reveal.addEventListener("click", async () => {
-      reveal.disabled = true;
-      reveal.textContent = "…";
-      try {
-        const body = await getSecret(r.name, s.name);
-        const value = document.createElement("span");
-        value.className = "secret-value";
-        value.textContent = body.value === "" ? "(empty)" : body.value;
-        reveal.replaceWith(value);
-      } catch (e) {
-        reveal.disabled = false;
-        reveal.textContent = "Reveal";
-        reveal.title = "Could not read this secret";
-      }
-    });
-    right.append(versions, document.createTextNode(" "), reveal);
-    row.append(name, right);
+    right.append(versions);
+
+    // Only a secret can be revealed. A key has no value to return and a
+    // certificate's bytes are public, so neither gets a button -- the absence
+    // is the lesson, not an omission.
+    if ((s.kind || "secret") === "secret") {
+      const reveal = document.createElement("button");
+      reveal.className = "btn ghost small";
+      reveal.textContent = "Reveal";
+      reveal.addEventListener("click", async () => {
+        reveal.disabled = true;
+        reveal.textContent = "…";
+        try {
+          const body = await getSecret(r.name, s.name);
+          const value = document.createElement("span");
+          value.className = "secret-value";
+          value.textContent = body.value === "" ? "(empty)" : body.value;
+          reveal.replaceWith(value);
+        } catch (e) {
+          reveal.disabled = false;
+          reveal.textContent = "Reveal";
+          reveal.title = "Could not read this secret";
+        }
+      });
+      right.append(document.createTextNode(" "), reveal);
+    } else if ((s.kind || "") === "key") {
+      const note = document.createElement("span");
+      note.className = "muted small";
+      note.textContent = s.contentType || "";
+      note.title = "A key's private half never leaves the vault, so there is nothing to reveal.";
+      right.append(document.createTextNode(" "), note);
+    }
+
+    row.append(left, right);
     list.appendChild(row);
   }
   $("#i-secrets-list").innerHTML = "";
   $("#i-secrets-list").appendChild(list);
 }
-
 
 // The account name sits between /storageAccounts/ and the next segment.
 function accountOf(id) {

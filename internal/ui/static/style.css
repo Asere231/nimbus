@@ -179,6 +179,24 @@ button { font: inherit; color: inherit; }
 }
 .secret-row:last-child { border-bottom: 0; }
 .secret-name { overflow-wrap: anywhere; }
+.secret-name-cell { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+
+/* A vault holds three kinds of thing under one list, so each row says which.
+   The colours only distinguish; nothing is encoded in them that the text does
+   not also say, which is the rule for every badge here. */
+.kv-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  opacity: 0.75;
+  flex: 0 0 auto;
+}
+.kv-kind-secret { color: #d29922; }
+.kv-kind-key { color: #58a6ff; }
+.kv-kind-certificate { color: #3fb950; }
 .secret-meta { color: var(--muted, #8b949e); white-space: nowrap; }
 .secret-value {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

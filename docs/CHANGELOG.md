@@ -2,8 +2,59 @@
 
 ## Unreleased
 
-Milestone 21: everything Milestones 18 to 20 built on one Windows machine,
-run on Apple Silicon.
+### Milestone 22: an Azure Shared Access Signature now decides
+
+- **A SAS was accepted on shape alone.** `Authenticate` checked that
+  `sig`, `se` and `sp` were *present* and let the request through —
+  nothing verified the signature, enforced the expiry, or compared `sp`
+  against the operation being attempted. Shared Key, the one scheme that
+  carries no identity at all, was the only one verified properly. All of
+  it decides now: the signature against both account keys, the `se`/`st`
+  window, `sp` against the operation, `sr`/`ss`/`srt` against what the
+  request addresses, and `sip`/`spr` against the caller's address and
+  transport. Every refusal names what was wrong — a bad signature quotes
+  the string-to-sign and the layout it used, an expired token says when it
+  expired, and a missing permission names the letter.
+- **Enforced unconditionally**, not behind `--enforce-iam`, unlike the
+  three identity-policy languages: a SAS needs no principal so there is no
+  "unmapped caller is unrestricted" fallback for it to land in, real Azure
+  has no mode in which a SAS does not decide, and nothing else in the
+  repository generates one — so the blast radius was measured at zero.
+- **Three string-to-sign layouts, measured rather than read.** Microsoft
+  documents none for the `sv` that `az` 2.90.0 sends, so a token signed
+  with a key we chose became the oracle: each layout was confirmed offline
+  by reproducing the client's own signature. The three tokens are test
+  fixtures. It mattered — `az` sends `sv=2026-04-06` (16 fields), while
+  azurerm sends `2022-11-02` for an account SAS and **`2018-11-09`, which
+  is 15 fields, for a container SAS**. Supporting only what `az` emits
+  would have refused a token the Terraform provider generates by default.
+- **A container's public access level decides, for the first time.**
+  `PublicAccess` had been stored, persisted, listed and echoed back as
+  `x-ms-blob-public-access` since the blob service was built and read in
+  no decision, so every anonymous request to a *private* container was
+  served. `blob` now permits reading a known name and not listing;
+  `container` permits both; anonymous is read-only either way. A private
+  container and an absent one answer identically — 404, naming neither —
+  because a distinguishable refusal is enough to enumerate container
+  names.
+- **A SAS whose signature cannot be decoded is no longer treated as
+  anonymous.** `URL.Query()` discards its parse error, so a malformed
+  percent-escape in `sig` made the parameter vanish and the request
+  present as having no credentials — answering 404 "the specified resource
+  does not exist" for what was really a corrupt token. Presence is read
+  from the raw query now.
+- **What is not implemented is refused by name**, not attempted: a user
+  delegation SAS, a stored access policy (`si`), `sr=d`, a service version
+  older than `2015-04-05`, and a *service* SAS for queue, table or file.
+  An *account* SAS covers every service.
+- **New example** `examples/terraform/azure-storage-sas`, with both kinds
+  of token generated client-side by the provider, and ten CI probes that
+  assert the status *and* the reason.
+- Corrects a Milestone 17 note that was right about Shared Key and had
+  been read as a claim about the whole storage data plane. Both halves are
+  kept in `CLAUDE.md`, because the way it went wrong is the lesson.
+
+### Milestone 21: everything Milestones 18 to 20 built on one Windows machine, run on Apple Silicon
 
 - **Nimbus could not build an image on arm64.**
   `mcr.microsoft.com/azure-functions/python` has no arm64 build, and it is

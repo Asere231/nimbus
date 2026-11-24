@@ -13,6 +13,8 @@ knows none of their policy languages.
 - [How to try it](#how-to-try-it)
 - [Who you are](#who-you-are)
 - [What each cloud evaluates](#what-each-cloud-evaluates)
+- [Azure Storage: a SAS that decides](#azure-storage-a-sas-that-decides)
+- [Anonymous blob access](#anonymous-blob-access)
 - [Asking why](#asking-why)
 - [Deliberate limits](#deliberate-limits)
 
@@ -20,7 +22,7 @@ knows none of their policy languages.
 
 ## How to try it
 
-Four examples exist for exactly this:
+Five examples exist for exactly this:
 
 | Example | Shows |
 |---|---|
@@ -28,8 +30,10 @@ Four examples exist for exactly this:
 | `examples/terraform/aws-bucket-policy-enforced` | a bucket policy granting access the caller's own policy does not |
 | `examples/terraform/azure-rbac-enforced` | a secret readable only with "Key Vault Secrets User" |
 | `examples/terraform/gcp-iam-enforced` | a binding on a bucket reaching its objects |
+| `examples/terraform/azure-storage-sas` | a SAS granting exactly what it says, and four ways of being refused |
 
-Each applies against an enforcing server and is written to be read.
+Each applies against an enforcing server and is written to be read. The last
+one needs **no flag**, for the reason the SAS section below gives.
 
 ## Who you are
 
@@ -77,6 +81,66 @@ plus about a dozen predefined ones, expressed as the wildcard patterns they
 amount to. `testIamPermissions` tells the truth and itself needs no
 permission.
 
+## Azure Storage: a SAS that decides
+
+A Shared Access Signature delegates storage access without handing over the
+account key, and it is the one storage credential that carries its own
+authorization. So it is also the one place Nimbus enforces **without
+`--enforce-iam`**:
+
+- a SAS needs no principal, so there is no "unmapped caller is unrestricted"
+  fallback for it to land in;
+- real Azure has no mode in which a SAS does not decide;
+- and nothing else in Nimbus generates one, so turning it on could not break
+  an existing example.
+
+What is checked, in this order, each refusal naming what was wrong:
+
+| Field | Enforced as |
+|---|---|
+| `sig` | verified against both account keys. A mismatch quotes the string-to-sign it used, and names which layout — that one line is what makes it debuggable |
+| `se`, `st` | the validity window, and an expired token's refusal says **when** it expired |
+| `sp` | the permission letters (`r w a c d l`); a refusal names the letter it lacked and the operation that needed it |
+| `sr` | a service SAS's scope: `sr=b` one blob, `sr=c` one container — and the container is part of what was signed, so no permission juggling widens it |
+| `ss`, `srt` | an account SAS's services and resource levels |
+| `sip`, `spr` | the caller's address and whether the transport is TLS |
+
+### The string-to-sign, and why three layouts
+
+The signed string's field order and exact field **count** are the contract: an
+unset optional field is an empty string that still takes its newline. The
+layout grows with the service version in `sv`, and **three clients here emit
+three different versions**:
+
+| Client | `sv` | Fields |
+|---|---|---|
+| `az` 2.90.0 | `2026-04-06` | 16 |
+| azurerm, account SAS | `2022-11-02` | 10 (+ a trailing newline) |
+| azurerm, **container** SAS | `2018-11-09` | **15** |
+
+So Nimbus implements the ladder from `2015-04-05` and compares `sv`
+lexicographically — a service version is an ISO date, so an unknown newer one
+takes the newest layout. Anything older is refused by name, as is a user
+delegation SAS (`skoid`/`sktid`, signed with an OAuth-issued key), a stored
+access policy (`si`), `sr=d`, and a service SAS for queue, table or file —
+whose layouts are documented and which no client here has been measured
+against.
+
+## Anonymous blob access
+
+A container's public access level decides, and the two levels differ:
+
+| `container_access_type` | Anonymous may |
+|---|---|
+| `private` | nothing — and the refusal is **404**, not 403 |
+| `blob` | read a blob whose name it already knows; **not** list |
+| `container` | read and list |
+
+Anonymous is read-only whatever the level says, and account-level operations
+are never anonymous. The 404 is deliberate: a private container and an absent
+one answer identically, because a distinguishable refusal is enough to
+enumerate container names.
+
 **An action nobody has mapped is refused, naming itself.** Uncomfortable and
 correct: the alternative turns every gap into a permission nobody granted.
 A gap fails loudly, where you can see it.
@@ -103,10 +167,14 @@ permission. Real S3 is no better. The feed is where the reason lives.
   `arn:aws:iam::123:root` in a `Principal` is refused rather than
   approximated, because honouring half of it would be silently too
   generous.
-- **Storage data planes other than Key Vault's.** A data action is evaluated
-  against a principal, and Azure Storage's Shared Key carries none.
-  Enforcing there would mean requiring OAuth and breaking every storage
-  example.
+- **Azure Storage's `dataActions`, under Shared Key.** A data action is
+  evaluated against a principal and Shared Key carries none, so enforcing
+  RBAC data actions on the storage data plane would mean requiring OAuth
+  there and breaking every storage example. That remains true — but it is
+  narrower than it used to read here. A **SAS** carries its own
+  authorization and needs no principal, and it is enforced in full; see
+  above. What is unevaluated is RBAC data actions for storage, not storage's
+  data plane as such.
 - **ACLs.** Stored, never evaluated.
 - **The role catalogues are curations.** Azure's built-ins and GCP's
   predefined roles are hand-transcribed, and GCP's basic roles are

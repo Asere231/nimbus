@@ -113,6 +113,7 @@ with its reasoning in the comments:
 | `gcp-run-pubsub` | Cloud Run with push delivery |
 | `aws-instance`, `azure-vm`, `gcp-instance` | VMs that boot and run a script |
 | `aws-iam-enforced`, `azure-rbac-enforced`, `gcp-iam-enforced`, `aws-bucket-policy-enforced` | IAM actually refusing things |
+| `azure-storage-sas` | a SAS granting exactly what it says, and four ways to be refused |
 | `../multicloud` | one apply, three clouds, three clusters |
 | `../apps/url-shortener` | five services wired together as an application |
 

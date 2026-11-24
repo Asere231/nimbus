@@ -472,3 +472,67 @@ func TestAnonymousIsRefusedForNonBlobServices(t *testing.T) {
 		}
 	}
 }
+
+// A SAS whose signature cannot be DECODED is refused as a broken SAS, not
+// demoted to anonymous.
+//
+// url.Values comes from URL.Query(), which discards its parse error and
+// returns only the pairs it could decode -- so a sig containing a malformed
+// percent-escape vanishes, and a request that plainly meant to present a
+// credential presents as having none. Found by probing a real token: changing
+// the last character of "...sig=abc%3D" makes "%3X", and a private blob then
+// answered 404 "the specified resource does not exist", which explains nothing
+// and points nowhere near the truth.
+//
+// So presence is read from the RAW query. Demoting a broken credential to no
+// credential is the quiet kind of wrong, and here it even changed the status.
+func TestABrokenSASSignatureIsNotTreatedAsAnonymous(t *testing.T) {
+	h, a := sasFixtureStore(t)
+	tok := &sasToken{perms: "r", expiry: sasFar, resource: "c"}
+	good := sasQuery(t, a, tok, sasService, "docs", "")
+
+	// url.Values.Encode() escapes the signature's "=" as %3D; truncating that
+	// escape is what a careless edit or re-quote does.
+	broken := strings.Replace(good, "%3D", "%3X", 1)
+	if broken == good {
+		t.Fatalf("the signature carried no percent-escape to break: %s", good)
+	}
+
+	rec := sasDo(h, http.MethodGet, "/docs/hello.txt", broken, "")
+	if rec.Code == 404 {
+		t.Errorf("a broken SAS was judged as anonymous and answered 404; " +
+			"a request that meant to present a credential must be judged as one")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("a broken SAS answered %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "could not be read") {
+		t.Errorf("the refusal does not say the signature was unreadable: %s", body)
+	}
+}
+
+// A signature that decodes but is wrong is refused as a bad signature, quoting
+// the string-to-sign -- which is the ordinary tampering case, and must not be
+// confused with the undecodable one above.
+func TestATamperedButDecodableSASQuotesTheStringToSign(t *testing.T) {
+	h, a := sasFixtureStore(t)
+	tok := &sasToken{perms: "r", expiry: sasFar, resource: "c"}
+	good := sasQuery(t, a, tok, sasService, "docs", "")
+
+	// Flip a character inside the base64 body, leaving every escape intact.
+	i := strings.Index(good, "sig=") + 10
+	flipped := "A"
+	if good[i] == 'A' {
+		flipped = "B"
+	}
+	broken := good[:i] + flipped + good[i+1:]
+
+	rec := sasDo(h, http.MethodGet, "/docs/hello.txt", broken, "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("a tampered SAS answered %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "string-to-sign") || !strings.Contains(body, "/blob/stnimbus/docs") {
+		t.Errorf("the refusal does not quote the string-to-sign it used: %s", body)
+	}
+}

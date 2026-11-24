@@ -72,7 +72,7 @@ func Authenticate(r *http.Request, a *Account, svc Service) (AuthResult, string)
 		// PRESENCE is decided here: what it permits, until when and over what
 		// is authorizeSAS's job, because answering that needs the operation
 		// the request is asking for and this function does not know it.
-		if hasSAS(r.URL.Query()) {
+		if hasSAS(r) {
 			return AuthSAS, ""
 		}
 		// Anonymous. Whether that is allowed depends on the container's public

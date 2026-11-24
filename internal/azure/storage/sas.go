@@ -134,7 +134,28 @@ func refuse(code, msg string) *accessRefusal {
 }
 
 // hasSAS reports whether a request carries SAS credentials at all.
-func hasSAS(q url.Values) bool { return q.Get("sig") != "" }
+//
+// It reads the RAW query rather than the parsed values, which matters more than
+// it looks. url.Values comes from URL.Query(), which DISCARDS its parse error
+// and returns only the pairs it could decode -- so a signature containing a
+// malformed percent-escape disappears entirely, the request presents as having
+// no credentials, and it is judged as ANONYMOUS. Measured against a real
+// token: corrupting the last character of "...sig=abc%3D" gives "%3X", and the
+// read of a private blob came back 404 "the specified resource does not
+// exist", which is true of nothing and says nothing about the real problem.
+//
+// Demoting a broken credential to no credential is the quiet kind of wrong
+// this project keeps writing rules about. A request that MEANT to present a
+// SAS is judged as one, and a signature that cannot be read is refused saying
+// so.
+func hasSAS(r *http.Request) bool {
+	for _, pair := range strings.Split(r.URL.RawQuery, "&") {
+		if name, _, _ := strings.Cut(pair, "="); name == "sig" {
+			return true
+		}
+	}
+	return false
+}
 
 // parseSAS reads a SAS out of the query string.
 //
@@ -160,6 +181,14 @@ func parseSAS(q url.Values) (*sasToken, sasKind, *accessRefusal) {
 	if t.keyObjectID != "" || t.keyTenantID != "" {
 		return nil, 0, authFailed("This is a user delegation SAS (skoid/sktid), which Nimbus does not implement. " +
 			"Use a service or account SAS signed with an account key.")
+	}
+	// An empty sig here means the parameter was PRESENT -- hasSAS said so from
+	// the raw query -- and could not be decoded. Almost always a mangled
+	// percent-escape from a token that was edited or re-quoted somewhere.
+	if t.sig == "" {
+		return nil, 0, authFailed("The SAS signature (sig) could not be read. " +
+			"It is present but did not decode, which usually means a malformed percent-escape " +
+			"-- check that the token was not truncated or re-quoted.")
 	}
 	if t.version == "" {
 		return nil, 0, authFailed("SAS token is missing the service version (sv).")

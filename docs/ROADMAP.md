@@ -1,14 +1,29 @@
 # Roadmap
 
-**Current: Milestone 21 is done on macOS; Linux by hand is what is
-left** (`docs/prompts/m21-cross-platform.md`). Everything Milestones 18
-to 20 added on one Windows machine has now been exercised on Apple
-Silicon: all 19 Terraform examples apply, plan clean and destroy with no
-containers left, `examples/multicloud` brings up three clusters in 33
-seconds, a Lambda redeploys with changed code, and a container reaches
-all three clouds -- Azure over its real data-plane hostname with TLS
-verified. Nine of the ten Windows-driven changes cost macOS **nothing**,
-which is recorded as plainly as a bug would be.
+**Current: Milestone 23, Key Vault keys and certificates**
+(`docs/prompts/m23-keyvault-keys-certs.md`).
+
+Milestone 22 is done: an Azure **SAS now decides**. The signature is
+verified against the account keys, the window is enforced, `sp` is
+compared against the operation, and `sr`/`ss`/`srt`, `sip` and `spr` all
+scope what a token reaches -- unconditionally, since a SAS needs no
+principal and nothing else here generates one. Every refusal names what
+was wrong.
+
+Two findings shaped it. **Microsoft documents no string-to-sign for the
+`sv` that `az` sends**, so a real client's token signed with a key we
+chose became the oracle: each layout was confirmed offline by reproducing
+the signature byte for byte, and the tokens are fixtures now. And **three
+clients emit three different service versions with two different field
+counts** -- `az` 2026-04-06 (16 fields), azurerm's account SAS 2022-11-02,
+and azurerm's container SAS 2018-11-09 (15) -- so supporting only what
+`az` emits would have refused a token the Terraform provider generates by
+default.
+
+It also closed a hole that had been open for eleven milestones: a
+container's `PublicAccess` was stored, persisted, listed and echoed back
+and **read in no decision**, so anonymous requests to private containers
+were served.
 
 The tenth was an architecture nobody had pulled on:
 **`mcr.microsoft.com/azure-functions/python` has no arm64 build**, and it
@@ -124,7 +139,7 @@ most were not platform bugs at all.**
 
 | # | Milestone | Why it is next |
 |---|---|---|
-| 22 | **Azure Storage SAS that decides** (`docs/prompts/m22-storage-sas.md`) | A SAS is accepted on SHAPE alone -- no signature check, no expiry, no permission check -- so it cannot be used to test that permissions are wired correctly, which is the emulator's whole purpose. It also corrects a Milestone 17 conclusion that was right about Shared Key and wrong to generalise: a SAS carries its own authorization and needs no principal. |
+| 22 | **Azure Storage SAS that decides** — **DONE** (`docs/prompts/m22-storage-sas.md`) | A SAS is accepted on SHAPE alone -- no signature check, no expiry, no permission check -- so it cannot be used to test that permissions are wired correctly, which is the emulator's whole purpose. It also corrects a Milestone 17 conclusion that was right about Shared Key and wrong to generalise: a SAS carries its own authorization and needs no principal. |
 | 23 | **Key Vault keys and certificates** (`docs/prompts/m23-keyvault-keys-certs.md`) | A vault holds secrets and answers 501 for the half that is about CRYPTOGRAPHY. "The private key never leaves" is the reason the service exists, and it is a property Nimbus can really have -- `crypto/rsa` and `crypto/x509` are stdlib. |
 | 24 | **GCP Cloud Functions** (`docs/prompts/m24-gcp-functions.md`) | The only cloud that cannot run code. Gen 2 is Cloud Run underneath and the `run` engine already fits, so the three clouds' three different answers end up side by side -- which is most of why this project exists. Its base images carry arm64, unlike Azure Functions'. |
 
@@ -858,9 +873,20 @@ deleted, because the decisions themselves are worth knowing:
   tested by deleting the leaf, never by actually waiting a year.
 - Only **block blobs** are emulated. Page and append blobs return
   `UnsupportedBlobType`. Nothing needs them yet; disks and log appends would.
-- **SAS tokens are accepted on shape alone**, not verified — there is no
-  signature check and no expiry enforcement. Fine for a local emulator, but it
-  means a SAS cannot be used to *test* that permissions are wired correctly.
+- **A SAS is enforced in full** since Milestone 22 — signature, window,
+  permissions, scope, `sip` and `spr` — and unconditionally, not behind
+  `--enforce-iam`. What is *not* implemented is refused by name rather than
+  waved through: a **user delegation SAS** (`skoid`/`sktid`, signed with an
+  OAuth-issued key), a **stored access policy** (`si`, which supplies the
+  permissions server-side so the query string cannot be checked against them),
+  `sr=d`, a service version older than `2015-04-05`, and a **service** SAS for
+  queue, table or file — whose layouts are documented and which no client here
+  has been measured against. An **account** SAS covers every service, its
+  layout being service-independent.
+- **Azure Storage RBAC `dataActions` are still unevaluated**, and the reason is
+  Shared Key carrying no principal — enforcing them would mean requiring OAuth
+  on the storage data plane and breaking every storage example. That is a
+  narrower claim than the one this list used to make.
 - Table `$filter` supports `eq` joined by `and`. Anything else matches
   everything rather than excluding on a guess.
 - The **visualizer re-renders on `requestAnimationFrame`**, which browsers

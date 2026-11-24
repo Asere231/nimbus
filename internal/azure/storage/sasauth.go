@@ -109,7 +109,7 @@ func blobSASOperation(r *http.Request, container, blob string) (sasOp, bool) {
 // window, then the request-bound conditions, then the permission itself --
 // which is last because it is the only one whose message is about what the
 // caller asked for rather than about the token.
-func authorizeSAS(r *http.Request, a *Account, svc Service) *sasRefusal {
+func authorizeSAS(r *http.Request, a *Account, svc Service) *accessRefusal {
 	tok, kind, ref := parseSAS(r.URL.Query())
 	if ref != nil {
 		return ref
@@ -152,20 +152,20 @@ func authorizeSAS(r *http.Request, a *Account, svc Service) *sasRefusal {
 }
 
 // checkScope is what the token is scoped TO, against what the request touches.
-func (t *sasToken) checkScope(kind sasKind, svc Service, op sasOp) *sasRefusal {
+func (t *sasToken) checkScope(kind sasKind, svc Service, op sasOp) *accessRefusal {
 	if kind == sasAccount {
 		// ss is the services the token covers; the letter is the service's own.
 		letter := serviceLabel(svc)[:1]
 		if !strings.Contains(t.services, letter) {
-			return &sasRefusal{"AuthorizationServiceMismatch",
-				"This account SAS covers services " + strconv.Quote(t.services) +
-					", which does not include " + serviceLabel(svc) + " (" + letter + ")."}
+			return refuse("AuthorizationServiceMismatch",
+				"This account SAS covers services "+strconv.Quote(t.services)+
+					", which does not include "+serviceLabel(svc)+" ("+letter+").")
 		}
 		if !strings.ContainsRune(t.resTypes, rune(op.level)) {
-			return &sasRefusal{"AuthorizationResourceTypeMismatch",
-				"This account SAS covers resource types " + strconv.Quote(t.resTypes) +
-					", and " + op.name + " is a " + sasLevelName(op.level) +
-					"-level operation (srt=" + string(op.level) + ")."}
+			return refuse("AuthorizationResourceTypeMismatch",
+				"This account SAS covers resource types "+strconv.Quote(t.resTypes)+
+					", and "+op.name+" is a "+sasLevelName(op.level)+
+					"-level operation (srt="+string(op.level)+").")
 		}
 		return nil
 	}
@@ -178,15 +178,15 @@ func (t *sasToken) checkScope(kind sasKind, svc Service, op sasOp) *sasRefusal {
 	switch t.resource {
 	case "b":
 		if op.level != 'o' {
-			return &sasRefusal{"AuthorizationResourceTypeMismatch",
-				"This SAS is scoped to a single blob (sr=b) and " + op.name +
-					" is a " + sasLevelName(op.level) + "-level operation."}
+			return refuse("AuthorizationResourceTypeMismatch",
+				"This SAS is scoped to a single blob (sr=b) and "+op.name+
+					" is a "+sasLevelName(op.level)+"-level operation.")
 		}
 	case "c":
 		if op.level == 's' {
-			return &sasRefusal{"AuthorizationResourceTypeMismatch",
-				"This SAS is scoped to one container (sr=c) and " + op.name +
-					" is an account-level operation."}
+			return refuse("AuthorizationResourceTypeMismatch",
+				"This SAS is scoped to one container (sr=c) and "+op.name+
+					" is an account-level operation.")
 		}
 	}
 	return nil
@@ -208,7 +208,7 @@ func sasLevelName(level byte) string {
 // The expiry is QUOTED in the refusal. "403" on its own sends people to look
 // at their permissions, which is the one thing that is not wrong -- and a
 // clock that is a few minutes out is otherwise invisible.
-func (t *sasToken) checkWindow(now time.Time) *sasRefusal {
+func (t *sasToken) checkWindow(now time.Time) *accessRefusal {
 	if t.expiry == "" {
 		return authFailed("SAS token has no expiry (se), which is required.")
 	}
@@ -258,7 +258,7 @@ func parseSASTime(s string) (time.Time, error) {
 // Both are honoured because both are answerable from the request in hand --
 // the same test that took AWS's condition keys from four to ten. A field
 // Nimbus could not answer would have to be refused instead, not ignored.
-func (t *sasToken) checkRequestBound(r *http.Request) *sasRefusal {
+func (t *sasToken) checkRequestBound(r *http.Request) *accessRefusal {
 	if t.protocol != "" {
 		scheme := "http"
 		if r.TLS != nil {
@@ -272,17 +272,17 @@ func (t *sasToken) checkRequestBound(r *http.Request) *sasRefusal {
 			}
 		}
 		if !allowed {
-			return &sasRefusal{"AuthorizationProtocolMismatch",
-				"This SAS allows protocol " + strconv.Quote(t.protocol) +
-					" and the request arrived over " + scheme + "."}
+			return refuse("AuthorizationProtocolMismatch",
+				"This SAS allows protocol "+strconv.Quote(t.protocol)+
+					" and the request arrived over "+scheme+".")
 		}
 	}
 	if t.ip != "" {
 		caller := net.ParseIP(clientIP(r))
 		if caller == nil || !sasIPAllowed(t.ip, caller) {
-			return &sasRefusal{"AuthorizationSourceIPMismatch",
-				"This SAS allows source IP " + strconv.Quote(t.ip) +
-					" and the request came from " + clientIP(r) + "."}
+			return refuse("AuthorizationSourceIPMismatch",
+				"This SAS allows source IP "+strconv.Quote(t.ip)+
+					" and the request came from "+clientIP(r)+".")
 		}
 	}
 	return nil
@@ -316,15 +316,15 @@ func sasIPAllowed(sip string, caller net.IP) bool {
 //
 // The refusal names the letter it wanted and the operation it was for,
 // because "403" tells you nothing about which of sp's letters was missing.
-func (t *sasToken) checkPermission(op sasOp) *sasRefusal {
+func (t *sasToken) checkPermission(op sasOp) *accessRefusal {
 	for _, want := range op.perms {
 		if strings.ContainsRune(t.perms, want) {
 			return nil
 		}
 	}
-	return &sasRefusal{"AuthorizationPermissionMismatch",
-		"This SAS grants sp=" + strconv.Quote(t.perms) + " and " + op.name +
-			" needs " + sasPermsPhrase(op.perms) + "."}
+	return refuse("AuthorizationPermissionMismatch",
+		"This SAS grants sp="+strconv.Quote(t.perms)+" and "+op.name+
+			" needs "+sasPermsPhrase(op.perms)+".")
 }
 
 func sasPermsPhrase(perms string) string {

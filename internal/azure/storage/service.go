@@ -119,8 +119,17 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, t Target) string
 		// --enforce-iam, because it needs no principal and real Azure has no
 		// mode in which it does not decide.
 		if ref := authorizeSAS(r, a, t.Service); ref != nil {
-			WriteError(w, http.StatusForbidden, ref.Code, ref.Msg)
+			WriteError(w, ref.status(), ref.Code, ref.Msg)
 			return "storage SAS refused (" + ref.Code + "): " + t.Account
+		}
+
+	case AuthAnonymous:
+		// Whether an unauthenticated request is allowed depends on the
+		// container's public access level -- which was stored, persisted and
+		// echoed back for eleven milestones without ever being READ.
+		if ref := authorizeAnonymous(r, a, t.Service); ref != nil {
+			WriteError(w, ref.status(), ref.Code, ref.Msg)
+			return "storage anonymous refused (" + ref.Code + "): " + t.Account
 		}
 	}
 

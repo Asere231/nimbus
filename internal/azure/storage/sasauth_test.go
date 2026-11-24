@@ -351,3 +351,124 @@ func TestASASIsRefusedForUnmeasuredServices(t *testing.T) {
 		}
 	}
 }
+
+// --- anonymous access -------------------------------------------------------
+
+// anonDo makes an unauthenticated request through Serve.
+func anonDo(h *Handler, method, path, query string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path+"?"+query, nil)
+	if method == http.MethodPut {
+		req.Header.Set("x-ms-blob-type", "BlockBlob")
+	}
+	rec := httptest.NewRecorder()
+	h.Serve(rec, req, Target{Account: "stnimbus", Service: ServiceBlob})
+	return rec
+}
+
+// A container's public access level DECIDES, which it never did before.
+//
+// PublicAccess was stored, persisted, listed and echoed back as
+// x-ms-blob-public-access, and read in no decision anywhere -- so every
+// anonymous request to a private container was served. The Azure twin of the
+// AWS bug where an unsigned request resolved to the unrestricted account root.
+func TestAContainersPublicAccessLevelDecides(t *testing.T) {
+	store := NewStore()
+	a := store.CreateAccount("stnimbus")
+	for name, access := range map[string]string{"priv": "", "blobs": "blob", "full": "container"} {
+		c, ok := a.CreateContainer(name, nil, access)
+		if !ok {
+			t.Fatalf("could not create container %s", name)
+		}
+		c.PutBlob(&Blob{Name: "x.txt", Content: []byte("CONTENT-" + name)})
+	}
+	h := NewHandler(store)
+
+	cases := []struct {
+		name, container, method, path, query string
+		wantCode                             int
+		why                                  string
+	}{
+		{"private container, read a blob", "priv", "GET", "/priv/x.txt", "", 404,
+			"a private container must not serve an anonymous read"},
+		{"private container, list", "priv", "GET", "/priv", "restype=container&comp=list", 404,
+			"a private container must not be listable anonymously"},
+		{"blob-level access, read a blob", "blobs", "GET", "/blobs/x.txt", "", 200,
+			"public access \"blob\" is exactly this"},
+		{"blob-level access, list", "blobs", "GET", "/blobs", "restype=container&comp=list", 403,
+			"public access \"blob\" must NOT allow listing -- that is what \"container\" adds"},
+		{"container-level access, read a blob", "full", "GET", "/full/x.txt", "", 200,
+			"public access \"container\" includes reads"},
+		{"container-level access, list", "full", "GET", "/full", "restype=container&comp=list", 200,
+			"public access \"container\" is what allows listing"},
+		{"public container, write", "full", "PUT", "/full/new.txt", "", 403,
+			"anonymous is read-only whatever the access level says"},
+		{"public container, delete", "full", "DELETE", "/full/x.txt", "", 403,
+			"anonymous is read-only whatever the access level says"},
+		{"account-level list containers", "", "GET", "/", "comp=list", 403,
+			"there is no container to carry an access level, so this is never anonymous"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec := anonDo(h, c.method, c.path, c.query)
+			if rec.Code != c.wantCode {
+				t.Errorf("answered %d, want %d -- %s\n%s", rec.Code, c.wantCode, c.why, rec.Body.String())
+			}
+		})
+	}
+
+	// The content really came back for the cases that should serve it, so the
+	// 200s above are reads and not empty successes.
+	if body := anonDo(h, "GET", "/blobs/x.txt", "").Body.String(); body != "CONTENT-blobs" {
+		t.Errorf("anonymous read of a public blob returned %q", body)
+	}
+	// And nothing was written by the refused write.
+	if b := a.Container("full").Blob("new.txt"); b != nil {
+		t.Error("a refused anonymous PUT created the blob anyway")
+	}
+}
+
+// A private container and an absent one answer IDENTICALLY.
+//
+// Azure will not tell an unauthenticated caller that a container exists but is
+// private, because the difference is itself information: a distinguishable
+// refusal lets anyone enumerate container names. So both are 404
+// ResourceNotFound and neither names the container.
+func TestAPrivateContainerIsIndistinguishableFromAnAbsentOne(t *testing.T) {
+	store := NewStore()
+	a := store.CreateAccount("stnimbus")
+	c, _ := a.CreateContainer("exists-but-private", nil, "")
+	c.PutBlob(&Blob{Name: "x.txt", Content: []byte("SECRET")})
+	h := NewHandler(store)
+
+	private := anonDo(h, "GET", "/exists-but-private/x.txt", "")
+	absent := anonDo(h, "GET", "/no-such-container/x.txt", "")
+
+	if private.Code != 404 || absent.Code != 404 {
+		t.Fatalf("private answered %d and absent answered %d; both must be 404", private.Code, absent.Code)
+	}
+	if private.Body.String() != absent.Body.String() {
+		t.Errorf("the two refusals differ, which is enough to enumerate containers:\nprivate: %s\nabsent:  %s",
+			private.Body.String(), absent.Body.String())
+	}
+	if strings.Contains(private.Body.String(), "exists-but-private") {
+		t.Error("the refusal names the container it is hiding")
+	}
+	if strings.Contains(private.Body.String(), "SECRET") {
+		t.Error("the refused read returned the content")
+	}
+}
+
+// Anonymous access does not exist for queue, table or file.
+func TestAnonymousIsRefusedForNonBlobServices(t *testing.T) {
+	store := NewStore()
+	store.CreateAccount("stnimbus")
+	h := NewHandler(store)
+	for _, svc := range []Service{ServiceQueue, ServiceTable, ServiceFile} {
+		req := httptest.NewRequest(http.MethodGet, "/q1/messages", nil)
+		rec := httptest.NewRecorder()
+		h.Serve(rec, req, Target{Account: "stnimbus", Service: svc})
+		if rec.Code == 200 {
+			t.Errorf("%s served an anonymous request", serviceLabel(svc))
+		}
+	}
+}

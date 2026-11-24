@@ -94,19 +94,43 @@ const (
 	sasAccount
 )
 
-// sasRefusal is a refusal carrying the Azure error code for it. A SAS has
-// more than one way to be wrong and clients match on the code: a bad
-// signature is AuthenticationFailed, while a signature that verifies over
-// permissions that do not cover the request is AuthorizationPermissionMismatch.
-type sasRefusal struct {
-	Code string
-	Msg  string
+// accessRefusal is a refusal carrying the Azure error code for it.
+//
+// There is more than one way for a credential to be wrong and clients match on
+// the code, not the status: a bad signature is AuthenticationFailed, a
+// signature that verifies over permissions not covering the request is
+// AuthorizationPermissionMismatch, and an anonymous request to a private
+// container is a 404 ResourceNotFound -- because Azure will not tell an
+// unauthenticated caller that a container it cannot reach exists.
+//
+// Status is the HTTP status, and zero means 403, which is what nearly all of
+// these are.
+type accessRefusal struct {
+	Code   string
+	Msg    string
+	Status int
 }
 
-func (e *sasRefusal) Error() string { return e.Code + ": " + e.Msg }
+func (e *accessRefusal) Error() string { return e.Code + ": " + e.Msg }
 
-func authFailed(msg string) *sasRefusal {
-	return &sasRefusal{Code: "AuthenticationFailed", Msg: msg}
+// status is the HTTP status to answer with, defaulting to 403.
+func (e *accessRefusal) status() int {
+	if e.Status == 0 {
+		return http.StatusForbidden
+	}
+	return e.Status
+}
+
+func authFailed(msg string) *accessRefusal {
+	return refuse("AuthenticationFailed", msg)
+}
+
+// refuse is a 403 with an Azure error code. Named fields and a constructor
+// rather than positional literals, because adding Status to this struct broke
+// every one of the seven positional literals that existed -- and the next
+// field would do it again.
+func refuse(code, msg string) *accessRefusal {
+	return &accessRefusal{Code: code, Msg: msg}
 }
 
 // hasSAS reports whether a request carries SAS credentials at all.
@@ -118,7 +142,7 @@ func hasSAS(q url.Values) bool { return q.Get("sig") != "" }
 // rather than attempting one and reporting a signature mismatch. The
 // FilterExpression rule: a refusal that names the construct is debuggable and
 // a wrong answer is not.
-func parseSAS(q url.Values) (*sasToken, sasKind, *sasRefusal) {
+func parseSAS(q url.Values) (*sasToken, sasKind, *accessRefusal) {
 	t := &sasToken{
 		sig: q.Get("sig"), version: q.Get("sv"), perms: q.Get("sp"),
 		start: q.Get("st"), expiry: q.Get("se"),
@@ -253,7 +277,7 @@ func serviceLabel(svc Service) string {
 // Both, because an account has two and either may be the one that signed --
 // the same reason the Shared Key path tries both. hmac.Equal rather than ==
 // for the usual reason, even though nothing here is a secret worth timing.
-func (t *sasToken) verifySignature(a *Account, kind sasKind, svc Service, container, blob string) *sasRefusal {
+func (t *sasToken) verifySignature(a *Account, kind sasKind, svc Service, container, blob string) *accessRefusal {
 	sts, layout := t.stringToSign(kind, a.Name, svc, container, blob)
 	for _, k := range a.Keys {
 		if want, err := Sign(k, sts); err == nil && hmac.Equal([]byte(want), []byte(t.sig)) {

@@ -120,7 +120,14 @@ only `aggregated/instances` implemented, and a `local-exec` truncated by
 `cmd /C`. **Running real clients on an untried platform is what found them;
 most were not platform bugs at all.**
 
-The next milestone is unchosen; "Later" below is the list to pick from.
+**The next three milestones are chosen**, from "Later" below:
+
+| # | Milestone | Why it is next |
+|---|---|---|
+| 22 | **Azure Storage SAS that decides** (`docs/prompts/m22-storage-sas.md`) | A SAS is accepted on SHAPE alone -- no signature check, no expiry, no permission check -- so it cannot be used to test that permissions are wired correctly, which is the emulator's whole purpose. It also corrects a Milestone 17 conclusion that was right about Shared Key and wrong to generalise: a SAS carries its own authorization and needs no principal. |
+| 23 | **Key Vault keys and certificates** (`docs/prompts/m23-keyvault-keys-certs.md`) | A vault holds secrets and answers 501 for the half that is about CRYPTOGRAPHY. "The private key never leaves" is the reason the service exists, and it is a property Nimbus can really have -- `crypto/rsa` and `crypto/x509` are stdlib. |
+| 24 | **GCP Cloud Functions** (`docs/prompts/m24-gcp-functions.md`) | The only cloud that cannot run code. Gen 2 is Cloud Run underneath and the `run` engine already fits, so the three clouds' three different answers end up side by side -- which is most of why this project exists. Its base images carry arm64, unlike Azure Functions'. |
+
 
 **Phase 4 is complete.** Milestone 11 gave all three clouds instances that
 really boot, Milestone 12 cleared the defects that made Nimbus quietly

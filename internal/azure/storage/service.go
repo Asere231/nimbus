@@ -103,11 +103,25 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, t Target) string
 	}
 
 	// Shared Key is verified for real: a wrong key must fail here exactly as
-	// it would against Azure.
-	if res, msg := Authenticate(r, a, t.Service); res == AuthFailed {
+	// it would against Azure. This is the one place every service passes
+	// through, which is what makes it the place to decide -- a check inside
+	// each handler is a silent grant the moment one forgets to ask.
+	res, msg := Authenticate(r, a, t.Service)
+	switch res {
+	case AuthFailed:
 		WriteError(w, http.StatusForbidden, "AuthenticationFailed",
 			"Server failed to authenticate the request. "+msg)
 		return "storage auth failed: " + t.Account
+
+	case AuthSAS:
+		// A SAS is the one storage credential that carries its own
+		// authorization, so it decides here -- unconditionally, not behind
+		// --enforce-iam, because it needs no principal and real Azure has no
+		// mode in which it does not decide.
+		if ref := authorizeSAS(r, a, t.Service); ref != nil {
+			WriteError(w, http.StatusForbidden, ref.Code, ref.Msg)
+			return "storage SAS refused (" + ref.Code + "): " + t.Account
+		}
 	}
 
 	switch t.Service {

@@ -118,7 +118,7 @@ func hasSAS(q url.Values) bool { return q.Get("sig") != "" }
 // rather than attempting one and reporting a signature mismatch. The
 // FilterExpression rule: a refusal that names the construct is debuggable and
 // a wrong answer is not.
-func parseSAS(q url.Values) (*sasToken, sasKind, error) {
+func parseSAS(q url.Values) (*sasToken, sasKind, *sasRefusal) {
 	t := &sasToken{
 		sig: q.Get("sig"), version: q.Get("sv"), perms: q.Get("sp"),
 		start: q.Get("st"), expiry: q.Get("se"),
@@ -203,11 +203,18 @@ func (t *sasToken) stringToSign(kind sasKind, account string, svc Service, conta
 		return strings.Join(fields, "\n") + "\n", layout
 	}
 
-	// A service SAS's resource is the path the signature is scoped to, with
-	// the service name in front and no trailing slash. It is the URL-DECODED
-	// path, which is what r.URL.Path already holds.
+	// A service SAS's resource is the path the SIGNATURE is scoped to, which
+	// is not the same thing as the path the request addresses. sr says which:
+	// sr=c signs the CONTAINER and is then used on the blobs inside it, so a
+	// container SAS reading a blob still signs the container. Appending the
+	// addressed blob regardless would make every such request fail with a
+	// signature mismatch -- and the mismatch would name the right string for
+	// the wrong scope, which is the least debuggable combination there is.
+	//
+	// The service name goes in front and there is no trailing slash. It is the
+	// URL-DECODED path, which is what r.URL.Path already holds.
 	res := "/" + serviceLabel(svc) + "/" + account + "/" + container
-	if blob != "" {
+	if t.resource == "b" && blob != "" {
 		res += "/" + blob
 	}
 
@@ -246,7 +253,7 @@ func serviceLabel(svc Service) string {
 // Both, because an account has two and either may be the one that signed --
 // the same reason the Shared Key path tries both. hmac.Equal rather than ==
 // for the usual reason, even though nothing here is a secret worth timing.
-func (t *sasToken) verifySignature(a *Account, kind sasKind, svc Service, container, blob string) error {
+func (t *sasToken) verifySignature(a *Account, kind sasKind, svc Service, container, blob string) *sasRefusal {
 	sts, layout := t.stringToSign(kind, a.Name, svc, container, blob)
 	for _, k := range a.Keys {
 		if want, err := Sign(k, sts); err == nil && hmac.Equal([]byte(want), []byte(t.sig)) {

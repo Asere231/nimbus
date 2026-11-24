@@ -58,9 +58,9 @@ func TestARealClientsSASVerifies(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			tok, kind, err := parseSAS(q)
-			if err != nil {
-				t.Fatalf("parseSAS: %v", err)
+			tok, kind, ref := parseSAS(q)
+			if ref != nil {
+				t.Fatalf("parseSAS: %v", ref)
 			}
 			if kind != c.wantKind {
 				t.Errorf("kind = %v, want %v", kind, c.wantKind)
@@ -87,9 +87,9 @@ func TestARealClientsSASVerifies(t *testing.T) {
 func TestANewerServiceVersionTakesTheNewestLayout(t *testing.T) {
 	a := sasFixtureAccount()
 	q, _ := url.ParseQuery(sasFixtureBlob)
-	tok, kind, err := parseSAS(q)
-	if err != nil {
-		t.Fatal(err)
+	tok, kind, ref := parseSAS(q)
+	if ref != nil {
+		t.Fatal(ref)
 	}
 	if tok.version <= sasVerEncryptionScope {
 		t.Fatalf("fixture sv is %q, which is not newer than %q -- this test is no longer about anything",
@@ -167,9 +167,9 @@ func TestSASLayoutFieldCounts(t *testing.T) {
 func TestTheAccountSASTrailingNewlineIsLoadBearing(t *testing.T) {
 	a := sasFixtureAccount()
 	q, _ := url.ParseQuery(sasFixtureAcctSAS)
-	tok, kind, err := parseSAS(q)
-	if err != nil {
-		t.Fatal(err)
+	tok, kind, ref := parseSAS(q)
+	if ref != nil {
+		t.Fatal(ref)
 	}
 
 	// The ten fields of the 2020-12-06 account layout, in order.
@@ -183,13 +183,13 @@ func TestTheAccountSASTrailingNewlineIsLoadBearing(t *testing.T) {
 		t.Fatal("the two candidates are identical, so this test compares nothing")
 	}
 
-	sigWith, err := Sign(sasFixtureKey, with)
-	if err != nil {
-		t.Fatal(err)
+	sigWith, signErr := Sign(sasFixtureKey, with)
+	if signErr != nil {
+		t.Fatal(signErr)
 	}
-	sigWithout, err := Sign(sasFixtureKey, without)
-	if err != nil {
-		t.Fatal(err)
+	sigWithout, signErr := Sign(sasFixtureKey, without)
+	if signErr != nil {
+		t.Fatal(signErr)
 	}
 	if sigWith != tok.sig {
 		t.Errorf("az's account signature needs the trailing newline and did not match WITH it:\n got %s\nwant %s", sigWith, tok.sig)
@@ -209,9 +209,9 @@ func TestTheAccountSASTrailingNewlineIsLoadBearing(t *testing.T) {
 func TestATamperedSASSignatureIsRefused(t *testing.T) {
 	a := sasFixtureAccount()
 	q, _ := url.ParseQuery(sasFixtureBlob)
-	tok, kind, err := parseSAS(q)
-	if err != nil {
-		t.Fatal(err)
+	tok, kind, ref := parseSAS(q)
+	if ref != nil {
+		t.Fatal(ref)
 	}
 	// Flip the first character to something it is not.
 	orig := tok.sig
@@ -220,13 +220,13 @@ func TestATamperedSASSignatureIsRefused(t *testing.T) {
 	} else {
 		tok.sig = "A" + orig[1:]
 	}
-	err = tok.verifySignature(a, kind, ServiceBlob, "c1", "hello.txt")
-	if err == nil {
+	ref = tok.verifySignature(a, kind, ServiceBlob, "c1", "hello.txt")
+	if ref == nil {
 		t.Fatal("a tampered signature verified")
 	}
 	// The refusal quotes the string-to-sign, which is the single most useful
 	// thing in it -- and contains the permissions and window, never the key.
-	msg := err.Error()
+	msg := ref.Error()
 	if !strings.Contains(msg, "string-to-sign") || !strings.Contains(msg, "/blob/demo/c1/hello.txt") {
 		t.Errorf("refusal does not quote the string-to-sign: %s", msg)
 	}
@@ -277,12 +277,12 @@ func TestAnUnimplementedSASIsRefusedByName(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, _, err = parseSAS(q)
-			if err == nil {
+			_, _, ref := parseSAS(q)
+			if ref == nil {
 				t.Fatalf("%s was accepted", c.name)
 			}
-			if !strings.Contains(err.Error(), c.wantNamed) {
-				t.Errorf("refusal does not name %q: %s", c.wantNamed, err)
+			if !strings.Contains(ref.Error(), c.wantNamed) {
+				t.Errorf("refusal does not name %q: %s", c.wantNamed, ref)
 			}
 		})
 	}
@@ -301,5 +301,31 @@ func TestOnlyBlobHasAServiceSAS(t *testing.T) {
 	}
 	if !sasServiceSupported(ServiceBlob) {
 		t.Error("blob is the one service SAS that WAS measured and it is refused")
+	}
+}
+
+// A container SAS reading a BLOB signs the container, not the blob.
+//
+// sr says what the signature is scoped to, and that is not the path the
+// request addresses: a sr=c token exists precisely to be used on the blobs
+// inside the container. The first version of stringToSign appended the
+// addressed blob whichever sr was in play, so every real use of a container
+// SAS -- reading a blob with it -- would have failed with a signature
+// mismatch. Invisible to the az fixtures on their own, because the container
+// token was only ever checked against a container-level request.
+func TestAContainerSASSignsTheContainerWhenReadingABlob(t *testing.T) {
+	a := sasFixtureAccount()
+	q, _ := url.ParseQuery(sasFixtureContainer)
+	tok, kind, ref := parseSAS(q)
+	if ref != nil {
+		t.Fatal(ref)
+	}
+	sts, _ := tok.stringToSign(kind, a.Name, ServiceBlob, "c1", "hello.txt")
+	if !strings.HasSuffix(strings.SplitN(sts, "\n", 5)[3], "/blob/demo/c1") {
+		t.Errorf("a sr=c token signed %q; the resource must be the container alone",
+			strings.SplitN(sts, "\n", 5)[3])
+	}
+	if err := tok.verifySignature(a, kind, ServiceBlob, "c1", "hello.txt"); err != nil {
+		t.Errorf("az's container SAS did not verify when used on a blob inside it: %v", err)
 	}
 }

@@ -37,9 +37,10 @@ const (
 
 // Authenticate checks a data-plane request's credentials against the account.
 //
-// Bearer tokens and SAS are accepted on shape alone: Nimbus issues unsigned
-// tokens (see identity.go) and there is nothing to verify them against. Shared
-// Key is the one scheme where a real signature exists, so it is really checked.
+// Shared Key is verified here. A SAS is only DETECTED here and decided by
+// authorizeSAS, which has the operation to judge it against. Bearer tokens are
+// accepted on shape alone: Nimbus issues unsigned ones (see identity.go) and
+// there is nothing to verify them against.
 func Authenticate(r *http.Request, a *Account, svc Service) (AuthResult, string) {
 	auth := r.Header.Get("Authorization")
 
@@ -67,11 +68,11 @@ func Authenticate(r *http.Request, a *Account, svc Service) (AuthResult, string)
 		return AuthBearer, ""
 
 	case auth == "":
-		// A SAS carries its credentials in the query string instead.
-		if q := r.URL.Query(); q.Get("sig") != "" {
-			if q.Get("se") == "" || q.Get("sp") == "" {
-				return AuthFailed, "SAS token is missing required parameters."
-			}
+		// A SAS carries its credentials in the query string instead. Only its
+		// PRESENCE is decided here: what it permits, until when and over what
+		// is authorizeSAS's job, because answering that needs the operation
+		// the request is asking for and this function does not know it.
+		if hasSAS(r.URL.Query()) {
 			return AuthSAS, ""
 		}
 		// Anonymous. Whether that is allowed depends on the container's public

@@ -571,10 +571,13 @@ deleted, because the decisions themselves are worth knowing:
   ordering guarantee, no dead-letter topic, no `seek` and no snapshots;
   an `oidcToken` on a push subscription is recorded and never minted or
   verified. Push only reaches endpoints on this machine, by design.
-- **An AKS cluster's node resource group outlives its cluster.** Deleting
-  the cluster leaves `MC_<rg>_<cluster>_<location>` in the store, where
-  real Azure removes it. Noticed during Milestone 10's multicloud
-  destroy; it predates that work and affects only the graph.
+- **An AKS cluster's node resource group dies with its cluster** — this
+  entry used to say it outlived one, and that stopped being true when
+  `deleteNodeResourceGroup` was written. The group is parented to the
+  SUBSCRIPTION, because that is where a resource group really lives, so
+  `Store.Delete`'s cascade can reach it neither by ID prefix nor by
+  `ParentID`; it has to be deleted by name, by the thing that made it.
+  Pinned by `TestTheNodeResourceGroupDiesWithTheCluster`.
 - **GCS object versioning is a real history now; what it still lacks is
   lifecycle.** A write against a versioned bucket ARCHIVES the generation it
   replaces — stamping `timeDeleted` on it rather than laying a marker, which

@@ -550,11 +550,17 @@ deleted, because the decisions themselves are worth knowing:
   the cluster leaves `MC_<rg>_<cluster>_<location>` in the store, where
   real Azure removes it. Noticed during Milestone 10's multicloud
   destroy; it predates that work and affects only the graph.
-- **GCS has no object versioning history.** `versioning` round-trips as a
-  bucket setting and every write bumps the generation, but the previous
-  generation is gone: `?versions=true` lists one entry per name. No
-  lifecycle rule ever runs, and there are no signed URLs, no composite
-  objects and no customer-managed keys.
+- **GCS object versioning is a real history now; what it still lacks is
+  lifecycle.** A write against a versioned bucket ARCHIVES the generation it
+  replaces — stamping `timeDeleted` on it rather than laying a marker, which
+  is how GCS differs from S3 — a delete archives the live generation, a
+  `generation=` parameter reads or removes one, and `?versions=true` lists
+  every generation oldest-first. A generation number is never reused, even
+  after the newest is deleted, and the counter survives a restart. What is
+  NOT modelled: no lifecycle rule ever expires a noncurrent generation, so a
+  history only shrinks when something deletes a generation by number; and
+  there are still no signed URLs, no composite objects and no
+  customer-managed keys.
 - **No OAuth.** The provider is given an `access_token` directly and Nimbus
   never looks at it. There is no token exchange, no metadata server and no
   `gcloud auth login`.

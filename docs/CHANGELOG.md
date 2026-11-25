@@ -18,6 +18,19 @@ Picking off deferred items from the roadmap's "Later", a tier at a time.
   has no root fallback to land in. The signature itself is still not
   verified — Nimbus holds no secret for a base credential — and
   `docs/ROADMAP.md` says so, with the one case that could be.
+- **Object versioning is a history in BOTH clouds, and the two models are
+  genuinely different.** `?versioning` and `versioning.enabled` each
+  round-tripped as a setting and did nothing: every write overwrote. Now an
+  overwrite keeps what it replaced, a deleted object's history survives, an
+  old version is readable by id, and a bucket is not empty while any of it
+  is left — which is what the providers' `force_destroy` depends on. S3
+  lays a delete MARKER over the history as a new version, so removing the
+  marker undeletes; Cloud Storage has no marker and ARCHIVES the live
+  generation with `timeDeleted` instead, so there is nothing to remove and
+  nothing to undelete. A bucket that never had versioning is unchanged in
+  both, down to S3's absent `x-amz-version-id`, and a data directory
+  written before this loads unchanged. `s3:GetObjectVersion` and
+  `s3:DeleteObjectVersion` are classified separately, as real AWS requires.
 - **A GCP role may not grant `setIamPolicy` by accident.** Four bundled
   roles were expressed as wildcards broad enough to hand out the single
   worst permission to be loose about. `roles/cloudfunctions.developer` and

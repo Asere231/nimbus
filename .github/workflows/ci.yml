@@ -2136,6 +2136,121 @@ jobs:
           aws s3 rm s3://presign-ci/ps.txt
           aws s3 rb s3://presign-ci
 
+      # Object versioning as a HISTORY, in both clouds, in one process.
+      # The two models are deliberately different -- S3 lays a delete
+      # MARKER as a new version, Cloud Storage ARCHIVES the live
+      # generation with timeDeleted -- so the assertions are not the same
+      # shape and that is the point.
+      - name: an object history, S3 and Cloud Storage
+        env:
+          AWS_ACCESS_KEY_ID: nimbus
+          AWS_SECRET_ACCESS_KEY: nimbus
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ENDPOINT_URL: http://localhost:4702
+        run: |
+          set -euo pipefail
+
+          # --- S3 -------------------------------------------------------
+          aws s3 mb s3://hist-ci
+          aws s3api put-bucket-versioning --bucket hist-ci \
+            --versioning-configuration Status=Enabled
+          for v in one two three; do
+            printf '%s' "$v" > v.txt
+            aws s3 cp v.txt s3://hist-ci/a.txt
+          done
+          aws s3api delete-object --bucket hist-ci --key a.txt
+
+          aws s3api list-object-versions --bucket hist-ci --output json > v.json
+          cat v.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("v.json"))
+          vs, ms = d.get("Versions", []), d.get("DeleteMarkers", [])
+          assert len(vs) == 3, f"expected three versions, got {len(vs)}"
+          assert len(ms) == 1, f"expected one delete marker, got {len(ms)}"
+          assert ms[0]["IsLatest"], "the delete marker should be the latest version"
+          assert not any(v["IsLatest"] for v in vs), "an object version is latest behind a marker"
+          assert len({v["VersionId"] for v in vs}) == 3, "version ids collided"
+          # A trailing newline, or `while read` drops the last id and the
+          # bucket is left holding one version nobody deleted.
+          open("ids.txt", "w").write("".join(v["VersionId"] + "\n" for v in vs))
+          PY
+
+          # The object is gone and its history is not.
+          code=$(aws s3api head-object --bucket hist-ci --key a.txt >/dev/null 2>&1 && echo live || echo gone)
+          if [ "$code" != "gone" ]; then
+            echo "::error::the object is still live after its delete"; exit 1
+          fi
+          newest=$(head -1 ids.txt)
+          got=$(aws s3api get-object --bucket hist-ci --key a.txt \
+            --version-id "$newest" out.txt >/dev/null && cat out.txt)
+          if [ "$got" != "three" ]; then
+            echo "::error::the newest version under the marker reads '$got', want 'three'"; exit 1
+          fi
+
+          # A bucket whose history survives is NOT empty.
+          if aws s3 rb s3://hist-ci 2>/dev/null; then
+            echo "::error::a bucket holding a version history was deleted"; exit 1
+          fi
+          while read -r id; do
+            aws s3api delete-object --bucket hist-ci --key a.txt --version-id "$id" >/dev/null
+          done < ids.txt
+          python3 -c "
+          import json
+          d = json.load(open('v.json'))
+          print('\n'.join(m['VersionId'] for m in d['DeleteMarkers']))" > markers.txt
+          # print() supplies the trailing newline the join does not.
+          while read -r id; do
+            aws s3api delete-object --bucket hist-ci --key a.txt --version-id "$id" >/dev/null
+          done < markers.txt
+          aws s3 rb s3://hist-ci
+
+          # --- Cloud Storage --------------------------------------------
+          B=http://localhost:4703/storage/v1/b
+          curl -sf -X POST -H 'Content-Type: application/json' \
+            --data '{"name":"hist-gcs","versioning":{"enabled":true}}' \
+            "$B?project=nimbus-local" >/dev/null
+          for v in one two three; do
+            curl -sf -X POST -H 'Content-Type: text/plain' --data-binary "$v" \
+              "http://localhost:4703/upload/storage/v1/b/hist-gcs/o?uploadType=media&name=a.txt" >/dev/null
+          done
+          curl -sf -X DELETE "$B/hist-gcs/o/a.txt" >/dev/null
+
+          curl -sf "$B/hist-gcs/o?versions=true" > g.json
+          cat g.json
+          python3 - <<'PY'
+          import json
+          items = json.load(open("g.json")).get("items", [])
+          assert len(items) == 3, f"expected three generations, got {len(items)}"
+          assert all("timeDeleted" in o for o in items), \
+              "a generation is still live after the object was deleted"
+          gens = [o["generation"] for o in items]
+          assert len(set(gens)) == 3, f"generation numbers collided: {gens}"
+          assert gens == sorted(gens, key=int), f"generations are not oldest first: {gens}"
+          open("gens.txt", "w").write("".join(g + "\n" for g in gens))
+          PY
+
+          # The object is gone; the generations are readable by number.
+          live=$(curl -s -o /dev/null -w '%{http_code}' "$B/hist-gcs/o/a.txt")
+          if [ "$live" != "404" ]; then
+            echo "::error::a deleted Cloud Storage object answered $live"; exit 1
+          fi
+          newest=$(tail -1 gens.txt)
+          got=$(curl -sf "$B/hist-gcs/o/a.txt?alt=media&generation=$newest")
+          if [ "$got" != "three" ]; then
+            echo "::error::generation $newest reads '$got', want 'three'"; exit 1
+          fi
+
+          # And the bucket is not empty while they survive.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$B/hist-gcs")
+          if [ "$code" != "409" ]; then
+            echo "::error::a bucket holding archived generations answered $code to a delete"; exit 1
+          fi
+          while read -r g; do
+            curl -sf -X DELETE "$B/hist-gcs/o/a.txt?generation=$g" >/dev/null
+          done < gens.txt
+          curl -sf -X DELETE "$B/hist-gcs" >/dev/null
+
       # Both directions. An emulator that refused everything would pass
       # the first half of this, which is why the second half is here.
       - name: an apply that must FAIL, and then succeed

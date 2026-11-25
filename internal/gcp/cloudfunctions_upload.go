@@ -96,7 +96,9 @@ func (s *Server) serveFunctionUpload(w http.ResponseWriter, r *http.Request) str
 			return "function upload: could not create the source bucket"
 		}
 	}
-	if _, aerr := s.objects.put(s, functionSourceBucket, object, data, nil); aerr != nil {
+	// Not versioned: the source bucket is Nimbus's own, and a redeploy
+	// keeping every archive it ever built would grow without bound.
+	if _, aerr := s.objects.put(s, functionSourceBucket, object, data, nil, false); aerr != nil {
 		writeError(w, aerr)
 		return "function upload: " + aerr.Code
 	}

@@ -31,7 +31,7 @@ func gcfPath(s *Server, rest string) string {
 // Storage and names the bucket and object. Nimbus reads its OWN storage.
 func putSource(t *testing.T, s *Server, bucket, object string) {
 	t.Helper()
-	if _, aerr := s.objects.put(s, bucket, object, []byte("not a real zip"), nil); aerr != nil {
+	if _, aerr := s.objects.put(s, bucket, object, []byte("not a real zip"), nil, false); aerr != nil {
 		t.Fatalf("seeding the source archive: %v", aerr)
 	}
 }

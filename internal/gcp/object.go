@@ -39,6 +39,7 @@ func (s *Server) serveObject(w http.ResponseWriter, r *http.Request, bucket, obj
 		return "storage object: no bucket"
 	}
 	q := r.URL.Query()
+	generation := q.Get("generation")
 
 	switch r.Method {
 	case http.MethodGet:
@@ -49,9 +50,9 @@ func (s *Server) serveObject(w http.ResponseWriter, r *http.Request, bucket, obj
 		// else returns the metadata. A client that wanted metadata and got
 		// bytes fails to parse them with no clue why.
 		if q.Get("alt") == "media" {
-			return s.downloadObject(w, bucket, object)
+			return s.downloadObject(w, bucket, object, generation)
 		}
-		return s.getObjectMeta(w, r, bucket, object)
+		return s.getObjectMeta(w, r, bucket, object, generation)
 
 	case http.MethodPost:
 		if object != "" {
@@ -71,7 +72,18 @@ func (s *Server) serveObject(w http.ResponseWriter, r *http.Request, bucket, obj
 		// Deleting an object that is not there SUCCEEDS, which is what
 		// makes a destroy idempotent -- the bucket is the thing that
 		// refuses, not the object.
-		s.objects.delete(bucket, object)
+		//
+		// A delete naming a GENERATION removes that one permanently, which
+		// is how a client empties a versioned bucket. Without one, against
+		// a versioned bucket, the live generation is ARCHIVED: the object
+		// reads 404 and its history is still listable. GCS has no delete
+		// marker, so there is no new generation to report -- a real
+		// difference from S3 rather than a simplification.
+		if generation != "" {
+			s.objects.deleteGeneration(bucket, object, generation)
+		} else {
+			s.objects.delete(bucket, object, s.bucketVersioned(bucket))
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return ""
 	}
@@ -241,7 +253,7 @@ func parseContentRange(header string, chunk int) (total int64, complete bool) {
 
 // storeObject is where all three upload paths end.
 func (s *Server) storeObject(w http.ResponseWriter, r *http.Request, bucket, name string, data []byte, meta map[string]any) string {
-	doc, aerr := s.objects.put(s, bucket, name, data, meta)
+	doc, aerr := s.objects.put(s, bucket, name, data, meta, s.bucketVersioned(bucket))
 	if aerr != nil {
 		writeError(w, aerr)
 		return "storage upload: " + aerr.Message
@@ -250,8 +262,23 @@ func (s *Server) storeObject(w http.ResponseWriter, r *http.Request, bucket, nam
 	return ""
 }
 
-func (s *Server) getObjectMeta(w http.ResponseWriter, r *http.Request, bucket, name string) string {
-	doc, ok := s.objects.meta(bucket, name)
+// bucketVersioned reads versioning.enabled off the bucket.
+//
+// Read per request rather than cached: the provider's
+// google_storage_bucket is a separate resource from its objects, so
+// versioning can be turned on between two writes in one apply.
+func (s *Server) bucketVersioned(bucket string) bool {
+	doc, aerr := s.loadBucket(bucket)
+	if aerr != nil {
+		return false
+	}
+	v, _ := doc["versioning"].(map[string]any)
+	enabled, _ := v["enabled"].(bool)
+	return enabled
+}
+
+func (s *Server) getObjectMeta(w http.ResponseWriter, r *http.Request, bucket, name, generation string) string {
+	_, doc, ok := readGeneration(s.objects, bucket, name, generation)
 	if !ok {
 		writeError(w, errorf(http.StatusNotFound, "notFound", "NOT_FOUND",
 			"No such object: %s/%s", bucket, name))
@@ -261,8 +288,8 @@ func (s *Server) getObjectMeta(w http.ResponseWriter, r *http.Request, bucket, n
 	return ""
 }
 
-func (s *Server) downloadObject(w http.ResponseWriter, bucket, name string) string {
-	data, doc, ok := s.objects.get(bucket, name)
+func (s *Server) downloadObject(w http.ResponseWriter, bucket, name, generation string) string {
+	data, doc, ok := readGeneration(s.objects, bucket, name, generation)
 	if !ok {
 		writeError(w, errorf(http.StatusNotFound, "notFound", "NOT_FOUND",
 			"No such object: %s/%s", bucket, name))
@@ -288,6 +315,15 @@ func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket stri
 	q := r.URL.Query()
 	prefix := q.Get("prefix")
 	delimiter := q.Get("delimiter")
+
+	// versions=true lists ARCHIVED generations as well as live ones, each
+	// carrying the timeDeleted that says it is archived. This is the call
+	// the provider makes inside its force_destroy loop -- measured -- so
+	// answering it with only the live objects left a versioned bucket
+	// impossible to destroy once it really had a history.
+	if q.Get("versions") == "true" {
+		return s.listGenerations(w, r, bucket, prefix, delimiter)
+	}
 
 	var items []map[string]any
 	prefixes := map[string]bool{}
@@ -384,3 +420,52 @@ func boundaryOf(contentType string) string {
 
 // base64MD5 is how GCS reports md5Hash: base64 of the raw digest, not hex.
 func base64MD5(sum []byte) string { return base64.StdEncoding.EncodeToString(sum) }
+
+// readGeneration is the live generation, or a named one. One helper rather
+// than a branch at each call site, because the metadata read and the
+// download ask the same question and a generation is legal on both.
+func readGeneration(store *objectStore, bucket, name, generation string) ([]byte, map[string]any, bool) {
+	if generation == "" {
+		return store.get(bucket, name)
+	}
+	return store.getGeneration(bucket, name, generation)
+}
+
+// listGenerations answers GET .../o?versions=true: every generation of
+// every matching object, oldest first within a name.
+//
+// A separate function rather than a flag threaded through listObjects,
+// because the two answer different questions and the delimiter means
+// something slightly different in each -- a prefix collapsed here stands
+// for generations, not objects.
+func (s *Server) listGenerations(w http.ResponseWriter, r *http.Request, bucket, prefix, delimiter string) string {
+	var items []map[string]any
+	prefixes := map[string]bool{}
+	for _, doc := range s.objects.generations(bucket) {
+		name := str(doc["name"])
+		if prefix != "" && !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if delimiter != "" {
+			rest := strings.TrimPrefix(name, prefix)
+			if i := strings.Index(rest, delimiter); i >= 0 {
+				prefixes[prefix+rest[:i+len(delimiter)]] = true
+				continue
+			}
+		}
+		items = append(items, doc)
+	}
+	out := map[string]any{"kind": "storage#objects"}
+	if len(items) > 0 {
+		out["items"] = s.relinkedAll(r, items)
+	}
+	if len(prefixes) > 0 {
+		var list []string
+		for p := range prefixes {
+			list = append(list, p)
+		}
+		out["prefixes"] = sortedNames(list)
+	}
+	writeJSON(w, http.StatusOK, out)
+	return ""
+}

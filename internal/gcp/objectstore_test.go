@@ -39,7 +39,7 @@ func TestObjectsSurviveARestartWithTheirMetadata(t *testing.T) {
 		if _, err := before.put(s, "nimbus-data", name,
 			[]byte("contents of "+name), map[string]any{
 				"contentType": "text/plain",
-			}); err != nil {
+			}, false); err != nil {
 			t.Fatalf("put %q: %v", name, err)
 		}
 	}

@@ -51,6 +51,18 @@ Picking off deferred items from the roadmap's "Later", a tier at a time.
   failure it could see said nothing but "Failed"; real ARM puts it in
   `properties.error`. Found by a test whose own failure message read
   "the deployment failed: &lt;nil&gt;".
+- **S3 lifecycle rules work, and the apply used to FAIL.** `?lifecycle` fell
+  through the bucket-config switch with no case at all, so a PUT was accepted
+  and discarded — and because `aws_s3_bucket_lifecycle_configuration` polls
+  for what it wrote, the apply failed after two minutes with
+  `couldn't find resource (21 retries)`. The rules are stored, served and
+  swept now. Two things the provider needs that are not obvious: it compares
+  with **`reflect.DeepEqual` against the structs it sent**, so the rules are
+  echoed back BYTE-FOR-BYTE rather than rebuilt (a nil pointer where it sent
+  an empty string never matches), and it checks
+  `TransitionDefaultMinimumObjectSize` **first**, which S3 returns in a
+  header. Nothing expires in a session you are watching, because S3's own
+  minimum is a day — said plainly rather than implied.
 - **A nested ARM deployment's outputs reach the outer template.** The
   resources always worked — a nested deployment is an ordinary
   `Microsoft.Resources/deployments` resource going through the same PUT — so

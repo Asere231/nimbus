@@ -257,3 +257,74 @@ func TestAGenerationHistorySurvivesARestart(t *testing.T) {
 			newest, previous)
 	}
 }
+
+// A bucket's LIFECYCLE configuration round-trips.
+//
+// Cloud Storage keeps lifecycle rules on the bucket document itself,
+// which Nimbus stores whole -- so this works without a line of code for
+// it, and that is exactly why it is worth a test. S3's equivalent lives
+// in a sub-resource with its own PUT, fell through the switch with no
+// case, and the provider's apply FAILED after two minutes polling for
+// rules that were accepted and discarded. The same feature, one cloud
+// over, needing nothing: a claim with no test behind it is one that will
+// drift.
+//
+// Nothing is ever EXPIRED by these rules, on either cloud: the smallest
+// unit both APIs allow is a day, so no rule a client can write would fire
+// while anybody is watching. Said plainly in docs/ROADMAP.md rather than
+// implied by silence.
+func TestABucketsLifecycleRulesRoundTrip(t *testing.T) {
+	s := newTestServer(t)
+	body := `{
+      "name": "lc-bucket",
+      "versioning": {"enabled": true},
+      "lifecycle": {"rule": [
+        {"action": {"type": "Delete"},
+         "condition": {"numNewerVersions": 3, "daysSinceNoncurrentTime": 7}},
+        {"action": {"type": "SetStorageClass", "storageClass": "NEARLINE"},
+         "condition": {"age": 30}}
+      ]}
+    }`
+	must(t, s, http.MethodPost, "/storage/v1/b?project="+s.cfg.ProjectID, body)
+
+	doc := must(t, s, http.MethodGet, "/storage/v1/b/lc-bucket", "")
+	lifecycle, ok := doc["lifecycle"].(map[string]any)
+	if !ok {
+		t.Fatalf("the bucket came back with no lifecycle: %v", doc)
+	}
+	rules, _ := lifecycle["rule"].([]any)
+	if len(rules) != 2 {
+		t.Fatalf("the bucket reports %d rules, want 2", len(rules))
+	}
+
+	// The whole rule survives, including the parts Nimbus does nothing
+	// with -- a provider reads these back and a dropped field is a
+	// permanent diff, whether or not anything acts on it.
+	first, _ := rules[0].(map[string]any)
+	action, _ := first["action"].(map[string]any)
+	condition, _ := first["condition"].(map[string]any)
+	if str(action["type"]) != "Delete" {
+		t.Errorf("the first rule's action is %v", first["action"])
+	}
+	if condition["numNewerVersions"] != float64(3) ||
+		condition["daysSinceNoncurrentTime"] != float64(7) {
+		t.Errorf("the first rule's condition is %v", first["condition"])
+	}
+	second, _ := rules[1].(map[string]any)
+	secondAction, _ := second["action"].(map[string]any)
+	if str(secondAction["storageClass"]) != "NEARLINE" {
+		t.Errorf("a storage-class transition did not survive: %v", second["action"])
+	}
+
+	// It is in the LISTING too, which is where the provider reads a
+	// bucket on a refresh.
+	listed := must(t, s, http.MethodGet, "/storage/v1/b?project="+s.cfg.ProjectID, "")
+	items, _ := listed["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("the listing has %d buckets", len(items))
+	}
+	entry, _ := items[0].(map[string]any)
+	if _, has := entry["lifecycle"]; !has {
+		t.Error("the listing dropped the lifecycle configuration")
+	}
+}

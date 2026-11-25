@@ -655,8 +655,21 @@ deleted, because the decisions themselves are worth knowing:
   Every request to the cluster is authenticated as `system:masters`, because
   the token webhook says yes to everything; the aws-auth ConfigMap and IAM
   role mapping are not modelled.
-- **S3 object versioning is a real history now; what it still lacks is
-  lifecycle.** An overwrite against an Enabled bucket keeps what it
+- **S3 lifecycle rules are stored, served and applied; what nothing does is
+  fire one in a session you are watching.** S3's own minimum is a DAY —
+  `Days` and `NoncurrentDays` are whole days and the API refuses 0 — so no
+  rule a client can write expires anything while somebody is looking. The
+  sweep is implemented faithfully and takes `now` as an argument, so a test
+  asks what happens eight days out and the behaviour is pinned rather than
+  hypothetical. A rule Nimbus does not apply is REFUSED by name rather than
+  stored and ignored: storage-class transitions, tag and object-size filters,
+  `Date`, `ExpiredObjectDeleteMarker` and aborting incomplete multipart
+  uploads. A lifecycle rule deletes data, so one accepted but not applied is
+  a backup that silently is not running. Expiring the CURRENT version of a
+  versioned object means laying a delete marker, which is a different
+  operation and is not approximated. Cloud Storage's rules round-trip on the
+  bucket document and nothing expires there either.
+- **S3 object versioning is a real history now.** An overwrite against an Enabled bucket keeps what it
   replaced, a delete lays a delete MARKER whose removal undeletes, `Suspended`
   keeps the history and stops adding to it, and `?versions` reports every
   version and marker newest-first with `IsLatest`. A bucket that has never

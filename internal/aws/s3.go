@@ -47,7 +47,11 @@ type bucket struct {
 	Encryption   *s3Encryption      `json:"encryption,omitempty"`
 	PublicAccess *publicAccessBlock `json:"publicAccessBlock,omitempty"`
 	Ownership    string             `json:"ownership,omitempty"`
-	ACL          string             `json:"acl,omitempty"`
+	Lifecycle    []lifecycleRule    `json:"lifecycle,omitempty"`
+	// LifecycleRaw is the rules exactly as the client sent them, echoed
+	// back because the provider compares structs rather than parsing.
+	LifecycleRaw string `json:"lifecycleRaw,omitempty"`
+	ACL          string `json:"acl,omitempty"`
 
 	// Public and PublicReason are DERIVED in saveBucket by asking the
 	// authorization evaluator what an anonymous caller may do here, and
@@ -439,6 +443,18 @@ func (s *Server) getBucketConfig(w http.ResponseWriter, r *http.Request, b *buck
 		_, _ = io.WriteString(w, b.Policy)
 		return nil
 
+	case "lifecycle":
+		if len(b.Lifecycle) == 0 {
+			return notSet(sub, b.Name)
+		}
+		// The field S3 returns in a HEADER, which the provider compares
+		// before it looks at a single rule.
+		w.Header().Set("x-amz-transition-default-minimum-object-size",
+			transitionDefaultMinimumObjectSize)
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(lifecycleBody(b.LifecycleRaw)))
+		return nil
 	case "encryption":
 		if b.Encryption == nil {
 			return notSet(sub, b.Name)
@@ -628,6 +644,18 @@ func (s *Server) applyBucketConfig(r *http.Request, b *bucket, sub string, body 
 		}
 	case "policy":
 		b.Policy = string(body)
+	case "lifecycle":
+		// Stored, and REFUSED when it asks for something Nimbus does not
+		// apply. Falling through with no case meant the PUT was accepted
+		// and discarded, and the provider then polled for rules that
+		// never appeared -- an apply that failed after two minutes with
+		// "couldn't find resource (21 retries)". See s3_lifecycle.go.
+		rules, raw, aerr := parseLifecycle(body)
+		if aerr != nil {
+			return aerr
+		}
+		b.Lifecycle = rules
+		b.LifecycleRaw = raw
 	case "encryption":
 		var doc struct {
 			Rules []struct {
@@ -702,6 +730,8 @@ func (s *Server) deleteBucketConfig(w http.ResponseWriter, b *bucket, sub string
 			b.PublicAccess = nil
 		case "ownershipControls":
 			b.Ownership = ""
+		case "lifecycle":
+			b.Lifecycle, b.LifecycleRaw = nil, ""
 		}
 		return nil
 	})

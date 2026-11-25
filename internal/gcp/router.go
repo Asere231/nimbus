@@ -47,6 +47,11 @@ const (
 	apiRun             = "run"
 	apiKnative         = "knative"
 	apiFunctions       = "cloudfunctions"
+	// Neither of these is a service Nimbus emulates. They exist because
+	// `gcloud functions deploy` reads them before deploying, and with no
+	// override it reads them from the REAL Google.
+	apiServiceUsage = "serviceusage"
+	apiCloudBuild   = "cloudbuild"
 )
 
 // pubsubCollections are the segments that mean Pub/Sub when they follow a
@@ -107,7 +112,14 @@ func apiFor(parts []string) string {
 // thing to go on -- and an operations path belongs to neither in particular,
 // which is fine because the operation registry is shared.
 func apiForV2(parts []string) string {
-	if len(parts) > 5 && parts[5] == "functions" {
+	// The collection may carry a colon verb -- `functions:generateUploadUrl`
+	// -- so it is compared with the verb trimmed off, or a create's sibling
+	// would route to Cloud Run.
+	collection, _ := trimVerb(partAt(parts, 5))
+	if collection == "functions" || collection == "runtimes" {
+		// `runtimes` is Cloud Functions' own catalogue, which `gcloud
+		// functions deploy` reads before it deploys anything. It sits at the
+		// location level beside `functions` rather than under it.
 		return apiFunctions
 	}
 	return apiRun
@@ -121,14 +133,36 @@ func apiForV1(parts []string) string {
 		return apiResourceManager
 	}
 	switch rest := parts[3]; {
+	case rest == "services":
+		// Service Usage: /v1/projects/{p}/services/{service}.
+		return apiServiceUsage
 	case rest == "serviceAccounts":
 		return apiIAM
 	case contains(pubsubCollections, rest):
 		return apiPubSub
+	case rest == "locations" && len(parts) == 4:
+		// A BARE locations list -- /v1/projects/{p}/locations -- is Cloud
+		// Functions', which `gcloud functions list` reads before listing
+		// anything. GKE's locations always carry a location and a
+		// collection after them, so the length is what separates them.
+		return apiFunctions
 	case rest == "locations" || rest == "zones":
-		// GKE is the only /v1 service with a location level. Its
-		// operations live beside its clusters, which is why the check is
-		// on the level and not on the collection name.
+		// GKE is no longer the only /v1 service with a location level:
+		// Cloud Build's default-service-account lookup sits at the same
+		// depth, so the two are told apart by what follows. The /v1
+		// prefix now carries SIX services, which is why this is a table
+		// and not a chain of conditions.
+		if partAt(parts, 5) == "defaultServiceAccount" {
+			return apiCloudBuild
+		}
+		// The collection may carry a colon verb here too --
+		// `functions:generateUploadUrl` is what a GEN 1 deploy sends -- so
+		// it is compared with the verb trimmed, or that request falls
+		// through to GKE and is refused by a message about a path rather
+		// than about Gen 1.
+		if collection, _ := trimVerb(partAt(parts, 5)); collection == "functions" {
+			return apiFunctions
+		}
 		return apiGKE
 	}
 	return apiResourceManager
@@ -152,4 +186,12 @@ func trimVerb(segment string) (name, verb string) {
 		return segment[:i], segment[i+1:]
 	}
 	return segment, ""
+}
+
+// partAt is parts[i] or "" -- so a short path is a miss rather than a panic.
+func partAt(parts []string, i int) string {
+	if i < len(parts) {
+		return parts[i]
+	}
+	return ""
 }

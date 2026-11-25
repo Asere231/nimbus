@@ -328,3 +328,188 @@ func TestAFunctionsImageTagComesFromTheSharedHelper(t *testing.T) {
 		t.Errorf("tag %q contains a character docker will not take there", tag)
 	}
 }
+
+// --- what `gcloud functions deploy` needs ----------------------------------
+//
+// Four endpoints the Terraform provider never asks for, each found by running
+// gcloud and reading --log-http. The provider working is not the same claim
+// as the service working, which is the lesson Key Vault taught one milestone
+// earlier -- there, `az` found three faults Terraform could not see.
+
+// The runtime catalogue comes from the SAME table the deploy uses.
+//
+// gcloud reads it before deploying anything, and without it the deploy stops
+// with a 404 and never sends a create. Built from the table rather than
+// written out, because a catalogue advertising a runtime the deploy then
+// refuses is worse than no catalogue at all.
+func TestTheRuntimeCatalogueMatchesWhatWillRun(t *testing.T) {
+	s := newTestServer(t)
+	rec, body := call(t, s, http.MethodGet,
+		"/v2/projects/"+s.cfg.ProjectID+"/locations/us-central1/runtimes", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("runtimes = %d %v", rec.Code, body)
+	}
+	items, _ := body["runtimes"].([]any)
+	if len(items) == 0 {
+		t.Fatal("the catalogue is empty")
+	}
+	for _, it := range items {
+		m := mapOf(it)
+		name := str(m["name"])
+		// Every advertised runtime must actually deploy.
+		if _, err := runtimeImage(name); err != nil {
+			t.Errorf("the catalogue advertises %q and runtimeImage refuses it: %v", name, err)
+		}
+		if str(m["environment"]) != "GEN_2" {
+			t.Errorf("%s is advertised as %q; Gen 1 is a different API", name, m["environment"])
+		}
+	}
+	if len(items) != len(runtimes) {
+		t.Errorf("the catalogue lists %d runtimes and the table has %d", len(items), len(runtimes))
+	}
+}
+
+// gcloud asks the SERVICE where to put the source, then PUTs it there.
+//
+// A different route from the provider's, which uploads to a bucket its own
+// configuration created and names it. Both end in a storageSource the create
+// can read.
+func TestGcloudUploadsItsSourceAndTheCreateFindsIt(t *testing.T) {
+	s := newTestServer(t)
+
+	rec, body := call(t, s, http.MethodPost,
+		"/v2/projects/"+s.cfg.ProjectID+"/locations/us-central1/functions:generateUploadUrl", "{}")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("generateUploadUrl = %d %v", rec.Code, body)
+	}
+	src := mapOf(body["storageSource"])
+	bucket, object := str(src["bucket"]), str(src["object"])
+	if bucket == "" || object == "" {
+		t.Fatalf("no storageSource came back: %v", body)
+	}
+	uploadURL := str(body["uploadUrl"])
+	if !strings.Contains(uploadURL, FunctionUploadPrefix) {
+		t.Errorf("uploadUrl %q does not point at Nimbus", uploadURL)
+	}
+
+	// Two calls must not collide: a second deploy of the same function
+	// would otherwise overwrite the first one's archive mid-flight.
+	_, second := call(t, s, http.MethodPost,
+		"/v2/projects/"+s.cfg.ProjectID+"/locations/us-central1/functions:generateUploadUrl", "{}")
+	if str(mapOf(second["storageSource"])["object"]) == object {
+		t.Error("two upload URLs named the same object")
+	}
+
+	// The PUT, as a client does with a signed URL.
+	rec, _ = call(t, s, http.MethodPut, FunctionUploadPrefix+object, "pretend this is a zip")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the upload = %d", rec.Code)
+	}
+	// The archive is findable by the create path...
+	if _, _, ok := s.objects.get(bucket, object); !ok {
+		t.Error("the uploaded archive is not in the object store")
+	}
+	// ...and the BUCKET exists as a resource, or it is invisible in the
+	// graph and answers NoSuchBucket to a listing. Measured: the PUT
+	// answered 200 while the bucket 404'd.
+	if !s.store.Exists(s.bucketLink(bucket)) {
+		t.Errorf("the source bucket %q holds bytes but is not a resource", bucket)
+	}
+}
+
+// The pre-flight APIs are answered LOCALLY, which is the whole reason they
+// exist here.
+//
+// gcloud asks Service Usage whether run, cloudbuild and artifactregistry are
+// enabled, and Cloud Build for a default service account. With no endpoint
+// override those four requests go to the REAL Google and come back 403 and
+// 401 -- measured with --log-http, in the middle of what looks like a local
+// deploy. Neither product is emulated; what is served is exactly what the
+// pre-flight reads.
+func TestThePreflightAPIsAreAnsweredLocally(t *testing.T) {
+	s := newTestServer(t)
+
+	rec, body := call(t, s, http.MethodGet,
+		"/v1/projects/"+s.cfg.ProjectID+"/services/run.googleapis.com", "")
+	if rec.Code != http.StatusOK || str(body["state"]) != "ENABLED" {
+		t.Errorf("service enablement = %d %v", rec.Code, body)
+	}
+
+	rec, body = call(t, s, http.MethodGet,
+		"/v1/projects/"+s.cfg.ProjectID+"/locations/us-central1/defaultServiceAccount", "")
+	if rec.Code != http.StatusOK || str(body["serviceAccountEmail"]) == "" {
+		t.Errorf("default service account = %d %v", rec.Code, body)
+	}
+
+	// Anything else under Cloud Build says it is not emulated, rather than
+	// inventing a build to poll.
+	rec, body = call(t, s, http.MethodPost, "/v1/projects/"+s.cfg.ProjectID+"/builds", "{}")
+	if rec.Code == http.StatusOK {
+		t.Errorf("a Cloud Build submission was accepted: %v", body)
+	}
+}
+
+// Gen 1 is a different API, and the refusal says so.
+//
+// `gcloud functions list` reads the v1 and v2 lists and MERGES them, so the
+// v1 list must answer -- an empty list, truthfully, because Nimbus serves no
+// Gen 1 functions. Without it gcloud printed a 404 error beside a listing
+// that had worked, and an error next to a success is how people learn to
+// ignore errors.
+//
+// But an empty list must not read as "Gen 1 works": a gen 1 DEPLOY is
+// refused by name, and the colon verb it sends is why the check trims one.
+func TestGen1IsAnEmptyListAndARefusalByName(t *testing.T) {
+	s := newTestServer(t)
+	p := "/v1/projects/" + s.cfg.ProjectID + "/locations/us-central1/functions"
+
+	rec, body := call(t, s, http.MethodGet, p, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the gen 1 list = %d %v", rec.Code, body)
+	}
+	if items, _ := body["functions"].([]any); len(items) != 0 {
+		t.Errorf("the gen 1 list is not empty: %v", items)
+	}
+
+	// The deploy path, colon verb and all.
+	rec, body = call(t, s, http.MethodPost, p+":generateUploadUrl", "{}")
+	if rec.Code == http.StatusOK {
+		t.Fatal("a gen 1 deploy was accepted")
+	}
+	msg := str(mapOf(body["error"])["message"])
+	if !strings.Contains(msg, "GEN 2") || !strings.Contains(msg, "--gen2") {
+		t.Errorf("the refusal does not name Gen 2 or what to do instead: %s", msg)
+	}
+
+	// And the bare locations list, which gcloud reads before either.
+	rec, body = call(t, s, http.MethodGet, "/v1/projects/"+s.cfg.ProjectID+"/locations", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the locations list = %d %v", rec.Code, body)
+	}
+	locs, _ := body["locations"].([]any)
+	if len(locs) != 1 {
+		t.Errorf("want exactly the one region Nimbus serves, got %d", len(locs))
+	}
+}
+
+// /v1 now carries SIX services, and routing one to the wrong place answers a
+// 404 naming the wrong API.
+func TestV1RoutesSixServices(t *testing.T) {
+	cases := []struct{ path, want string }{
+		{"/v1/projects/p/services/run.googleapis.com", apiServiceUsage},
+		{"/v1/projects/p/locations/l/defaultServiceAccount", apiCloudBuild},
+		{"/v1/projects/p/locations", apiFunctions},
+		{"/v1/projects/p/locations/l/functions", apiFunctions},
+		{"/v1/projects/p/locations/l/functions:generateUploadUrl", apiFunctions},
+		{"/v1/projects/p/locations/l/clusters", apiGKE},
+		{"/v1/projects/p/serviceAccounts/sa", apiIAM},
+		{"/v1/projects/p/topics/t", apiPubSub},
+		{"/v1/projects/p", apiResourceManager},
+	}
+	for _, c := range cases {
+		parts := strings.Split(strings.TrimPrefix(c.path, "/"), "/")
+		if got := apiFor(parts); got != c.want {
+			t.Errorf("apiFor(%s) = %q, want %q", c.path, got, c.want)
+		}
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/Asere231/nimbus/internal/core"
 	"github.com/Asere231/nimbus/internal/engines/funcs"
@@ -59,6 +60,40 @@ func (s *Server) functionURI(name string) string {
 }
 
 func (s *Server) serveFunctions(w http.ResponseWriter, r *http.Request, parts []string) string {
+	// The bare locations list, which `gcloud functions list` reads first --
+	// it enumerates regions and then lists functions in each. A v1 path even
+	// for a gen2 listing, which is why it arrives here rather than under /v2.
+	if len(parts) == 4 && parts[3] == "locations" {
+		if r.Method != http.MethodGet {
+			writeError(w, notFound("Nimbus does not emulate %s %s yet", r.Method, r.URL.Path))
+			return "functions: unrecognised locations path"
+		}
+		s.listFunctionLocations(w)
+		return ""
+	}
+	// The GEN 1 collection, under /v1 rather than /v2.
+	//
+	// `gcloud functions list` reads the v1 and v2 lists and merges them, so
+	// without this it printed a 404 ERROR beside a listing that had worked
+	// perfectly -- and an error next to a success is how people learn to
+	// ignore errors, which is the argument Key Vault's certificate contacts
+	// and S3's dozen bucket sub-resources already made.
+	//
+	// An EMPTY list is the truthful answer rather than a convenience: Nimbus
+	// serves no Gen 1 functions, so there are none to report. It is not a
+	// pretence that Gen 1 works -- a gen 1 DEPLOY is still refused by name
+	// below, because that is a different API with a different resource.
+	if gen1, _ := trimVerb(partAt(parts, 5)); len(parts) >= 6 && parts[0] == "v1" && gen1 == "functions" {
+		if r.Method == http.MethodGet {
+			writeJSON(w, http.StatusOK, map[string]any{"functions": []any{}})
+			return ""
+		}
+		writeError(w, notFound(
+			"Nimbus emulates Cloud Functions GEN 2 only (the v2 API). Gen 1 is a different "+
+				"API with a different resource; use --gen2, or the google provider's "+
+				"google_cloudfunctions2_function."))
+		return "functions: gen 1 not emulated"
+	}
 	if len(parts) < 6 {
 		writeError(w, notFound("Nimbus does not emulate %s %s yet", r.Method, r.URL.Path))
 		return "functions: unrecognised path"
@@ -68,7 +103,25 @@ func (s *Server) serveFunctions(w http.ResponseWriter, r *http.Request, parts []
 
 	var e *apiError
 	switch {
+	// The runtime catalogue, which `gcloud functions deploy` reads BEFORE it
+	// deploys: without it gcloud stops with a 404 and never sends a create.
+	// Measured -- it was the only thing gcloud needed that the provider does
+	// not, and the provider never asks for it.
+	case rest[0] == "runtimes" && r.Method == http.MethodGet:
+		e = s.listRuntimes(w, location)
+	case rest[0] == "runtimes":
+		e = notFound("Nimbus does not emulate %s %s yet", r.Method, r.URL.Path)
 	case len(rest) == 1 && r.Method == http.MethodPost:
+		// A colon verb on the COLLECTION, which is how gcloud asks for
+		// somewhere to put the source.
+		if _, verb := trimVerb(rest[0]); verb != "" {
+			if strings.EqualFold(verb, "generateUploadUrl") {
+				e = s.generateUploadURL(w, location)
+			} else {
+				e = notFound("Nimbus does not emulate the %q verb on the functions collection yet", verb)
+			}
+			break
+		}
 		e = s.createFunction(w, r, location)
 	case len(rest) == 1 && r.Method == http.MethodGet:
 		e = s.listFunctions(w, location)
@@ -455,4 +508,49 @@ func mapOf(v any) map[string]any {
 func sourceOf(build map[string]any) (bucket, object string) {
 	src := mapOf(mapOf(build["source"])["storageSource"])
 	return str(src["bucket"]), str(src["object"])
+}
+
+// listRuntimes is the catalogue `gcloud functions deploy` reads first.
+//
+// Built from the SAME table runtimeImage uses, so the list cannot disagree
+// with what will actually run: a catalogue advertising a runtime the deploy
+// then refuses would be worse than no catalogue at all, and keeping them in
+// two places is how that happens.
+func (s *Server) listRuntimes(w http.ResponseWriter, location string) *apiError {
+	items := []any{}
+	for _, name := range sortedRuntimes() {
+		items = append(items, map[string]any{
+			"name":        name,
+			"displayName": runtimeDisplayName(name),
+			"stage":       "GA",
+			// GEN_2 only. Gen 1 is a different API with a different
+			// resource, and nothing here pretends to serve it -- so
+			// advertising its runtimes would invite a deploy that cannot
+			// work.
+			"environment":           "GEN_2",
+			"supportedTriggerTypes": []any{"HTTP_TRIGGER"},
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runtimes": items})
+	return nil
+}
+
+// listFunctionLocations is the region list `gcloud functions list` reads
+// before it lists anything.
+//
+// One region, the one Nimbus serves. Offering every Google region would make
+// gcloud list functions in thirty places that cannot have any, which is slow
+// and says nothing -- and a region Nimbus does not serve is not a region a
+// function can be deployed to.
+func (s *Server) listFunctionLocations(w http.ResponseWriter) {
+	region := s.cfg.Region
+	if region == "" {
+		region = DefaultRegion
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"locations": []any{map[string]any{
+			"name":       "projects/" + s.cfg.ProjectID + "/locations/" + region,
+			"locationId": region,
+		}},
+	})
 }

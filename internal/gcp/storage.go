@@ -120,6 +120,33 @@ func (s *Server) loadBucket(name string) (map[string]any, *apiError) {
 	return doc, nil
 }
 
+// fillBucket adds everything a client reads back off a bucket.
+//
+// Extracted because Nimbus creates one for itself -- the bucket that holds
+// the source archives `gcloud functions deploy` uploads -- and a bucket that
+// was filled differently from one a client asked for would read differently,
+// which is the sort of divergence nothing notices until a plan will not
+// settle.
+func (s *Server) fillBucket(body map[string]any, name string) {
+	body["kind"] = "storage#bucket"
+	body["id"] = name
+	body["name"] = name
+	body["selfLink"] = s.bucketLink(name)
+	body["projectNumber"] = DefaultProjectNumber
+	body["metageneration"] = "1"
+	body["location"] = strings.ToUpper(orDefaultString(str(body["location"]), "US"))
+	body["locationType"] = "multi-region"
+	body["storageClass"] = orDefaultString(str(body["storageClass"]), "STANDARD")
+	body["timeCreated"] = orDefault(body["timeCreated"], timestamp())
+	body["updated"] = timestamp()
+	body["etag"] = etagOf(name)
+	body["versioning"] = orDefault(body["versioning"], map[string]any{"enabled": false})
+	body["iamConfiguration"] = orDefault(body["iamConfiguration"], map[string]any{
+		"uniformBucketLevelAccess": map[string]any{"enabled": false},
+		"publicAccessPrevention":   "inherited",
+	})
+}
+
 func (s *Server) saveBucket(doc map[string]any) *apiError {
 	name := str(doc["name"])
 	body, err := json.Marshal(doc)
@@ -153,22 +180,7 @@ func (s *Server) createBucket(w http.ResponseWriter, r *http.Request) string {
 		return "storage create: exists"
 	}
 
-	body["kind"] = "storage#bucket"
-	body["id"] = name
-	body["selfLink"] = s.bucketLink(name)
-	body["projectNumber"] = DefaultProjectNumber
-	body["metageneration"] = "1"
-	body["location"] = strings.ToUpper(orDefaultString(str(body["location"]), "US"))
-	body["locationType"] = "multi-region"
-	body["storageClass"] = orDefaultString(str(body["storageClass"]), "STANDARD")
-	body["timeCreated"] = timestamp()
-	body["updated"] = timestamp()
-	body["etag"] = etagOf(name)
-	body["versioning"] = orDefault(body["versioning"], map[string]any{"enabled": false})
-	body["iamConfiguration"] = orDefault(body["iamConfiguration"], map[string]any{
-		"uniformBucketLevelAccess": map[string]any{"enabled": false},
-		"publicAccessPrevention":   "inherited",
-	})
+	s.fillBucket(body, name)
 
 	if aerr := s.saveBucket(body); aerr != nil {
 		writeError(w, aerr)

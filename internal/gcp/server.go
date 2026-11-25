@@ -347,6 +347,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 		return s.serveRun(w, r, parts)
 	case apiFunctions:
 		return s.serveFunctions(w, r, parts)
+	case apiServiceUsage:
+		return s.serveServiceUsage(w, r, parts)
+	case apiCloudBuild:
+		return s.serveCloudBuild(w, r, parts)
 	case apiKnative:
 		return s.serveKnative(w, r, parts)
 	default:
@@ -369,6 +373,8 @@ func (s *Server) routeNimbusOwn(w http.ResponseWriter, r *http.Request) (string,
 		return s.serveRunProxy(w, r), true
 	case strings.HasPrefix(r.URL.Path, FunctionProxyPrefix):
 		return s.serveFunctionProxy(w, r), true
+	case strings.HasPrefix(r.URL.Path, FunctionUploadPrefix):
+		return s.serveFunctionUpload(w, r), true
 	}
 	return "", false
 }

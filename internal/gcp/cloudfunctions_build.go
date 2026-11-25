@@ -165,3 +165,13 @@ CMD ["python", "-m", "functions_framework", "--target=%s", "--port=%d"]
 `, base, entryPoint, functionPort, entryPoint, functionPort)
 	return os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(content), 0o644)
 }
+
+// runtimeDisplayName turns `python311` into `Python 3.11`, which is what
+// `gcloud functions runtimes list` prints.
+func runtimeDisplayName(name string) string {
+	rest := strings.TrimPrefix(name, "python")
+	if rest == name || len(rest) < 2 {
+		return name
+	}
+	return "Python " + rest[:1] + "." + rest[1:]
+}

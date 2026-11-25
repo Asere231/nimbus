@@ -404,6 +404,19 @@ func gcpRegister(args []string) {
 		{"config", "set", "api_endpoint_overrides/pubsub", base + "/"},
 		{"config", "set", "api_endpoint_overrides/cloudresourcemanager", base + "/"},
 		{"config", "set", "api_endpoint_overrides/run", runBase},
+		{"config", "set", "api_endpoint_overrides/cloudfunctions", base + "/"},
+		// serviceusage and cloudbuild are NOT services Nimbus emulates.
+		// They are here so that `gcloud functions deploy` does not reach
+		// the real Google: it checks whether run, cloudbuild and
+		// artifactregistry are enabled and asks Cloud Build for a default
+		// service account before it deploys anything, and without these
+		// four requests leave the machine and come back 403 and 401 --
+		// measured with --log-http. Nothing about pointing them here
+		// claims the products are emulated; it claims the traffic stays
+		// local, and Nimbus answers the pre-flight and refuses the rest
+		// by name.
+		{"config", "set", "api_endpoint_overrides/serviceusage", base + "/"},
+		{"config", "set", "api_endpoint_overrides/cloudbuild", base + "/"},
 	}
 
 	if !*run {

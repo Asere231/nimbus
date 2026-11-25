@@ -1,7 +1,32 @@
 # Roadmap
 
-**Current: nothing. Milestone 24 closed the arc — pick the next one from
-"Later" below.**
+**Current: working through "Later", a tier at a time. Seven items done
+since 0.24.0, all green in CI, none released yet.**
+
+Done in this pass, newest first: the plan overlay's type tables (it had
+never worked for GCP at all); ARM deployments at **subscription scope**;
+**DynamoDB streams**; **Lambda published versions and aliases**; **object
+versioning as a real history in both S3 and Cloud Storage**; **presigned-URL
+expiry and identity**; and a GCP role catalogue that no longer grants
+`setIamPolicy` by accident. Registry authentication was looked at and
+**deliberately skipped** — see its entry below for why the easy route is
+closed and what was decided about `admin_enabled = false`.
+
+**Where to pick up:**
+
+1. **Cut 0.25.0.** `docs/CHANGELOG.md` has seven entries under
+   `## Unreleased` and the version constant is still 0.24.0.
+   `TestTheVersionIsTheSameEverywhere` checks all three places.
+2. **EKS OIDC provider** (the entry below). Started and not attempted: it
+   needs a measurement first, because the canonical Terraform pattern is
+   `data.tls_certificate` against the cluster's `identity.oidc.issuer`,
+   and Nimbus serves AWS over plain HTTP — so whether that data source can
+   work at all is the open question, before any of
+   `aws_iam_openid_connect_provider` is built.
+3. **Ghost bodies in the plan overlay** — described exactly in the plan
+   overlay entry below. A `PlanChange` parent hint, read from the field
+   each provider uses for it, is what makes a pending subnet appear inside
+   its pending network.
 
 Milestone 24 is done: **all three clouds run code.** Cloud Functions Gen 2
 applies, `curl` of its URL returns what the handler returned, the plan is

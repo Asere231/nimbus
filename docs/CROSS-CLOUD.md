@@ -31,6 +31,7 @@ different places** — each a genuinely different network path.
 | AWS Lambda | `funcs` engine — AWS's base image and its Runtime Interface Emulator |
 | Azure Function App | `run` engine — Microsoft's Functions host, image built with a `COPY` |
 | Cloud Run service | `run` engine — an ordinary container with a published port |
+| Cloud Function (Gen 2) | `run` engine — an image built from the source archive, served by the Functions Framework |
 | EC2 instance | `vm` engine — a container that boots and runs a boot script |
 | EKS pod | `k3s` engine — a pod inside real Kubernetes in Docker |
 

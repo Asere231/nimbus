@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.24.0 — 2026-11-25
+
+Milestone 24: GCP runs code, so **all three clouds do** — and none of them
+the same way.
+
+- **`google_cloudfunctions2_function` did nothing at all.** Gen 2 now
+  applies, `curl` of its URL returns what the handler returned, the plan
+  afterwards is clean, it survives a restart still answering, and the
+  destroy leaves no container and no image. Built from the source archive
+  on `internal/engines/run`, which needed **no change**: the Functions
+  Framework is an ordinary HTTP server reading `$PORT`, and that is the
+  whole of that engine's contract.
+- **The three clouds' three answers**, which is most of why this project
+  exists. Lambda mounts the code into a vendor image that already ships
+  the Runtime Interface Emulator. Azure Functions needs a .NET host that
+  negotiates with a language worker over gRPC, and finds nothing in a
+  bind mount — the code must be baked in. Cloud Functions' contract is a
+  library the code brings. The third asks the least of the platform, and
+  is the only one that runs on arm64.
+- **`gcloud functions deploy --gen2` works too**, and needed four
+  endpoints the Terraform provider never asks for — a runtime catalogue
+  built from the same table the deploy uses, `functions:generateUploadUrl`
+  for gcloud's own source route, and **two pre-flight APIs that were
+  silently reaching the real Google**. Service Usage and Cloud Build are
+  not emulated; `nimbus gcp register` points them at Nimbus so nothing
+  leaves the machine, and anything beyond the pre-flight is refused by
+  name. Verified: 15 requests, every one to localhost.
+- **Gen 1 is not emulated**, and says so. Its list answers empty, because
+  `gcloud functions list` reads the v1 and v2 lists and merges them and a
+  404 there printed an error beside a listing that had worked. A gen 1
+  deploy is refused naming Gen 2.
+- **The source archive carries its dependencies**, installed by one
+  documented `pip install --target` step, because real Cloud Functions
+  installs `requirements.txt` during a remote build and a remote build is
+  the one thing an offline emulator cannot have.
+- **An image leaked after a restart.** A reattached service cannot know
+  its image was built, so the plugin removes it by its derived tag — which
+  Azure's function app already did. Found by running the restart
+  criterion, not by reading.
+- **New example** `examples/terraform/gcp-functions`, a badge in
+  `types-gcp.js`, and a CI job driving the example with Terraform and then
+  with gcloud.
+
 ## 0.23.0 — 2026-11-24
 
 Three milestones in one release. The minor version tracks the milestone

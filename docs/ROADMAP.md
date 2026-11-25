@@ -1,33 +1,31 @@
 # Roadmap
 
-**Current: Milestone 24, GCP Cloud Functions**
-(`docs/prompts/m24-gcp-functions.md`).
+**Current: nothing. Milestone 24 closed the arc — pick the next one from
+"Later" below.**
 
-Milestone 23 is done: a Key Vault now does **cryptography**, not just
-storage. `azurerm_key_vault_key` and `azurerm_key_vault_certificate`
-apply, plan clean and destroy; `az keyvault key create/show/list/sign/
-verify` and `az keyvault certificate create/show` all work.
+Milestone 24 is done: **all three clouds run code.** Cloud Functions Gen 2
+applies, `curl` of its URL returns what the handler returned, the plan is
+clean, it survives a restart still answering, and the destroy leaves no
+container and no image. `gcloud functions deploy --gen2` works too, with
+nothing leaving the machine.
 
-The property the service exists for is asserted directly rather than
-hoped for: no response carries private key material, checked by walking
-every response body a key can produce -- bundle, list, versions, crypto
-result, patch, delete and recycle bin -- for the private JWK members RFC
-7518 names. A signature the vault makes is verified with `crypto` against
-the public key the vault PUBLISHED, and the vault decrypts what that same
-published key encrypted.
+The three clouds turn out to have three completely different answers to
+one problem, which is most of why this project exists:
 
-A certificate turned out to be the interesting part: it is **three
-objects under one name** -- the certificate, a key whose private half
-never leaves, and a secret carrying the whole thing for a TLS stack to
-load. Creating one writes all three, deleting takes all three, recovering
-restores all three.
+| | how the handler is run |
+|---|---|
+| **Lambda** | the base image ships the Runtime Interface Emulator; the code is MOUNTED into somebody else's runtime |
+| **Azure Functions** | a .NET host negotiates with a language worker over gRPC, and finds nothing in a bind mount — the code must be BAKED IN |
+| **Cloud Functions** | the contract is a LIBRARY the code brings, served by an ordinary HTTP server reading `$PORT` |
 
-**Two clients were needed, and they found different bugs.** azurerm
-exercises the resources; `az` exercises the operations. Three faults were
-invisible to Terraform: a key LIST entry keeps `kid` flat where a bundle
-nests the JWK under `key` (azurerm never lists keys), a certificate
-create must answer **202** and not 200 (azurerm tolerates 200), and the
-sign/verify round trip itself, which azurerm never performs.
+The third asks the least of the platform, which is why it runs on the
+same `run` engine as Cloud Run and Azure Container Apps, unchanged.
+
+Two clients were needed again, as they were for Key Vault. The provider
+exercises the resource; `gcloud` exercises the service, and it needed
+four endpoints the provider never asks for — including two that were
+silently reaching the **real Google** until `nimbus gcp register` pointed
+them at Nimbus.
 
 ## Phase 1 — Azure
 
@@ -477,16 +475,28 @@ deleted, because the decisions themselves are worth knowing:
   written against the literal address cannot. Azure has no such override at
   all, so a VM there gets `NIMBUS_VM_*` environment variables instead. No
   cloud mints instance credentials, so the IAM-role paths answer nothing.
-- **GCP still has no Cloud Functions**, and here the old reasoning holds:
-  Google publishes no functions host image. Gen 2 IS Cloud Run underneath
-  and the runtime contract is the Functions Framework -- an ordinary
-  library the user's code imports, whose `functions-framework` command is
-  just an HTTP server, so the `run` engine's contract already fits.
-  Deploying from SOURCE is what needs a builder and the network. The open
-  question is whether to build an image from a plain `python:3.11-slim`
-  with the framework vendored, or to require a container image and admit
-  it is Cloud Run under another name; `docs/prompts/m20-functions.md`
-  states both and asks.
+- **Cloud Functions Gen 2 runs** since Milestone 24, built from source on
+  the `run` engine, so all three clouds run code. `python310` through
+  `python313`; a runtime Nimbus has not been measured against is refused
+  BY NAME rather than served by the nearest interpreter. **Gen 1 is not
+  emulated** -- a different API with a different resource -- and its list
+  answers empty while a gen 1 deploy refuses naming Gen 2, because
+  `gcloud functions list` reads both and merges them.
+  - The source archive has to CARRY its dependencies, installed by one
+    documented `pip install --target` step, because real Cloud Functions
+    installs `requirements.txt` during a remote build and a remote build
+    is the one thing an offline emulator cannot have. The same bargain the
+    `azure-functions` example makes.
+  - `gcloud functions deploy --gen2` works, and needed four endpoints the
+    Terraform provider never asks for. Two are Cloud Functions' own -- a
+    runtime catalogue and `functions:generateUploadUrl`, gcloud's own
+    route for getting the source in. The other two are not: gcloud reads
+    Service Usage and Cloud Build before deploying, and without endpoint
+    overrides those requests go to the REAL Google. `nimbus gcp register`
+    points them here; neither product is emulated and anything beyond the
+    pre-flight is refused by name.
+  - **Cloud Build is not emulated at all.** Images are built with the
+    local Docker daemon, so there is no build to submit or poll.
 - **Cloud Routers and their NAT configuration round-trip as state and
   nothing routes.** The same is true of every other GCP networking object
   that implies traffic handling.

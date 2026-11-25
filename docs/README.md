@@ -111,6 +111,7 @@ with its reasoning in the comments:
 | `azure-functions` | Microsoft's Functions host, image built per deploy |
 | `azure-containerapp` | a service with a sidecar and replicas |
 | `gcp-run-pubsub` | Cloud Run with push delivery |
+| `gcp-functions` | a Cloud Function built from source; `gcloud functions deploy` works too |
 | `aws-instance`, `azure-vm`, `gcp-instance` | VMs that boot and run a script |
 | `aws-iam-enforced`, `azure-rbac-enforced`, `gcp-iam-enforced`, `aws-bucket-policy-enforced` | IAM actually refusing things |
 | `azure-storage-sas` | a SAS granting exactly what it says, and four ways to be refused |

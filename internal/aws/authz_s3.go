@@ -97,6 +97,13 @@ func s3BucketTarget(r *http.Request, name string) (target, bool) {
 	case "delete":
 		// POST ?delete is a bulk object delete, so its resource is the
 		// objects rather than the bucket.
+		//
+		// s3:DeleteObject even when the body names version ids, where real
+		// AWS would also want s3:DeleteObjectVersion: S3's bodies are
+		// deliberately not buffered for the check (they are the large
+		// ones), so the classifier cannot see them. Widening rather than
+		// narrowing is the direction a client cannot be hurt by -- the same
+		// choice as ignoring an unknown describe filter.
 		return target{Action: "s3:DeleteObject", Resource: arn + "/*"}, true
 	}
 
@@ -129,12 +136,30 @@ func s3ObjectTarget(r *http.Request, name, key string) (target, bool) {
 		return target{Action: "s3:PutObject", Resource: arn}, true
 	}
 
+	// A request naming a versionId is a DIFFERENT permission in IAM:
+	// s3:GetObject lets a caller read the current version and
+	// s3:GetObjectVersion lets it reach back into the history, which is
+	// the distinction a bucket with versioning on exists to make. There is
+	// no PutObjectVersion -- a write never names a version.
+	//
+	// Latent until the history was real: every object had one version, so
+	// nothing could usefully ask for an old one. The feature that makes a
+	// path reachable is what activates the authorization gap on it, which
+	// is the shape Key Vault's certificate paths had in Milestone 23.
+	versioned := q.Get("versionId") != ""
+
 	switch r.Method {
 	case http.MethodPut, http.MethodPost:
 		return target{Action: "s3:PutObject", Resource: arn}, true
 	case http.MethodGet, http.MethodHead:
+		if versioned {
+			return target{Action: "s3:GetObjectVersion", Resource: arn}, true
+		}
 		return target{Action: "s3:GetObject", Resource: arn}, true
 	case http.MethodDelete:
+		if versioned {
+			return target{Action: "s3:DeleteObjectVersion", Resource: arn}, true
+		}
 		return target{Action: "s3:DeleteObject", Resource: arn}, true
 	}
 	return target{}, false

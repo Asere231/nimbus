@@ -239,7 +239,13 @@ func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request,
 
 	info := up.info
 	info.ETag = etag
-	s.objects.putWithETag(bucket, key, data, info)
+	// A completed multipart upload is a new VERSION like any other write,
+	// so the bucket decides whether it replaces what was there.
+	versioned := false
+	if b, aerr := s.loadBucket(bucket); aerr == nil {
+		versioned = b.versioned()
+	}
+	s.objects.putWithETag(bucket, key, data, info, versioned)
 	s.uploads.remove(uploadID)
 
 	writeXML(w, 200, completeMultipartUploadResult{

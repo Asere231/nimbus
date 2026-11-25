@@ -3,16 +3,14 @@ package aws
 import (
 	"crypto/md5"
 	"encoding/hex"
-	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/Asere231/nimbus/internal/datadir"
 	"github.com/Asere231/nimbus/internal/fsname"
 )
 
@@ -30,6 +28,17 @@ import (
 // bucket was empty and the key 404'd.
 const metaSuffix = ".meta%"
 
+// versionPrefix names a NONCURRENT version's file: "{key}.v{n}%", where n
+// is its position in the key's history. It ends in "%" for the same reason
+// metaSuffix does, which is what makes it unmistakably ours: an encoded key
+// never ends in "%", so any name that does was appended by this file.
+//
+// The CURRENT version keeps the plain "{key}" path it has always had. That
+// is not tidiness -- it means a data directory written before versioning
+// existed loads unchanged, and the overwhelmingly common case (one version)
+// is byte-for-byte what it was.
+const versionPrefix = ".v"
+
 // Where S3 object bytes live.
 //
 // On disk under {DataDir}/s3 when --persist is on, in memory otherwise --
@@ -41,7 +50,7 @@ const metaSuffix = ".meta%"
 // than in one index, so a key with a slash in it ("img/logo.svg", which is
 // most of them) lands in a directory that matches what the client sees.
 
-// objectInfo is everything about an object except its bytes.
+// objectInfo is everything about an object version except its bytes.
 type objectInfo struct {
 	Key          string            `json:"key"`
 	Size         int64             `json:"size"`
@@ -49,13 +58,39 @@ type objectInfo struct {
 	ContentType  string            `json:"contentType"`
 	LastModified time.Time         `json:"lastModified"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
+
+	// VersionID is the id a client deletes by. It is "null" for an object
+	// in a bucket that has never had versioning enabled -- real S3's own
+	// id for one written before versioning, and a real id rather than an
+	// absent field, because emptying a bucket is a list followed by a
+	// delete per version.
+	VersionID string `json:"versionId,omitempty"`
+
+	// DeleteMarker is a version with no bytes, laid OVER the history by a
+	// delete against a versioned bucket. The object then reads 404 while
+	// every earlier version is still there, and removing the marker
+	// undeletes it. This is the piece that makes versioning a history
+	// rather than a label.
+	DeleteMarker bool `json:"deleteMarker,omitempty"`
 }
 
-// objectStore holds every bucket's objects.
+// objectStore holds every bucket's objects, each as a HISTORY.
+//
+// The value is a slice of versions, OLDEST FIRST, so the last element is
+// the current one. Order lives in the slice rather than being recovered by
+// sorting on a timestamp, because azurerm and the aws provider both write
+// concurrently and two versions of one key can share a millisecond -- the
+// same reason the activity feed sorts with nanosecond precision and the
+// visualizer trusts the array.
 type objectStore struct {
 	mu  sync.RWMutex
 	dir string // empty = memory only
-	mem map[string]map[string]storedObject
+	mem map[string]map[string][]storedObject
+
+	// seq makes a version id unique within a process. The id is otherwise
+	// derived, which keeps it stable once written -- what matters is that
+	// two writes of one key in the same nanosecond cannot collide.
+	seq int64
 }
 
 type storedObject struct {
@@ -64,7 +99,7 @@ type storedObject struct {
 }
 
 func newObjectStore(dataDir string) *objectStore {
-	s := &objectStore{mem: map[string]map[string]storedObject{}}
+	s := &objectStore{mem: map[string]map[string][]storedObject{}}
 	if dataDir != "" {
 		s.dir = filepath.Join(dataDir, "s3")
 		_ = os.MkdirAll(s.dir, 0o755)
@@ -72,70 +107,222 @@ func newObjectStore(dataDir string) *objectStore {
 	return s
 }
 
-// put stores an object and returns its ETag.
+// nullVersionID is the version id S3 gives an object in a bucket where
+// versioning has never been enabled, and the id a SUSPENDED bucket's
+// writes carry. The literal string "null", not an absent field.
+//
+// There is at most one "null" version of a key at a time: a write while
+// versioning is off or suspended REPLACES it, which is exactly how real S3
+// behaves and why suspending versioning stops a bucket growing without
+// discarding the history it already has.
+const nullVersionID = "null"
+
+// --- reading --------------------------------------------------------------
+
+// get is the current version, which is what a request with no versionId
+// asks for. A delete marker comes back like any other version: the caller
+// decides what a 404 looks like, because GET and DELETE answer differently.
+func (s *objectStore) get(bucket, key string) ([]byte, objectInfo, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	vs := s.mem[bucket][key]
+	if len(vs) == 0 {
+		return nil, objectInfo{}, false
+	}
+	o := vs[len(vs)-1]
+	return o.data, o.info, true
+}
+
+// getVersion is one named version, which may be a noncurrent one or a
+// delete marker.
+func (s *objectStore) getVersion(bucket, key, versionID string) ([]byte, objectInfo, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, o := range s.mem[bucket][key] {
+		if o.info.VersionID == versionID {
+			return o.data, o.info, true
+		}
+	}
+	return nil, objectInfo{}, false
+}
+
+// list is the current version of every object whose key starts with
+// prefix, sorted by key, which is the order S3 guarantees. A key whose
+// current version is a DELETE MARKER is absent, because that is what a
+// delete against a versioned bucket means to anything that is not asking
+// about versions.
+func (s *objectStore) list(bucket, prefix string) []objectInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []objectInfo{}
+	for key, vs := range s.mem[bucket] {
+		if !strings.HasPrefix(key, prefix) || len(vs) == 0 {
+			continue
+		}
+		if info := vs[len(vs)-1].info; !info.DeleteMarker {
+			out = append(out, info)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
+}
+
+// versions is every version of every matching key, NEWEST FIRST within a
+// key and keys in order -- which is the order ListObjectVersions reports,
+// and it is what lets a caller mark the first of each key as IsLatest
+// without asking the store again.
+func (s *objectStore) versions(bucket, prefix string) []objectInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	keys := make([]string, 0, len(s.mem[bucket]))
+	for key := range s.mem[bucket] {
+		if strings.HasPrefix(key, prefix) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	out := []objectInfo{}
+	for _, key := range keys {
+		vs := s.mem[bucket][key]
+		for i := len(vs) - 1; i >= 0; i-- {
+			out = append(out, vs[i].info)
+		}
+	}
+	return out
+}
+
+// count is every version in the bucket, delete markers included.
+//
+// Markers count because S3 refuses to delete a bucket that still holds any
+// version at all: a bucket emptied by deleting its objects without their
+// version ids is NOT empty, and the provider's force_destroy depends on
+// being told so -- otherwise it would stop after one pass and ask for the
+// bucket, which is the shape of the bug that made a versioned bucket
+// impossible to destroy in the first place.
+func (s *objectStore) count(bucket string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, vs := range s.mem[bucket] {
+		n += len(vs)
+	}
+	return n
+}
+
+// --- writing --------------------------------------------------------------
+
+// put stores a new version of an object and returns its info.
 //
 // The ETag is the MD5 of the content, which is what S3 returns for a
 // single-part upload and what clients compare against to decide whether an
 // upload needs repeating. Unlike Azure's Content-MD5 -- a content setting
 // that must NOT be invented -- this one is always present and always the
 // digest, so computing it is correct rather than a guess.
-func (s *objectStore) put(bucket, key string, data []byte, info objectInfo) objectInfo {
+func (s *objectStore) put(bucket, key string, data []byte, info objectInfo, versioned bool) objectInfo {
 	sum := md5.Sum(data)
 	info.Key = key
 	info.Size = int64(len(data))
 	info.ETag = `"` + hex.EncodeToString(sum[:]) + `"`
-	info.LastModified = time.Now().UTC().Truncate(time.Second)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.mem[bucket] == nil {
-		s.mem[bucket] = map[string]storedObject{}
-	}
-	s.mem[bucket][key] = storedObject{info: info, data: append([]byte(nil), data...)}
-	s.writeThrough(bucket, key, data, info)
-	return info
+	info.DeleteMarker = false
+	return s.addVersion(bucket, key, append([]byte(nil), data...), info, versioned)
 }
 
 // putWithETag stores an object whose ETag is already decided, which is the
 // multipart case: that ETag is the digest of the PART digests, not of the
 // bytes, so computing it here from the content would be wrong.
-func (s *objectStore) putWithETag(bucket, key string, data []byte, info objectInfo) objectInfo {
+func (s *objectStore) putWithETag(bucket, key string, data []byte, info objectInfo, versioned bool) objectInfo {
 	etag := info.ETag
-	stored := s.put(bucket, key, data, info)
+	stored := s.put(bucket, key, data, info, versioned)
 	if etag == "" {
 		return stored
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	o := s.mem[bucket][key]
-	o.info.ETag = etag
-	s.mem[bucket][key] = o
-	s.writeThrough(bucket, key, o.data, o.info)
-	return o.info
-}
-
-func (s *objectStore) get(bucket, key string) ([]byte, objectInfo, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	o, ok := s.mem[bucket][key]
-	if !ok {
-		return nil, objectInfo{}, false
+	vs := s.mem[bucket][key]
+	if len(vs) == 0 {
+		return stored
 	}
-	return o.data, o.info, true
+	vs[len(vs)-1].info.ETag = etag
+	s.writeKey(bucket, key, vs)
+	return vs[len(vs)-1].info
 }
 
-func (s *objectStore) delete(bucket, key string) bool {
+// putMarker lays a delete marker over a key's history. Only ever called
+// for a bucket with versioning configured: without it there is no history
+// to lay anything over and a delete simply removes the object.
+func (s *objectStore) putMarker(bucket, key string, versioned bool) objectInfo {
+	return s.addVersion(bucket, key, nil, objectInfo{
+		Key: key, DeleteMarker: true, ContentType: "",
+	}, versioned)
+}
+
+// addVersion appends a version, replacing the "null" one if this write is
+// not versioned. One function for both, because the replace rule is the
+// only difference between an enabled bucket and a suspended one.
+func (s *objectStore) addVersion(bucket, key string, data []byte, info objectInfo, versioned bool) objectInfo {
+	info.LastModified = time.Now().UTC().Truncate(time.Second)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.mem[bucket][key]; !ok {
+	if s.mem[bucket] == nil {
+		s.mem[bucket] = map[string][]storedObject{}
+	}
+	vs := s.mem[bucket][key]
+	if versioned {
+		s.seq++
+		info.VersionID = stableID(bucket+"/"+key+"/"+
+			strconv.FormatInt(time.Now().UnixNano(), 10)+"/"+
+			strconv.FormatInt(s.seq, 10), 32)
+	} else {
+		info.VersionID = nullVersionID
+		// At most one "null" version at a time.
+		kept := vs[:0:0]
+		for _, o := range vs {
+			if o.info.VersionID != nullVersionID {
+				kept = append(kept, o)
+			}
+		}
+		vs = kept
+	}
+	vs = append(vs, storedObject{info: info, data: data})
+	s.mem[bucket][key] = vs
+	s.writeKey(bucket, key, vs)
+	return info
+}
+
+// deleteVersion removes one named version permanently. Removing a delete
+// marker is how an object comes back.
+func (s *objectStore) deleteVersion(bucket, key, versionID string) (objectInfo, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	vs := s.mem[bucket][key]
+	for i, o := range vs {
+		if o.info.VersionID != versionID {
+			continue
+		}
+		vs = append(vs[:i:i], vs[i+1:]...)
+		if len(vs) == 0 {
+			delete(s.mem[bucket], key)
+		} else {
+			s.mem[bucket][key] = vs
+		}
+		s.writeKey(bucket, key, vs)
+		return o.info, true
+	}
+	return objectInfo{}, false
+}
+
+// deleteKey removes a key and every version of it. This is an UNVERSIONED
+// bucket's delete, where there is only ever one version anyway, and the
+// path a bucket delete takes.
+func (s *objectStore) deleteKey(bucket, key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.mem[bucket][key]) == 0 {
 		return false
 	}
 	delete(s.mem[bucket], key)
-	if s.dir != "" {
-		path := s.pathFor(bucket, key)
-		_ = os.Remove(path)
-		_ = os.Remove(path + metaSuffix)
-	}
+	s.writeKey(bucket, key, nil)
 	return true
 }
 
@@ -147,153 +334,4 @@ func (s *objectStore) deleteBucket(bucket string) {
 	if s.dir != "" {
 		_ = os.RemoveAll(filepath.Join(s.dir, fsname.Encode(bucket)))
 	}
-}
-
-// list returns the objects in a bucket whose key starts with prefix,
-// sorted by key, which is the order S3 guarantees.
-func (s *objectStore) list(bucket, prefix string) []objectInfo {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := []objectInfo{}
-	for key, o := range s.mem[bucket] {
-		if strings.HasPrefix(key, prefix) {
-			out = append(out, o.info)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
-	return out
-}
-
-func (s *objectStore) count(bucket string) int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.mem[bucket])
-}
-
-// --- disk -----------------------------------------------------------------
-
-// pathFor keeps the key's own shape on disk, so "img/logo.svg" is a file in
-// a directory rather than a file with a slash in its name. A key that tries
-// to climb out with ".." is refused by cleanKey before it ever gets here.
-//
-// The name goes through fsname.Encode, which is the identity for an ordinary
-// lowercase key and escapes what a filesystem cannot hold. Without it, NTFS
-// and APFS -- both case-insensitive by default -- merged two keys differing
-// only in case onto one file, ":" opened an alternate data stream, and "?",
-// "*" and "|" failed the write entirely. See internal/fsname.
-func (s *objectStore) pathFor(bucket, key string) string {
-	return filepath.Join(s.dir, fsname.Encode(bucket), filepath.FromSlash(fsname.Encode(key)))
-}
-
-func (s *objectStore) writeThrough(bucket, key string, data []byte, info objectInfo) {
-	if s.dir == "" {
-		return
-	}
-	// A failed write is REPORTED, not swallowed. It used to return quietly,
-	// so an object whose name the filesystem refused served perfectly from
-	// memory and then was simply gone after a restart, with nothing anywhere
-	// saying why. fsname.Encode should mean this no longer happens for a
-	// name's sake, which is exactly why a failure now means something real --
-	// a full disk, a permission -- and is worth saying out loud.
-	path := s.pathFor(bucket, key)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		log.Printf("nimbus: could not persist s3://%s/%s: %v", bucket, key, err)
-		return
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		log.Printf("nimbus: could not persist s3://%s/%s: %v", bucket, key, err)
-		return
-	}
-	if meta, err := json.Marshal(info); err == nil {
-		if err := os.WriteFile(path+metaSuffix, meta, 0o644); err != nil {
-			log.Printf("nimbus: could not persist metadata for s3://%s/%s: %v", bucket, key, err)
-		}
-	}
-}
-
-// load reads everything back off disk at startup.
-func (s *objectStore) load() {
-	if s.dir == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ignored := 0
-	_ = filepath.WalkDir(s.dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || strings.HasSuffix(path, metaSuffix) {
-			return nil
-		}
-		rel, err := filepath.Rel(s.dir, path)
-		if err != nil {
-			return nil
-		}
-		parts := strings.SplitN(filepath.ToSlash(rel), "/", 2)
-		if len(parts) != 2 {
-			ignored++
-			return nil
-		}
-		// The path is an ENCODED name, so the key is what it decodes back
-		// to. A file that does not decode is not one we wrote -- something
-		// a person dropped in the data directory -- and is skipped rather
-		// than loaded under an invented name.
-		bucket, ok := fsname.Decode(parts[0])
-		if !ok {
-			ignored++
-			return nil
-		}
-		key, ok := fsname.Decode(parts[1])
-		if !ok {
-			ignored++
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			ignored++
-			return nil
-		}
-		info := objectInfo{Key: key, Size: int64(len(data))}
-		if meta, err := os.ReadFile(path + metaSuffix); err == nil {
-			_ = json.Unmarshal(meta, &info)
-		}
-		if s.mem[bucket] == nil {
-			s.mem[bucket] = map[string]storedObject{}
-		}
-		s.mem[bucket][key] = storedObject{info: info, data: data}
-		return nil
-	})
-	datadir.ReportIgnored("s3", s.dir, ignored)
-}
-
-// cleanKey refuses a key that would escape the bucket's directory.
-//
-// Nothing a client sends is trusted with a path. "../../etc/passwd" is a
-// legal S3 key -- S3 stores it flat and it means nothing -- but written
-// through filepath.Join it would leave the data directory entirely.
-// A key knows only "/", so anything the HOST filesystem would read as a
-// separator has to be refused here, while it is still just a character.
-// `a\..\..\x` is one harmless segment to a "/"-split check and three
-// levels up to filepath.Join on Windows; "C:/x" is an ordinary name on Unix
-// and absolute on Windows. Judging the key by S3's own rules makes the same
-// request refused on every machine, which is what a client's key deserves.
-func cleanKey(key string) (string, bool) {
-	if key == "" || strings.HasPrefix(key, "/") || strings.Contains(key, `\`) {
-		return "", false
-	}
-	// A single letter then a colon, at the end of the first segment: a
-	// Windows drive. Narrow, because a colon elsewhere is a legal character
-	// in a key -- a timestamp has two of them.
-	if len(key) >= 2 && key[1] == ':' && isASCIILetter(key[0]) &&
-		(len(key) == 2 || key[2] == '/') {
-		return "", false
-	}
-	for _, part := range strings.Split(key, "/") {
-		if part == ".." {
-			return "", false
-		}
-	}
-	return key, true
-}
-
-func isASCIILetter(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }

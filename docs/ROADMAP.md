@@ -584,13 +584,17 @@ deleted, because the decisions themselves are worth knowing:
   Every request to the cluster is authenticated as `system:masters`, because
   the token webhook says yes to everything; the aws-auth ConfigMap and IAM
   role mapping are not modelled.
-- **S3 has multipart upload but no object versioning HISTORY.** `?versioning`
-  round-trips as a setting, but every PUT overwrites: there is one version
-  of an object. `?versions` lists each object once, as version `"null"` —
-  real S3's id for an object written before versioning was enabled — which
-  is what lets the provider empty a versioned bucket for `force_destroy`.
-  Until Nimbus answered that call at all, such a bucket could never be
-  destroyed: the destroy simply retried for ever. An upload in flight is
+- **S3 object versioning is a real history now; what it still lacks is
+  lifecycle.** An overwrite against an Enabled bucket keeps what it
+  replaced, a delete lays a delete MARKER whose removal undeletes, `Suspended`
+  keeps the history and stops adding to it, and `?versions` reports every
+  version and marker newest-first with `IsLatest`. A bucket that has never
+  had versioning is unchanged, down to the absent `x-amz-version-id`. What
+  is NOT modelled: no lifecycle rule ever expires a noncurrent version, so
+  a history only shrinks when something deletes a version by id; MFA delete
+  is not implemented; and a batch delete whose body names version ids is
+  authorized as `s3:DeleteObject` alone, because S3's bodies are
+  deliberately not buffered for the permission check. An upload in flight is
   held in memory and bounded at 512 MB,
   so it does not survive a restart — real S3 keeps an incomplete upload
   until a lifecycle rule reaps it, and `ListMultipartUploads` here only ever

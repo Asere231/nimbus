@@ -2,6 +2,7 @@ package aws
 
 import (
 	"encoding/xml"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -25,11 +26,10 @@ import (
 // reading the failure as something else entirely -- and the second time a
 // bucket's own force_destroy has been the thing it broke.
 //
-// Nimbus keeps ONE version of an object, so every object is reported as a
-// single version with id "null", which is real S3's id for an object written
-// before versioning was enabled. Enabling versioning therefore does not
-// actually retain anything here, which is a documented divergence rather
-// than a hidden one; what it must not do is make the bucket undeletable.
+// Nimbus keeps a real HISTORY now; what this test is about is that every
+// key appears at all, with an id a client can delete by. The history's own
+// behaviour -- overwrites, delete markers, suspension -- is in
+// s3_versioning_test.go.
 func TestListObjectVersionsListsEveryObject(t *testing.T) {
 	s := newTestServer(t)
 	makeBucket(t, s, "demo")
@@ -130,10 +130,15 @@ func TestBulkDeleteWithVersionIdsEmptiesTheBucket(t *testing.T) {
 	mustPutVersioning(t, s, "demo")
 	s3req(t, s, http.MethodPut, "/demo/a.txt", "hello")
 
+	// The ids come from the listing, as the provider's own do -- a
+	// hardcoded "null" was right only while every object here had that id.
+	var objects strings.Builder
+	for _, v := range mustListVersions(t, s, "/demo?versions").Versions {
+		fmt.Fprintf(&objects, "<Object><Key>%s</Key><VersionId>%s</VersionId></Object>",
+			v.Key, v.VersionID)
+	}
 	body := `<?xml version="1.0" encoding="UTF-8"?>
-<Delete><Quiet>false</Quiet>
-  <Object><Key>a.txt</Key><VersionId>null</VersionId></Object>
-</Delete>`
+<Delete><Quiet>false</Quiet>` + objects.String() + `</Delete>`
 	rec := s3req(t, s, http.MethodPost, "/demo?delete", body)
 	if rec.Code != 200 {
 		t.Fatalf("bulk delete: %d %s", rec.Code, rec.Body)
@@ -161,6 +166,12 @@ type objectVersionsResult struct {
 		Size         int64  `xml:"Size"`
 		StorageClass string `xml:"StorageClass"`
 	} `xml:"Version"`
+	DeleteMarkers []struct {
+		Key          string `xml:"Key"`
+		VersionID    string `xml:"VersionId"`
+		IsLatest     bool   `xml:"IsLatest"`
+		LastModified string `xml:"LastModified"`
+	} `xml:"DeleteMarker"`
 }
 
 func mustPutVersioning(t *testing.T, s *Server, bucket string) {

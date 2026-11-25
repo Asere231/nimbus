@@ -376,7 +376,7 @@ func TestCodeCanComeFromNimbusOwnS3(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.objects.put("packages", "writer.zip", zipped, objectInfo{})
+	s.objects.put("packages", "writer.zip", zipped, objectInfo{}, false)
 
 	rec, doc := lambdaCall(t, s, http.MethodPost, "/2015-03-31/functions", `{
 		"FunctionName": "fromS3", "Runtime": "python3.12", "Handler": "app.handler",

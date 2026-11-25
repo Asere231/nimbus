@@ -33,7 +33,7 @@ func TestAnUnrecognisedFileInTheDataDirectoryIsReported(t *testing.T) {
 	// One real object, so the test can tell "counted everything" from
 	// "counted nothing".
 	s := newObjectStore(root)
-	s.put("demo", "notes/hello.txt", []byte("hi"), objectInfo{})
+	s.put("demo", "notes/hello.txt", []byte("hi"), objectInfo{}, false)
 
 	// A stray at the top level: no bucket directory, so it cannot name a
 	// bucket and a key.
@@ -99,9 +99,9 @@ func TestACleanDataDirectoryReportsNothing(t *testing.T) {
 	s := newObjectStore(root)
 	// Keys that exercise the encoding: uppercase, a slash, a percent and a
 	// dot-suffix that used to collide with the metadata sidecar.
-	s.put("demo", "Notes/Hello World.txt", []byte("hi"), objectInfo{})
-	s.put("demo", "config.json", []byte("{}"), objectInfo{})
-	s.put("demo", "weird%name", []byte("x"), objectInfo{})
+	s.put("demo", "Notes/Hello World.txt", []byte("hi"), objectInfo{}, false)
+	s.put("demo", "config.json", []byte("{}"), objectInfo{}, false)
+	s.put("demo", "weird%name", []byte("x"), objectInfo{}, false)
 
 	var buf bytes.Buffer
 	out, flags := log.Writer(), log.Flags()

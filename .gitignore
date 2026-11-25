@@ -13,6 +13,17 @@
 crash.log
 tf.log
 
+# Scratch an example's own documented commands leave behind. The Lambda
+# examples tell you to write a payload to a file -- because that is the one
+# --payload spelling both aws-cli major versions accept -- and the invoke
+# writes its answer beside it.
+/examples/terraform/*/payload*.json
+/examples/terraform/*/out*.json
+/examples/terraform/*/invoke*.json
+/examples/terraform/*/show.json
+/examples/terraform/*/version*.txt
+/examples/terraform/*/logs.txt
+
 # A Cloud Function's vendored dependencies, installed by the documented pip
 # step before an apply. Not committed, for the same reason the Azure function
 # app's .python_packages is not: it is megabytes of somebody else's code and

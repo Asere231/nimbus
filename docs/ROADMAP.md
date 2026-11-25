@@ -569,12 +569,21 @@ deleted, because the decisions themselves are worth knowing:
   instances are two separate worlds. NAT gateways are recorded but nothing
   routes. IAM itself IS enforced now, behind `--enforce-iam`; what is not is
   any of EKS's own authorization — see the entry below.
-- **Lambda has only `$LATEST`.** No published versions, aliases, layers,
-  event source mappings, function URLs or concurrency settings: publishing a
-  version would mean keeping a copy of the code and a second container per
-  version, and nothing a local apply does needs it. An `Event` invocation
-  runs immediately rather than being queued, so there is no retry behaviour
-  to observe.
+- **Lambda publishes versions and has aliases; what it still lacks is
+  layers.** `publish = true` snapshots the configuration AND the code, an
+  alias is a stable name with a qualified ARN of its own, and invoking a
+  pinned version really runs that version's handler — proved by changing
+  the handler, re-applying, and watching version 1 answer with the old code
+  while `$LATEST` answered with the new. A version's container is started on
+  the FIRST invoke rather than at publish time, so a `publish = true` on
+  every apply does not leave a container per version running for versions
+  nobody calls. A weighted alias's `routing_config` IS honoured: the split
+  is random per request, as real Lambda's is, which is why
+  `X-Amz-Executed-Version` names the version that really ran rather than
+  the alias. Still missing: layers, event source mappings, function URLs
+  and concurrency settings. An
+  `Event` invocation runs immediately rather than being queued, so there is
+  no retry behaviour to observe.
 - **DynamoDB has no streams, no TTL expiry and no index projections.** A
   secondary index works because its keys are ordinary attributes of the same
   items, so a query on it needs no separate storage — but a `KEYS_ONLY`

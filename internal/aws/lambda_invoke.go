@@ -27,9 +27,23 @@ import (
 // `aws logs filter-log-events` afterwards shows what really happened.
 
 func (s *Server) invokeFunction(w http.ResponseWriter, r *http.Request, name string) *apiError {
-	fn, aerr := s.loadFunction(name)
+	// A Qualifier picks a published version or follows an alias, and what
+	// runs is THAT snapshot's code -- which is the whole point of
+	// publishing. See lambda_versions.go.
+	qualifier := lambdaQualifier(name, r)
+	fn, aerr := s.resolveQualified(name, qualifier)
 	if aerr != nil {
 		return aerr
+	}
+	// A published version's container is started on the FIRST invoke
+	// rather than at publish time, so a `publish = true` on every apply
+	// does not leave a container per version running for versions nobody
+	// calls. The image is already local by then, because $LATEST pulled
+	// it.
+	if fn.Version != latestQualifier {
+		if aerr := s.ensureVersionRunning(fn); aerr != nil {
+			return aerr
+		}
 	}
 	payload, err := io.ReadAll(io.LimitReader(r.Body, 6<<20))
 	if err != nil {
@@ -94,7 +108,10 @@ func (s *Server) invokeFunction(w http.ResponseWriter, r *http.Request, name str
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Amzn-RequestId", requestID)
-	w.Header().Set("X-Amz-Executed-Version", "$LATEST")
+	// The version that really ran, which for an alias is what it points
+	// at rather than the alias's own name -- that is how a client checks
+	// which side of a weighted alias answered.
+	w.Header().Set("X-Amz-Executed-Version", fn.Version)
 	if result.FunctionError != "" {
 		w.Header().Set("X-Amz-Function-Error", result.FunctionError)
 	}

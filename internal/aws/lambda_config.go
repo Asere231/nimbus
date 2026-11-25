@@ -18,8 +18,8 @@ import (
 // container when the container is what carries it -- a timeout is read per
 // invocation, an environment variable is baked in at start.
 
-func (s *Server) getFunction(w http.ResponseWriter, name string) *apiError {
-	fn, aerr := s.loadFunction(name)
+func (s *Server) getFunction(w http.ResponseWriter, r *http.Request, name string) *apiError {
+	fn, aerr := s.resolveQualified(name, lambdaQualifier(name, r))
 	if aerr != nil {
 		return aerr
 	}
@@ -36,8 +36,8 @@ func (s *Server) getFunction(w http.ResponseWriter, name string) *apiError {
 	return nil
 }
 
-func (s *Server) getFunctionConfiguration(w http.ResponseWriter, name string) *apiError {
-	fn, aerr := s.loadFunction(name)
+func (s *Server) getFunctionConfiguration(w http.ResponseWriter, r *http.Request, name string) *apiError {
+	fn, aerr := s.resolveQualified(name, lambdaQualifier(name, r))
 	if aerr != nil {
 		return aerr
 	}
@@ -54,18 +54,6 @@ func (s *Server) listFunctions(w http.ResponseWriter) *apiError {
 		}
 	}
 	writeJSON(w, 200, map[string]any{"Functions": out})
-	return nil
-}
-
-func (s *Server) listVersions(w http.ResponseWriter, name string) *apiError {
-	fn, aerr := s.loadFunction(name)
-	if aerr != nil {
-		return aerr
-	}
-	// Only $LATEST. Publishing a version would mean keeping a copy of the
-	// code and a second container per version, and nothing a local apply
-	// does needs it.
-	writeJSON(w, 200, map[string]any{"Versions": []*lambdaFunction{fn}})
 	return nil
 }
 
@@ -199,17 +187,46 @@ func (s *Server) restartFunction(name string) {
 	}
 }
 
-func (s *Server) deleteFunction(w http.ResponseWriter, name string) *apiError {
+func (s *Server) deleteFunction(w http.ResponseWriter, r *http.Request, name string) *apiError {
 	fn, aerr := s.loadFunction(name)
 	if aerr != nil {
 		return aerr
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+
+	// A delete naming a QUALIFIER takes only that version, which is how a
+	// client prunes a history without destroying the function. Real
+	// Lambda refuses $LATEST here, because deleting it would mean
+	// deleting the function by another name.
+	if q := lambdaQualifier(name, r); q != "" && q != latestQualifier {
+		version, aerr := s.resolveQualified(fn.FunctionName, q)
+		if aerr != nil {
+			// Already gone: a destroy has to be idempotent.
+			w.WriteHeader(204)
+			return nil
+		}
+		if running := s.lambda.Get(version.FunctionArn); running != nil {
+			s.lambda.Stop(ctx, running)
+		}
+		s.lambda.RemoveCode(version.FunctionArn)
+		_, _ = s.store.Delete(version.FunctionArn)
+		w.WriteHeader(204)
+		return nil
+	}
+	if lambdaQualifier(name, r) == latestQualifier {
+		return &apiError{Status: 400, Code: "InvalidParameterValueException",
+			Message: "$LATEST cannot be deleted on its own; delete the function instead"}
+	}
+
 	if running := s.lambda.Get(fn.FunctionArn); running != nil {
 		s.lambda.Stop(ctx, running)
 	}
 	s.lambda.RemoveCode(fn.FunctionArn)
+	// A version's container and code directory are not store resources,
+	// so the cascade that removes their records cannot reach them. They
+	// have to go here, by the thing that made them.
+	s.stopLambdaQualifiers(ctx, fn.FunctionName)
 	_, _ = s.store.Delete(fn.FunctionArn)
 	// 204 with no body, which is what the SDK expects for this one.
 	w.WriteHeader(204)

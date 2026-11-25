@@ -151,12 +151,31 @@ resource "aws_lambda_function" "writer" {
   }
 
   tags = { Project = "nimbus" }
+
+  # Every apply PUBLISHES an immutable version: a snapshot of this
+  # configuration and this code, addressed as nimbus-writer:1. $LATEST
+  # goes on changing; the version does not.
+  publish = true
+}
+
+# An alias is a stable name pointing into that history. The thing it buys
+# is a qualified ARN of its own, so "may invoke prod but not $LATEST" is a
+# policy somebody can write -- which is the whole reason aliases exist.
+resource "aws_lambda_alias" "prod" {
+  name             = "prod"
+  description      = "whatever was published last"
+  function_name    = aws_lambda_function.writer.function_name
+  function_version = aws_lambda_function.writer.version
 }
 
 output "invoke" {
   # fileb:// rather than an inline payload: it is the only spelling both
   # aws-cli v1 and v2 read as raw bytes. See the note at the top.
   value = "printf '{\"id\":\"1\"}' > payload.json && aws --endpoint-url ${var.nimbus_endpoint} lambda invoke --function-name ${aws_lambda_function.writer.function_name} --payload fileb://payload.json /dev/stdout"
+}
+
+output "invoke_prod" {
+  value = "printf '{\"id\":\"2\"}' > payload.json && aws --endpoint-url ${var.nimbus_endpoint} lambda invoke --function-name ${aws_lambda_function.writer.function_name} --qualifier ${aws_lambda_alias.prod.name} --payload fileb://payload.json out.json && cat out.json"
 }
 
 output "scan" {

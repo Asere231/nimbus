@@ -1283,6 +1283,68 @@ jobs:
           grep -q "wrote ci to nimbus-items" logs.txt || {
             echo "::error::the handler's output is not in its log group"; exit 1; }
 
+          # --- published versions and aliases -------------------------
+          #
+          # `publish = true` must really have published, and the version
+          # must be in Terraform's state: the provider reads `version` out
+          # of the CreateFunction RESPONSE and never looks again, so a
+          # version published and not reported there is a permanent diff.
+          terraform show -json > show.json
+          python3 - <<'PY' > version.txt
+          import json
+          for r in json.load(open("show.json"))["values"]["root_module"]["resources"]:
+              if r["type"] == "aws_lambda_function":
+                  print(r["values"]["version"])
+          PY
+          version=$(cat version.txt)
+          echo "terraform state says version=$version"
+          if [ "$version" != "1" ]; then
+            echo "::error::publish = true left the state saying version '$version', expected 1"
+            exit 1
+          fi
+
+          aws $E lambda list-versions-by-function --function-name nimbus-writer \
+            --query 'Versions[].Version' --output text | tee versions.txt
+          grep -q '\$LATEST' versions.txt || {
+            echo "::error::the version listing has no \$LATEST"; exit 1; }
+          grep -qw 1 versions.txt || {
+            echo "::error::version 1 was not published"; exit 1; }
+
+          alias_version=$(aws $E lambda get-alias --function-name nimbus-writer \
+            --name prod --query 'FunctionVersion' --output text)
+          if [ "$alias_version" != "1" ]; then
+            echo "::error::the prod alias points at '$alias_version', expected 1"
+            exit 1
+          fi
+
+          # Invoking THROUGH the alias has to run the version behind it,
+          # and say which one really ran -- that header is how a client
+          # checks which side of a weighted alias answered.
+          printf '{"id":"via-alias"}' > payload2.json
+          aws $E lambda invoke --function-name nimbus-writer --qualifier prod \
+            --payload fileb://payload2.json out2.json > invoke2.json
+          cat invoke2.json out2.json
+          grep -q '"ExecutedVersion": "1"' invoke2.json || {
+            echo "::error::an invoke through the alias did not report version 1"; exit 1; }
+          grep -q '"written": "via-alias"' out2.json || {
+            echo "::error::the alias invoke did not run the handler"; exit 1; }
+
+          # Which means a SECOND container, started on demand for the
+          # version -- not at publish time.
+          docker ps --filter label=nimbus.function --format '{{.Names}}'
+          running=$(docker ps -q --filter label=nimbus.function | wc -l | tr -d ' ')
+          if [ "$running" != "2" ]; then
+            echo "::error::expected 2 function containers (\$LATEST and version 1), found $running"
+            docker ps -a --filter label=nimbus.function
+            exit 1
+          fi
+
+          items=$(aws $E dynamodb scan --table-name nimbus-items --query 'Count' --output text)
+          if [ "$items" != "2" ]; then
+            echo "::error::after the alias invoke the table holds $items items, expected 2"
+            exit 1
+          fi
+
           terraform destroy -auto-approve -input=false
 
       - name: No containers left behind

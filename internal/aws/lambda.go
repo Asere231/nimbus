@@ -93,6 +93,12 @@ type lambdaFunction struct {
 	NimbusPolicy      map[string]any    `json:"nimbusPolicy,omitempty"`
 	NimbusInvocations int               `json:"nimbusInvocations"`
 	NimbusLogGroup    string            `json:"nimbusLogGroup"`
+	// NimbusImage is recorded on a PUBLISHED VERSION so its container can
+	// be started later. It is re-derivable from Runtime for a Zip
+	// function and not at all for a PackageType: Image one, so it is
+	// stored rather than guessed. Empty on the live function, which gets
+	// its image passed in at create.
+	NimbusImage string `json:"nimbusImage,omitempty"`
 }
 
 func (s *Server) lambdaARN(name string) string {
@@ -111,20 +117,34 @@ func (s *Server) serveLambda(w http.ResponseWriter, r *http.Request) string {
 	case len(parts) == 2 && parts[1] == "functions" && r.Method == http.MethodGet:
 		aerr = s.listFunctions(w)
 	case len(parts) == 3 && parts[1] == "functions" && r.Method == http.MethodGet:
-		aerr = s.getFunction(w, parts[2])
+		aerr = s.getFunction(w, r, parts[2])
 	case len(parts) == 3 && parts[1] == "functions" && r.Method == http.MethodDelete:
-		aerr = s.deleteFunction(w, parts[2])
+		aerr = s.deleteFunction(w, r, parts[2])
 
 	case len(parts) == 4 && parts[1] == "functions" && parts[3] == "configuration" && r.Method == http.MethodGet:
-		aerr = s.getFunctionConfiguration(w, parts[2])
+		aerr = s.getFunctionConfiguration(w, r, parts[2])
 	case len(parts) == 4 && parts[1] == "functions" && parts[3] == "configuration" && r.Method == http.MethodPut:
 		aerr = s.updateFunctionConfiguration(w, r, parts[2])
 	case len(parts) == 4 && parts[1] == "functions" && parts[3] == "code" && r.Method == http.MethodPut:
 		aerr = s.updateFunctionCode(w, r, parts[2])
 	case len(parts) == 4 && parts[1] == "functions" && parts[3] == "invocations":
 		aerr = s.invokeFunction(w, r, parts[2])
+	// Published versions and aliases: a function's history, and the
+	// stable names that point into it. See lambda_versions.go.
 	case len(parts) == 4 && parts[1] == "functions" && parts[3] == "versions" && r.Method == http.MethodGet:
-		aerr = s.listVersions(w, parts[2])
+		aerr = s.listVersionsByFunction(w, parts[2])
+	case len(parts) == 4 && parts[1] == "functions" && parts[3] == "versions" && r.Method == http.MethodPost:
+		aerr = s.publishVersion(w, r, parts[2])
+	case len(parts) == 4 && parts[1] == "functions" && parts[3] == "aliases" && r.Method == http.MethodPost:
+		aerr = s.createAlias(w, r, parts[2])
+	case len(parts) == 4 && parts[1] == "functions" && parts[3] == "aliases" && r.Method == http.MethodGet:
+		aerr = s.listAliases(w, r, parts[2])
+	case len(parts) == 5 && parts[1] == "functions" && parts[3] == "aliases" && r.Method == http.MethodGet:
+		aerr = s.getAlias(w, parts[2], parts[4])
+	case len(parts) == 5 && parts[1] == "functions" && parts[3] == "aliases" && r.Method == http.MethodPut:
+		aerr = s.updateAlias(w, r, parts[2], parts[4])
+	case len(parts) == 5 && parts[1] == "functions" && parts[3] == "aliases" && r.Method == http.MethodDelete:
+		aerr = s.deleteAlias(w, parts[2], parts[4])
 
 	// A resource policy. The provider reads it after a create and is
 	// written to tolerate exactly ResourceNotFoundException when there is
@@ -210,7 +230,11 @@ func (s *Server) createFunction(w http.ResponseWriter, r *http.Request) *apiErro
 		Tags          map[string]string `json:"Tags"`
 		Architectures []string          `json:"Architectures"`
 		PackageType   string            `json:"PackageType"`
-		Code          struct {
+		// Publish is how `publish = true` really works: the flag rides in
+		// the CREATE body and the provider never POSTs to .../versions.
+		// Measured against aws provider 5.100.0.
+		Publish bool `json:"Publish"`
+		Code    struct {
 			ZipFile  string `json:"ZipFile"`
 			S3Bucket string `json:"S3Bucket"`
 			S3Key    string `json:"S3Key"`
@@ -277,12 +301,27 @@ func (s *Server) createFunction(w http.ResponseWriter, r *http.Request) *apiErro
 	// `aws logs tail` expects even before the first invocation.
 	s.ensureLogGroup(fn.NimbusLogGroup)
 
+	// Publishing happens BEFORE the response, because the provider reads
+	// `version` and `qualified_arn` out of it and never looks again.
+	//
+	// Only the RESPONSE carries the number; the stored function stays
+	// $LATEST. See publishOnCreate.
+	answer := fn
+	if req.Publish {
+		if number := s.publishOnCreate(fn, code); number != "" {
+			published := *fn
+			published.Version = number
+			published.FunctionArn = s.lambdaVersionARN(fn.FunctionName, number)
+			answer = &published
+		}
+	}
+
 	// Starting a container takes seconds and a first pull takes minutes, so
 	// the create answers now with State: Pending and the provider waits for
 	// Active -- the same shape as an EKS cluster.
 	go s.startFunction(fn.FunctionName, image, code)
 
-	writeJSON(w, 201, fn)
+	writeJSON(w, 201, answer)
 	return nil
 }
 

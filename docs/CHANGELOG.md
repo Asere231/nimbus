@@ -18,6 +18,22 @@ Picking off deferred items from the roadmap's "Later", a tier at a time.
   has no root fallback to land in. The signature itself is still not
   verified — Nimbus holds no secret for a base credential — and
   `docs/ROADMAP.md` says so, with the one case that could be.
+- **Lambda publishes versions and has aliases.** `publish = true` and
+  `aws_lambda_alias` are ordinary provider resources and neither could
+  apply. A published version is an immutable snapshot of the configuration
+  AND the code: proved by changing the handler, re-applying, and watching
+  version 1 answer with the old code while `$LATEST` answered with the new.
+  An alias carries a qualified ARN of its own, which is what makes "may
+  invoke prod but not `$LATEST`" a policy somebody can write — so a
+  qualified invoke is classified against that ARN. A version's container
+  starts on the first invoke rather than at publish time, and a weighted
+  alias really splits — ignoring the weights would send every request one
+  way while the configuration said otherwise, which a client reads as an
+  answer about its canary. **`publish = true`
+  does not call PublishVersion**: the provider sends `"Publish": true` in
+  the CreateFunction body and only uses the endpoint on an update, so
+  implementing the endpoint alone left it reporting version `$LATEST` with
+  nothing erroring.
 - **Object versioning is a history in BOTH clouds, and the two models are
   genuinely different.** `?versioning` and `versioning.enabled` each
   round-tripped as a setting and did nothing: every write overwrote. Now an

@@ -184,10 +184,40 @@ func (s *Server) lambdaTarget(r *http.Request) (target, bool) {
 			return target{Action: "lambda:UpdateFunctionCode", Resource: arn}, true
 		}
 	case "invocations":
+		// A qualified invoke's resource is the QUALIFIED ARN, which is
+		// what makes "may invoke the prod alias but not $LATEST" a
+		// policy a person can write -- the whole reason aliases exist.
+		// Real AWS resolves an alias's permissions against the alias's
+		// own ARN, not the version behind it.
+		if q := lambdaQualifier(parts[2], r); q != "" {
+			return target{Action: "lambda:InvokeFunction", Resource: arn + ":" + q}, true
+		}
 		return target{Action: "lambda:InvokeFunction", Resource: arn}, true
 	case "versions":
-		if r.Method == http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
 			return target{Action: "lambda:ListVersionsByFunction", Resource: arn}, true
+		case http.MethodPost:
+			return target{Action: "lambda:PublishVersion", Resource: arn}, true
+		}
+	case "aliases":
+		// An alias's own ARN is the resource for the calls that name one,
+		// and the function's for the calls that do not.
+		aliasARN := arn
+		if len(parts) == 5 {
+			aliasARN = arn + ":" + parts[4]
+		}
+		switch {
+		case len(parts) == 4 && r.Method == http.MethodPost:
+			return target{Action: "lambda:CreateAlias", Resource: arn}, true
+		case len(parts) == 4 && r.Method == http.MethodGet:
+			return target{Action: "lambda:ListAliases", Resource: arn}, true
+		case len(parts) == 5 && r.Method == http.MethodGet:
+			return target{Action: "lambda:GetAlias", Resource: aliasARN}, true
+		case len(parts) == 5 && r.Method == http.MethodPut:
+			return target{Action: "lambda:UpdateAlias", Resource: aliasARN}, true
+		case len(parts) == 5 && r.Method == http.MethodDelete:
+			return target{Action: "lambda:DeleteAlias", Resource: aliasARN}, true
 		}
 	case "policy":
 		switch r.Method {

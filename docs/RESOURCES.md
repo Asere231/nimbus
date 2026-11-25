@@ -155,7 +155,9 @@ scope**, not the URL — every Query service POSTs to `/`.
 | `AWS::IAM::Policy` | hook |
 | `AWS::IAM::Role` | hook |
 | `AWS::IAM::User` | hook |
+| `AWS::Lambda::Alias` | hook |
 | `AWS::Lambda::Function` | **runs** |
+| `AWS::Lambda::Version` | **runs** |
 | `AWS::Logs::LogGroup` | hook |
 | `AWS::S3::Bucket` | hook |
 

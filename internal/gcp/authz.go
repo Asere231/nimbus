@@ -153,11 +153,29 @@ var gcpRoles = map[string]gcpRole{
 	"roles/run.viewer":              {Permissions: []string{"run.*.get", "run.*.list"}},
 	// Cloud Functions' permissions are spelled `cloudfunctions.*`, which is
 	// what apiFor already calls the service -- so the classifier derives
-	// them with no table entry. These are the roles that grant them.
-	"roles/cloudfunctions.admin":     {Permissions: []string{"cloudfunctions.*"}},
-	"roles/cloudfunctions.developer": {Permissions: []string{"cloudfunctions.*"}},
+	// them with no table entry. These are the roles that grant them,
+	// transcribed from Google's published lists rather than recalled.
+	"roles/cloudfunctions.admin": {Permissions: []string{"cloudfunctions.*"}},
+	// Developer DEPLOYS and does not hand out access: its published list
+	// has neither setIamPolicy nor getIamPolicy in it. Written first with
+	// the same bare `cloudfunctions.*` as the admin role, which made a
+	// deployer able to grant every permission on the function -- the
+	// over-grant this whole exercise is about, introduced an hour before it
+	// was caught.
+	"roles/cloudfunctions.developer": {
+		Permissions: []string{"cloudfunctions.*"},
+		Excluded:    []string{"*.setIamPolicy", "*.getIamPolicy"},
+	},
+	// Viewer DOES read the policy, which the first version left out --
+	// the other way for a curation to be wrong, and the fault Key Vault
+	// Reader had. locations.list and operations.* are in the real list too,
+	// and locations.list is not decoration: `gcloud functions list` reads
+	// it before listing anything.
 	"roles/cloudfunctions.viewer": {Permissions: []string{
 		"cloudfunctions.functions.get", "cloudfunctions.functions.list",
+		"cloudfunctions.functions.getIamPolicy",
+		"cloudfunctions.locations.list",
+		"cloudfunctions.operations.get", "cloudfunctions.operations.list",
 	}},
 }
 

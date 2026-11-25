@@ -406,10 +406,24 @@ deleted, because the decisions themselves are worth knowing:
   real documents are enormous explicit lists. Any role not in a catalogue
   REFUSES and names itself. They are transcriptions rather than fetched,
   so they drift as the clouds revise a role, and nothing detects that.
-- **An approximation written with `.*` grants more than the real role.**
-  `roles/compute.networkAdmin` was granting `*.setIamPolicy` until a test
-  caught it. The exclusions are added case by case as they are noticed,
-  which means the ones nobody has noticed are still there.
+- **An approximation written with `.*` grants more than the real role**, and
+  for `setIamPolicy` that is now checked rather than noticed.
+  `TestNoBundledRoleGrantsIAMByAccident` declares, for every bundled role,
+  whether Google's published definition includes it — and a role with no
+  declaration FAILS, so one added later is covered before anyone thinks
+  about it. The test is two-sided: a role that grants IAM and should not is
+  an escalation, and one that should and does not cannot do its own job.
+  - It found `roles/cloudfunctions.developer` granting
+    `cloudfunctions.functions.setIamPolicy`, because it was written with the
+    same bare `cloudfunctions.*` as the admin role. Not reachable through a
+    request — Cloud Functions serves no IAM endpoint — but `nimbus can` and
+    `/api/authz` would have said a deployer may hand out access, and it
+    would have become live the moment such an endpoint existed.
+  - The audit covers **`setIamPolicy` only**, deliberately. It is the
+    permission that hands out every other permission, so an approximation
+    loose about it is a privilege escalation; a role granting one `get` too
+    many is a divergence nobody is hurt by. Other over-grants remain
+    possible and are not checked.
 - **Ten condition keys and twenty-six operators are supported**, and the
   rule for what is in the list is "can the server answer it from the
   request in front of it". So the caller's ARN, name, derived id, type and

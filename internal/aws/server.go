@@ -193,6 +193,10 @@ func (s *Server) Start() func() {
 	// reaches the table's stream as an ordinary REMOVE -- which is what
 	// the pattern people use TTL for depends on. See dynamodb_ttl.go.
 	go s.startTTLSweeper(ctx)
+	// CloudWatch retention, on the same ticker shape. Nothing fires in a
+	// session you are watching -- the smallest retention is a day -- which
+	// is why the sweep takes a time rather than reading the clock.
+	go s.startRetentionSweeper(ctx)
 	return cancel
 }
 

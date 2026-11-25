@@ -121,6 +121,28 @@ func (l *logStore) streamNames(group string) []string {
 	return out
 }
 
+// expireBefore drops every event in a group older than `cutoff`, and
+// returns how many went. An empty STREAM is kept: a stream with no events
+// is an ordinary thing in CloudWatch, and removing it would make a
+// retention policy look like it had deleted the stream too.
+func (l *logStore) expireBefore(group string, cutoff int64) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	removed := 0
+	for stream, events := range l.streams[group] {
+		kept := events[:0:0]
+		for _, e := range events {
+			if e.Timestamp < cutoff {
+				removed++
+				continue
+			}
+			kept = append(kept, e)
+		}
+		l.streams[group][stream] = kept
+	}
+	return removed
+}
+
 func (l *logStore) events(group, stream string) []logEvent {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -532,7 +554,14 @@ func (s *Server) filterLogEvents(w http.ResponseWriter, req map[string]any) *api
 	if !s.logs.hasGroup(group) {
 		return logsNotFound("log group")
 	}
-	pattern := str(req["filterPattern"])
+	// A pattern Nimbus cannot apply is REFUSED rather than matched as a
+	// substring: a JSON pattern compared literally matches nothing, and
+	// an empty answer is indistinguishable from "nothing has been logged
+	// yet". See logs_filter.go.
+	filter, err := parseLogFilter(str(req["filterPattern"]))
+	if err != nil {
+		return &apiError{Status: 400, Code: "InvalidParameterException", Message: err.Error()}
+	}
 	var start, end int64
 	if v, ok := req["startTime"].(float64); ok {
 		start = int64(v)
@@ -553,10 +582,7 @@ func (s *Server) filterLogEvents(w http.ResponseWriter, req map[string]any) *api
 			if end > 0 && e.Timestamp > end {
 				continue
 			}
-			// A real filter pattern is its own small language; a substring
-			// is what nearly every use of it means, and matching more than
-			// asked for is the safe direction.
-			if pattern != "" && !strings.Contains(e.Message, strings.Trim(pattern, `"`)) {
+			if !filter.matches(e.Message) {
 				continue
 			}
 			out = append(out, map[string]any{

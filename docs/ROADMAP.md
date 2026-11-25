@@ -648,9 +648,16 @@ deleted, because the decisions themselves are worth knowing:
   attribute paths (`a.b`, `a[0]`), parentheses and `size()` in an expression
   are refused rather than guessed at.
 - **CloudWatch Logs keeps 10,000 events per stream, in memory.** They do not
-  survive a restart even with `--persist`, a retention policy is recorded and
-  never applied, and `filterPattern` is matched as a substring rather than as
-  CloudWatch's own small language — which can only ever return too much.
+  survive a restart even with `--persist`. `filterPattern` now implements the
+  TEXT language — required terms, `?optional`, `-excluded`, quoted phrases,
+  case-sensitively as CloudWatch is — and the two forms it does not, a JSON
+  pattern (`{ $.level = "ERROR" }`) and a space-delimited one (`[w1, w2]`),
+  are REFUSED by name. They used to be compared literally against each
+  message, which matched nothing and came back empty — indistinguishable
+  from "nothing has been logged yet". A retention policy is applied by a
+  sweeper, though CloudWatch's smallest retention is a DAY, so nothing
+  expires in a session you are watching; the sweep takes a time, so a test
+  pins the behaviour rather than leaving it hypothetical.
 - **EKS has no Fargate, no add-ons, no OIDC provider and no access entries.**
   Every request to the cluster is authenticated as `system:masters`, because
   the token webhook says yes to everything; the aws-auth ConfigMap and IAM

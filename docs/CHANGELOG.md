@@ -51,6 +51,14 @@ Picking off deferred items from the roadmap's "Later", a tier at a time.
   failure it could see said nothing but "Failed"; real ARM puts it in
   `properties.error`. Found by a test whose own failure message read
   "the deployment failed: &lt;nil&gt;".
+- **CloudWatch filter patterns are a language, not a substring.** Required
+  terms, `?optional`, `-excluded` and quoted phrases all work, case-sensitively
+  as CloudWatch is — the opposite of KQL's `contains` on the Azure side. The
+  two forms Nimbus does not implement are refused by name: a JSON pattern
+  compared literally against each message matched nothing and returned EMPTY,
+  which is indistinguishable from "nothing has been logged yet". Retention
+  policies are applied too, though nothing expires in a short session since
+  the smallest retention is a day.
 - **`nimbus az register` writes a CA bundle that trusts Nimbus *and* the
   internet.** `REQUESTS_CA_BUNDLE` replaces the trust store rather than
   adding to it, so while it pointed at the Nimbus CA alone `az` could not

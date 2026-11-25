@@ -1,7 +1,7 @@
 # Roadmap
 
-**Current: nothing. 0.25.0 cleared the "Later" backlog of everything that
-was not a milestone in its own right.**
+**0.25.0 cleared the "Later" backlog of everything that was not a milestone
+in its own right.**
 
 Done in 0.25.0, newest first: **CloudWatch filter patterns and retention**;
 a **combined CA bundle** so `az` can reach Nimbus and the internet at once;
@@ -18,18 +18,13 @@ by accident.
 Five stale claims in this file were corrected along the way, every one of
 them a sentence nobody had read because nothing failed.
 
-**What is left are two MILESTONES, not items**, and each needs a prompt in
-`docs/prompts/` and a planning pass rather than being picked up:
+**Current: Milestone 25, EKS OIDC and IRSA** — prompt in
+`docs/prompts/m25-eks-irsa.md`, blocking measurement already done, waiting
+on two owner decisions (where the issuer lives, and whether to wire the pod
+end of it).
 
-1. **EKS OIDC and IRSA** (the EKS entry below). Needs a measurement before
-   any code: the canonical Terraform pattern is `data.tls_certificate`
-   against the cluster's `identity.oidc.issuer`, and Nimbus serves AWS over
-   plain HTTP — so whether that data source can work at all decides the
-   shape of everything after it. Doing it properly also means k3s signing
-   service-account tokens with a key Nimbus holds, an OIDC discovery
-   endpoint, `sts:AssumeRoleWithWebIdentity`, and `Federated` principals in
-   the authorization core, which are refused by name today.
-2. **GCP OAuth and token exchange** (the "No OAuth" entry below).
+After that, one milestone remains: **GCP OAuth and token exchange** (the
+"No OAuth" entry below).
 
 **Registry authentication** was looked at and deliberately skipped — its
 entry says why the easy route is closed, and what was decided about

@@ -18,6 +18,15 @@ Picking off deferred items from the roadmap's "Later", a tier at a time.
   has no root fallback to land in. The signature itself is still not
   verified — Nimbus holds no secret for a base credential — and
   `docs/ROADMAP.md` says so, with the one case that could be.
+- **The plan overlay works for GCP, which it never had.** Every `google_*`
+  type was missing from its tables, so a loaded plan drew each pending change
+  as a bare Terraform address with no badge and no place on the graph — and
+  nothing failed, because an unmapped change still draws. Eight AWS and six
+  Azure types the examples use were missing too. A test now reads the
+  examples' own `.tf` files, so a type nobody considered fails rather than
+  drifting. A pending create in AWS or GCP is also parented to the cloud's
+  root — an account, a project — instead of floating beside the graph, since
+  neither cloud has a resource group to sit under.
 - **ARM deployments work at subscription scope.** `az deployment sub create`
   reached Nimbus already — the path parsed and the hook fired — and failed on
   `ParentResourceNotFound: Parent resource '/subscriptions/.../resourceGroups/'

@@ -123,3 +123,79 @@ test("the bar summarises the plan the way terraform does", () => {
   assert.equal(summarise({ changes: [] }), "", "nothing pending, nothing to say");
   assert.equal(summarise(null), "");
 });
+
+// AWS and GCP have no resource group, so a pending create there used to
+// float beside the graph with no parent at all. They DO have a single root
+// -- an account, a project -- and every resource hangs off it.
+const AWS_ACCOUNT = "arn:aws:::000000000000";
+const GCP_PROJECT = "http://localhost:4703/v1/projects/nimbus-local";
+
+test("an AWS create is parented to the account, not left floating", () => {
+  const map = new Map([
+    [AWS_ACCOUNT.toLowerCase(),
+      { cloud: "aws", id: AWS_ACCOUNT, type: "AWS::Account", name: "000000000000", parentId: "", body: {} }],
+  ]);
+  const list = ghosts({
+    changes: [{ address: "aws_vpc.main", action: "create", type: "AWS::EC2::VPC", name: "nimbus-vpc" }],
+  }, map, "aws");
+  assert.equal(list.length, 1);
+  assert.equal(list[0].parentId, AWS_ACCOUNT, "the ghost should sit under the account");
+  assert.equal(list[0].type, "AWS::EC2::VPC");
+});
+
+test("a GCP create is parented to the project", () => {
+  const map = new Map([
+    [GCP_PROJECT.toLowerCase(),
+      { cloud: "gcp", id: GCP_PROJECT, type: "cloudresourcemanager.googleapis.com/Project",
+        name: "nimbus-local", parentId: "", body: {} }],
+  ]);
+  const list = ghosts({
+    changes: [{
+      address: "google_compute_network.net", action: "create",
+      type: "compute.googleapis.com/Network", name: "nimbus-net",
+    }],
+  }, map, "gcp");
+  assert.equal(list.length, 1);
+  assert.equal(list[0].parentId, GCP_PROJECT, "the ghost should sit under the project");
+});
+
+// With two roots, picking either would be a guess. A floating card is the
+// honest answer -- and this cannot happen today, which is exactly why it
+// needs a test rather than a comment.
+test("two roots mean no parent is guessed", () => {
+  const map = new Map([
+    ["a", { cloud: "aws", id: "a", type: "AWS::Account", name: "one", parentId: "", body: {} }],
+    ["b", { cloud: "aws", id: "b", type: "AWS::Account", name: "two", parentId: "", body: {} }],
+  ]);
+  const list = ghosts({
+    changes: [{ address: "aws_vpc.main", action: "create", type: "AWS::EC2::VPC", name: "v" }],
+  }, map, "aws");
+  assert.equal(list[0].parentId, "", "a ghost with an ambiguous root must not be parented");
+});
+
+// The root fallback is for clouds with NO group type. A cloud that has one
+// must not reach for its root instead -- an Azure create whose group is
+// not on screen stays unparented even with the subscription right there,
+// because "in rg-somewhere-else" is information the subscription would
+// throw away.
+//
+// This replaces a test that asserted an Azure create prefers its group
+// over the subscription, which could not fail: the root is never looked up
+// for a cloud with a group type, so both orderings gave the same answer.
+// Found by injecting the swap and watching nothing break.
+test("a cloud with a group type never falls back to its root", () => {
+  const map = resources(
+    res(SUB, "Microsoft.Resources/subscriptions", "Nimbus Local", ""),
+    res(RG, "Microsoft.Resources/resourceGroups", "rg-platform-dev", SUB),
+  );
+  const elsewhere = {
+    changes: [{
+      address: "azurerm_public_ip.x", action: "create",
+      type: "Microsoft.Network/publicIPAddresses", name: "pip-x",
+      resourceGroup: "rg-somewhere-else",
+    }],
+  };
+  const ghost = ghosts(elsewhere, map)[0];
+  assert.equal(ghost.parentId, "",
+    "the subscription is not a substitute for the group the plan named");
+});

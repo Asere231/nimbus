@@ -655,11 +655,27 @@ deleted, because the decisions themselves are worth knowing:
   does not look like somebody recreating the world. What remains true is that
   log EVENTS are not persisted: an empty feed on a fresh data directory means
   nothing has run yet, which is accurate.
-- **The plan overlay's azurerm → ARM type table is partial** (`armTypes` in
-  `internal/ui/plan.go`). An unmapped type still draws, labelled with its
-  Terraform address; add a line when an example needs one.
-- **Plan overlays are topology-only.** The network and Kubernetes views draw
-  the live graph and ignore a loaded plan.
+- **The plan overlay's type tables are complete for the examples, and a test
+  keeps them that way.** They used to be "deliberately partial: add a line
+  when an example needs one", which is how a table drifts — measured when the
+  test was written, **every** `google_*` type was missing, so the overlay had
+  never placed a single change on a GCP graph, and eight AWS and six Azure
+  types the examples use had no line either. An unmapped change still draws,
+  labelled with its Terraform address, which is why nothing failed and nobody
+  noticed. `TestEveryExampleTypeIsAccountedForInThePlanOverlay` now reads the
+  examples' own `.tf` files, so a type nobody considered fails a test; a type
+  with no Nimbus resource behind it (a bucket's `?versioning` sub-resource, a
+  `kubernetes_*` object) is listed with its reason instead.
+- **Plan overlays are NOT topology-only — the claim here was wrong.**
+  `render.js` passes the ghosted map to every view, so the network view
+  already draws a pending network and the things beside it. What is really
+  missing is narrower and worth stating exactly: **a ghost carries no body**,
+  so any relationship a view derives from one is lost. Measured with a real
+  `gcp-basic` plan — the pending `nimbus-net` and its firewall rule drew, and
+  the two pending subnets did not appear inside it, because a subnet names its
+  network through `body.network` (`body.vpcId` on AWS, `parentId` on Azure)
+  and a ghost's body is empty. Carrying a parent hint on `PlanChange`, read
+  from the field each provider uses, is what would fix it.
 - **The Kubernetes view has been checked against the fixture and a real
   cluster on each of the three clouds**, including a workload in a namespace
   of its own. What it has not been checked against is a big cluster: the

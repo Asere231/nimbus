@@ -172,9 +172,17 @@ func str(v any) string {
 }
 
 // armTypes maps the azurerm resource types used in the examples to the ARM
-// types the graph is keyed by. It is deliberately partial: a type that is
-// not here still draws, labelled with its Terraform address, which is
-// honest about what we know. Add a line when an example needs one.
+// types the graph is keyed by.
+//
+// A type that is not here still draws, labelled with its Terraform
+// address, which is honest about what we know -- but "deliberately
+// partial, add a line when an example needs one" is how a table drifts,
+// and this one had: every GCP type was missing, so the overlay had never
+// placed a single change for a third of the project, and eight AWS and
+// six Azure types the examples use had no line either.
+// TestEveryExampleTypeIsAccountedForInThePlanOverlay now reads the
+// examples' own .tf files, so a type nobody considered fails a test rather
+// than quietly drawing as an address.
 var armTypes = map[string]string{
 	"azurerm_resource_group":               "Microsoft.Resources/resourceGroups",
 	"azurerm_virtual_network":              "Microsoft.Network/virtualNetworks",
@@ -199,6 +207,14 @@ var armTypes = map[string]string{
 	"azurerm_linux_virtual_machine":        "Microsoft.Compute/virtualMachines",
 	"azurerm_windows_virtual_machine":      "Microsoft.Compute/virtualMachines",
 	"azurerm_managed_disk":                 "Microsoft.Compute/disks",
+	"azurerm_linux_function_app":           "Microsoft.Web/sites",
+	"azurerm_windows_function_app":         "Microsoft.Web/sites",
+	"azurerm_container_app":                "Microsoft.App/containerApps",
+	"azurerm_container_app_environment":    "Microsoft.App/managedEnvironments",
+	"azurerm_key_vault_secret":             "Microsoft.KeyVault/vaults/secrets",
+	"azurerm_key_vault_key":                "Microsoft.KeyVault/vaults/keys",
+	"azurerm_key_vault_certificate":        "Microsoft.KeyVault/vaults/certificates",
+	"azurerm_storage_blob":                 "Microsoft.Storage/storageAccounts/blobServices/containers/blobs",
 }
 
 // awsTypes is the same idea for the aws provider. Nimbus names AWS
@@ -218,6 +234,38 @@ var awsTypes = map[string]string{
 	"aws_iam_user":             "AWS::IAM::User",
 	"aws_iam_policy":           "AWS::IAM::Policy",
 	"aws_iam_instance_profile": "AWS::IAM::InstanceProfile",
+	"aws_instance":             "AWS::EC2::Instance",
+	"aws_key_pair":             "AWS::EC2::KeyPair",
+	"aws_eks_cluster":          "AWS::EKS::Cluster",
+	"aws_eks_node_group":       "AWS::EKS::Nodegroup",
+	"aws_dynamodb_table":       "AWS::DynamoDB::Table",
+	"aws_lambda_function":      "AWS::Lambda::Function",
+	"aws_lambda_alias":         "AWS::Lambda::Alias",
+	"aws_cloudwatch_log_group": "AWS::Logs::LogGroup",
+}
+
+// googleTypes is the same idea for the google provider, and it did not
+// exist: every google_* change drew as a bare Terraform address, so the
+// overlay had never placed anything on a GCP graph.
+//
+// The type strings are the ones Nimbus stores, which are Google's own
+// asset-inventory names (`compute.googleapis.com/Network`) -- GCP has no
+// canonical type on the wire, so those are the closest thing to official.
+var googleTypes = map[string]string{
+	"google_compute_network":          "compute.googleapis.com/Network",
+	"google_compute_subnetwork":       "compute.googleapis.com/Subnetwork",
+	"google_compute_instance":         "compute.googleapis.com/Instance",
+	"google_compute_firewall":         "compute.googleapis.com/Firewall",
+	"google_compute_route":            "compute.googleapis.com/Route",
+	"google_compute_router":           "compute.googleapis.com/Router",
+	"google_service_account":          "iam.googleapis.com/ServiceAccount",
+	"google_storage_bucket":           "storage.googleapis.com/Bucket",
+	"google_container_cluster":        "container.googleapis.com/Cluster",
+	"google_container_node_pool":      "container.googleapis.com/NodePool",
+	"google_pubsub_topic":             "pubsub.googleapis.com/Topic",
+	"google_pubsub_subscription":      "pubsub.googleapis.com/Subscription",
+	"google_cloudfunctions2_function": "cloudfunctions.googleapis.com/Function",
+	"google_cloud_run_v2_service":     "run.googleapis.com/Service",
 }
 
 // resourceType maps a Terraform provider type to the type Nimbus stores,
@@ -229,5 +277,8 @@ func armType(tfType string) string {
 	if t, ok := armTypes[key]; ok {
 		return t
 	}
-	return awsTypes[key]
+	if t, ok := awsTypes[key]; ok {
+		return t
+	}
+	return googleTypes[key]
 }

@@ -10,7 +10,7 @@
 //
 // Pure: no DOM, no fetch. Tested by node.
 
-import { groupType } from "./types.js";
+import { groupType, isRoot } from "./types.js";
 
 const lower = (s) => String(s || "").toLowerCase();
 
@@ -36,12 +36,26 @@ export function planIndex(overlay) {
 // change nobody can see is worse than one in an odd place.
 export function ghosts(overlay, resources, cloud = "azure") {
   // Which type holds resources together is the cloud's business: an Azure
-  // resource group has no AWS equivalent, so there a pending create simply
-  // has no parent to sit under.
+  // resource group has no AWS or GCP equivalent, so a pending create there
+  // has no group to sit under.
   const container = groupType(cloud);
   const groups = new Map();
   for (const r of resources.values()) {
     if (container && lower(r.type) === container) groups.set(lower(r.name), r);
+  }
+
+  // It does have the cloud's ROOT, though -- an AWS account, a GCP project
+  // -- and every resource in those clouds hangs off it. Parenting a ghost
+  // there beats letting it float beside the graph, which is where every
+  // AWS and GCP create used to land. Only when there is exactly one: with
+  // two, picking either would be a guess, and a floating card is honest.
+  let root = null;
+  if (!container) {
+    for (const r of resources.values()) {
+      if (!isRoot(r.type, cloud)) continue;
+      if (root) { root = null; break; }
+      root = r;
+    }
   }
 
   const out = [];
@@ -50,6 +64,7 @@ export function ghosts(overlay, resources, cloud = "azure") {
     // A create that somehow does have an ID is matched like anything else.
     if (c.id && resources.has(lower(c.id))) continue;
     const group = c.resourceGroup ? groups.get(lower(c.resourceGroup)) : null;
+    const parent = group || root;
     out.push({
       cloud,
       id: GHOST_PREFIX + c.address,
@@ -57,7 +72,7 @@ export function ghosts(overlay, resources, cloud = "azure") {
       // Without a mapped ARM type the Terraform address is all we honestly
       // have, and it is enough to recognise the line in the plan output.
       name: c.name || c.address,
-      parentId: group ? group.id : "",
+      parentId: parent ? parent.id : "",
       location: "",
       backing: "state",
       body: {},

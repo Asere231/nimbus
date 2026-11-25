@@ -430,6 +430,20 @@ func (s *Server) provision(h Hook, t target, body map[string]any, op *operation)
 
 func (s *Server) failProvision(t target, op *operation, aerr *armError) {
 	s.setProvisioningState(t.ID, "Failed")
+	// The reason goes on the RESOURCE as well as on the operation, because
+	// a client that reads the resource rather than polling the operation
+	// is otherwise told only that it failed. `az deployment ... show` is
+	// exactly that client, and real ARM puts properties.error there. Found
+	// by a test whose failure message read "the deployment failed: <nil>".
+	_ = s.store.Update(t.ID, func(body map[string]any) error {
+		props, _ := body["properties"].(map[string]any)
+		if props == nil {
+			props = map[string]any{}
+		}
+		props["error"] = map[string]any{"code": aerr.Code, "message": aerr.Message}
+		body["properties"] = props
+		return nil
+	})
 	s.ops.finish(op.ID, aerr)
 	s.bus.Publish(core.Event{
 		Kind: "resource", Action: "update", Cloud: "azure",
@@ -564,7 +578,23 @@ func (s *Server) listCollection(w http.ResponseWriter, t target) {
 			return false
 		}
 		if eq(t.ID, subID) { // subscription-wide list, e.g. all VNets
-			return strings.HasPrefix(strings.ToLower(res.ID), strings.ToLower(subID)+"/")
+			if !strings.HasPrefix(strings.ToLower(res.ID), strings.ToLower(subID)+"/") {
+				return false
+			}
+			// A DEPLOYMENT's scope is part of its identity, which is not
+			// true of the types this cross-group list exists for. Asking
+			// /subscriptions/{s}/providers/Microsoft.Network/virtualNetworks
+			// means "every VNet in the subscription, wherever it lives";
+			// asking the same of deployments means "the deployments made
+			// AT subscription scope", because a group-scope deployment is
+			// addressed under its group and `az deployment group list`
+			// is the call that finds it. Measured: without this,
+			// `az deployment sub list` reported a resource-group
+			// deployment as a subscription one.
+			if eq(t.Type, typeDeployment) {
+				return !strings.Contains(strings.ToLower(res.ID), "/resourcegroups/")
+			}
+			return true
 		}
 		return eq(res.ParentID, t.ID)
 	})

@@ -41,7 +41,7 @@ func registerDeploymentHooks(s *Server) {
 			if aerr != nil {
 				return aerr
 			}
-			if _, err := s.expand(t, template, props); err != nil {
+			if _, err := s.expand(t, body, template, props); err != nil {
 				return &armError{400, "InvalidTemplate", err.Error()}
 			}
 			if props["mode"] == nil {
@@ -78,16 +78,44 @@ func templateOf(props map[string]any) (map[string]any, *armError) {
 }
 
 // scopeFor builds the expression scope a template is evaluated in.
-func (s *Server) scopeFor(t target) *deployments.Scope {
-	return &deployments.Scope{
-		SubscriptionID:  t.Subscription,
-		ResourceGroup:   t.ResourceGroup,
-		ResourceGroupID: "/subscriptions/" + t.Subscription + "/resourceGroups/" + t.ResourceGroup,
-		Location:        s.groupLocation(t),
-		TenantID:        s.cfg.TenantID,
-		DeploymentName:  t.Name,
-		Reference:       s.referenceResource,
+//
+// The deployment's SCOPE comes from the request's own path -- a deployment
+// with no resource group in its ID is a subscription deployment -- not
+// from the template's $schema. The schema says what the author intended;
+// the path says what ARM was asked to do, and only the second is
+// authoritative. `az deployment sub create` PUTs
+// /subscriptions/{id}/providers/Microsoft.Resources/deployments/{name},
+// which parseTarget already resolves, with ResourceGroup left empty.
+func (s *Server) scopeFor(t target, body map[string]any) *deployments.Scope {
+	scope := &deployments.Scope{
+		Deployment:     deployments.GroupScope,
+		SubscriptionID: t.Subscription,
+		ResourceGroup:  t.ResourceGroup,
+		Location:       s.groupLocation(t),
+		TenantID:       s.cfg.TenantID,
+		DeploymentName: t.Name,
+		Reference:      s.referenceResource,
 	}
+	if t.ResourceGroup == "" {
+		scope.Deployment = deployments.SubscriptionScope
+		// A subscription deployment's location is the DEPLOYMENT's own,
+		// sent at the top level of the body rather than in properties --
+		// `az deployment sub create` requires --location for exactly this
+		// reason, since there is no group to inherit one from. It is what
+		// `deployment().location` answers and what a resource with no
+		// location of its own falls back to.
+		if loc := str(body["location"]); loc != "" {
+			scope.Location = loc
+		}
+		// No ResourceGroupID at all, rather than one ending in a slash:
+		// an empty name built into an id produced
+		// "ParentResourceNotFound: Parent resource
+		// '/subscriptions/.../resourceGroups/' not found", which names a
+		// group with no name and points nowhere near the template.
+		return scope
+	}
+	scope.ResourceGroupID = "/subscriptions/" + t.Subscription + "/resourceGroups/" + t.ResourceGroup
+	return scope
 }
 
 // groupLocation answers resourceGroup().location, which templates use for
@@ -117,9 +145,9 @@ func (s *Server) referenceResource(id string) (map[string]any, bool) {
 	return body, true
 }
 
-func (s *Server) expand(t target, template map[string]any, props map[string]any) (*deployments.Plan, error) {
+func (s *Server) expand(t target, body, template, props map[string]any) (*deployments.Plan, error) {
 	params, _ := props["parameters"].(map[string]any)
-	return deployments.Expand(template, params, s.scopeFor(t))
+	return deployments.Expand(template, params, s.scopeFor(t, body))
 }
 
 // runDeployment creates every resource in the template, in dependency order,
@@ -130,12 +158,12 @@ func (s *Server) runDeployment(t target, body map[string]any) error {
 	if aerr != nil {
 		return fmt.Errorf("%s", aerr.Message)
 	}
-	plan, err := s.expand(t, template, props)
+	plan, err := s.expand(t, body, template, props)
 	if err != nil {
 		return err
 	}
 
-	scope := s.scopeFor(t)
+	scope := s.scopeFor(t, body)
 	ops := make([]any, 0, len(plan.Resources))
 	providers := map[string]map[string]bool{}
 
@@ -326,7 +354,7 @@ func (s *Server) deploymentAction(w http.ResponseWriter, t target, body map[stri
 			writeError(w, aerr.Status, aerr.Code, "%s", aerr.Message)
 			return true
 		}
-		plan, err := s.expand(t, template, props)
+		plan, err := s.expand(t, body, template, props)
 		if err != nil {
 			writeError(w, 400, "InvalidTemplate", "%v", err)
 			return true
@@ -360,7 +388,7 @@ func (s *Server) deploymentAction(w http.ResponseWriter, t target, body map[stri
 			writeError(w, aerr.Status, aerr.Code, "%s", aerr.Message)
 			return true
 		}
-		plan, err := s.expand(t, template, props)
+		plan, err := s.expand(t, body, template, props)
 		if err != nil {
 			writeError(w, 400, "InvalidTemplate", "%v", err)
 			return true

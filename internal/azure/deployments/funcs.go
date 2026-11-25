@@ -42,6 +42,15 @@ func (p *parser) call(name string, args []any) (any, error) {
 
 	// --- scope ---
 	case "resourcegroup":
+		// REFUSED at subscription scope, as real ARM refuses it: there is
+		// no group to describe, and answering with an id ending in
+		// "/resourceGroups/" produced a ParentResourceNotFound naming a
+		// group with no name, which points nowhere near the template that
+		// asked. Measured against `az deployment sub create`.
+		if s.Deployment == SubscriptionScope {
+			return nil, fmt.Errorf("resourceGroup() is not available in a subscription-scope " +
+				"deployment; use subscription() or deploy the resource into a group")
+		}
 		return map[string]any{
 			"id":       s.resourceGroupID(),
 			"name":     s.ResourceGroup,
@@ -81,7 +90,16 @@ func (p *parser) call(name string, args []any) (any, error) {
 		}
 		return float64(idx) + offset, nil
 	case "deployment":
-		return map[string]any{"name": s.DeploymentName}, nil
+		// `location` is the field that matters at subscription scope: a
+		// subscription deployment has no group to inherit a location from,
+		// which is why `az deployment sub create` requires --location, and
+		// a template there writes [deployment().location] where a
+		// group-scope one writes [resourceGroup().location].
+		out := map[string]any{"name": s.DeploymentName}
+		if s.Location != "" {
+			out["location"] = s.Location
+		}
+		return out, nil
 	case "resourceid":
 		return s.resourceID(args)
 	case "subscriptionresourceid":
@@ -323,6 +341,34 @@ func (s *Scope) resourceGroupID() string {
 	return "/subscriptions/" + s.SubscriptionID + "/resourceGroups/" + s.ResourceGroup
 }
 
+// subscriptionID is the subscription's own scope id.
+func (s *Scope) subscriptionScopeID() string {
+	return "/subscriptions/" + s.SubscriptionID
+}
+
+// DeploymentBaseID is what a template resource's ID hangs off: the group
+// for a resource-group deployment, the subscription for a subscription
+// one. Exported because template.go builds resource IDs with it.
+func (s *Scope) DeploymentBaseID() string {
+	if s.Deployment == SubscriptionScope {
+		return s.subscriptionScopeID()
+	}
+	return s.resourceGroupID()
+}
+
+// ScopedID builds a resource's ID at the deployment's own scope, with one
+// exception that is ARM's rather than ours.
+//
+// A RESOURCE GROUP's id has no `providers` segment:
+// `/subscriptions/{s}/resourceGroups/{name}`, not
+// `/subscriptions/{s}/providers/Microsoft.Resources/resourceGroups/{name}`.
+// It is the one type a subscription deployment most often creates, so the
+// generic builder's answer would be wrong for the common case.
+func (s *Scope) ScopedID(typ, name string) (string, error) {
+	id, err := s.scopedResourceID(s.DeploymentBaseID(), []any{typ, name})
+	return toString(id), err
+}
+
 // resourceID builds an ID at resource-group scope. An optional first argument
 // names a different resource group, as resourceId() allows.
 func (s *Scope) resourceID(args []any) (any, error) {
@@ -356,6 +402,16 @@ func (s *Scope) scopedResourceID(base string, args []any) (any, error) {
 	}
 	full := toString(args[0])
 	names := args[1:]
+	// A RESOURCE GROUP's id has no `providers` segment --
+	// /subscriptions/{s}/resourceGroups/{n} is the form every ARM response
+	// uses -- so the generic builder below would produce an id that does
+	// not match the resource Nimbus actually creates. A template using
+	// subscriptionResourceId() to reference a group it just made would
+	// then miss it, which is the one thing worth getting right here; what
+	// real ARM returns for this call has not been measured.
+	if strings.EqualFold(full, "Microsoft.Resources/resourceGroups") && len(names) == 1 {
+		return s.subscriptionScopeID() + "/resourceGroups/" + toString(names[0]), nil
+	}
 	segs := strings.Split(full, "/")
 	if len(segs) < 2 {
 		return nil, fmt.Errorf("%q is not a resource type", full)

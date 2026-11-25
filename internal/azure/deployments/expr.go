@@ -16,8 +16,28 @@ import (
 	"unicode"
 )
 
+// DeploymentScope is WHERE a template is being deployed, which decides
+// what its resources' IDs are built on and which scope functions exist.
+//
+// A resource-group deployment and a subscription deployment are not the
+// same template with a different path: `resourceGroup()` is an error at
+// subscription scope, and a resource's ID hangs off `/subscriptions/{id}`
+// rather than off a group. Getting this from the request's own path rather
+// than from a schema URL in the template is deliberate -- the $schema says
+// what the author intended and the path says what ARM was asked to do, and
+// only the second is authoritative.
+type DeploymentScope string
+
+const (
+	GroupScope        DeploymentScope = "resourceGroup"
+	SubscriptionScope DeploymentScope = "subscription"
+)
+
 // Scope is everything an expression can ask about where it is being deployed.
 type Scope struct {
+	// Deployment is the scope the template is being deployed at. The zero
+	// value is GroupScope, which keeps every existing caller unchanged.
+	Deployment      DeploymentScope
 	SubscriptionID  string
 	ResourceGroup   string
 	ResourceGroupID string

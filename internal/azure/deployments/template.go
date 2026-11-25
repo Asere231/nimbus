@@ -255,7 +255,7 @@ func materialise(res map[string]any, s *Scope, index int) (Resource, bool, error
 	}
 	body["name"] = name
 
-	id, err := scope.scopedResourceID(scope.resourceGroupID(), []any{typ, name})
+	id, err := scope.ScopedID(typ, name)
 	if err != nil {
 		// A child type written as "parent/child" with a name "p/c" is the
 		// other spelling ARM allows.
@@ -292,7 +292,7 @@ func childID(s *Scope, typ, name string) (string, error) {
 	for _, n := range nameSegs {
 		args = append(args, n)
 	}
-	id, err := s.scopedResourceID(s.resourceGroupID(), args)
+	id, err := s.scopedResourceID(s.DeploymentBaseID(), args)
 	return toString(id), err
 }
 

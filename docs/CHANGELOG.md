@@ -18,6 +18,24 @@ Picking off deferred items from the roadmap's "Later", a tier at a time.
   has no root fallback to land in. The signature itself is still not
   verified — Nimbus holds no secret for a base credential — and
   `docs/ROADMAP.md` says so, with the one case that could be.
+- **ARM deployments work at subscription scope.** `az deployment sub create`
+  reached Nimbus already — the path parsed and the hook fired — and failed on
+  `ParentResourceNotFound: Parent resource '/subscriptions/.../resourceGroups/'
+  not found`, because every template resource's ID was built on a resource
+  group that was not there. A deployment's scope now comes from its own path
+  (not from the template's `$schema`, which says what the author intended
+  rather than what ARM was asked to do): at subscription scope IDs hang off
+  the subscription, `deployment().location` comes from the request's
+  top-level `location`, and `resourceGroup()` is refused by name at submit
+  time. A resource group's ID has no `providers` segment, which is the one
+  place the generic builder is wrong and the type a subscription deployment
+  most often creates. `az deployment sub list` no longer reports
+  resource-group deployments.
+- **A failed Azure provision records its reason on the RESOURCE**, not only
+  on the operation. `az deployment ... show` reads the resource, so a
+  failure it could see said nothing but "Failed"; real ARM puts it in
+  `properties.error`. Found by a test whose own failure message read
+  "the deployment failed: &lt;nil&gt;".
 - **DynamoDB has streams.** `StreamSpecification` round-tripped as a setting
   and nothing recorded a thing. Every write to a stream-enabled table is now
   appended as an INSERT, MODIFY or REMOVE carrying the item's keys and

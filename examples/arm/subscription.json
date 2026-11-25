@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "comment": "A SUBSCRIPTION-scope template: deployed with `az deployment sub create --location <region>`, not with `az deployment group create`. Note what is different from a resource-group template: resourceGroup() does not exist here (Nimbus refuses it by name), the location comes from the deployment itself, and the thing being created is the group."
+  },
+  "parameters": {
+    "groupName": {
+      "type": "string",
+      "defaultValue": "nimbus-from-subscription",
+      "metadata": { "description": "The resource group this deployment creates." }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2021-04-01",
+      "name": "[parameters('groupName')]",
+      "location": "[deployment().location]",
+      "tags": { "madeBy": "subscription-scope deployment" }
+    }
+  ],
+  "outputs": {
+    "groupId": {
+      "type": "string",
+      "value": "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('groupName'))]"
+    },
+    "groupName": { "type": "string", "value": "[parameters('groupName')]" }
+  }
+}

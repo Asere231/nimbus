@@ -670,9 +670,22 @@ deleted, because the decisions themselves are worth knowing:
   `nimbus az register` could write a combined bundle (the CAs az already
   trusts, plus ours) and point at that instead. Until then the workaround is a
   shell without the variable set.
-- **Deployments are resource-group scope only.** `az deployment sub create`,
-  management-group and tenant scope, nested deployments, `templateLink` (which
-  would fetch over the network) and Complete mode are all unimplemented.
+- **Deployments work at resource-group AND subscription scope.**
+  `az deployment sub create/validate/what-if/show/list` all work, a
+  subscription template creates resource groups (and anything else at that
+  scope), `deployment().location` comes from the request's own `location`,
+  and `resourceGroup()` is REFUSED there by name rather than answering with
+  an id for a group with no name. The two listings are kept apart, because a
+  deployment's scope is part of its identity. Still unimplemented:
+  management-group and tenant scope, nested deployments, `templateLink`
+  (which would fetch over the network) and Complete mode.
+- **Re-deploying a resource group with a different location silently keeps
+  the old one.** Real ARM refuses it (`Resource group location cannot be
+  changed`); Nimbus accepts the write and leaves the location as it was, so
+  a template whose location changed applies cleanly and does nothing. The
+  silent direction, which is the one this project usually avoids — it is
+  here because refusing would fail an otherwise-idempotent re-deploy, and
+  that trade has not been measured against a real client yet.
 - **Two spec types have nothing to fill**: `Microsoft.Compute/sshPublicKeys`
   and `Microsoft.Sql/servers/firewallRules` genuinely declare no read-only
   field and no default, so the table skips them.

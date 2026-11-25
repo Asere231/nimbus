@@ -51,6 +51,12 @@ Picking off deferred items from the roadmap's "Later", a tier at a time.
   failure it could see said nothing but "Failed"; real ARM puts it in
   `properties.error`. Found by a test whose own failure message read
   "the deployment failed: &lt;nil&gt;".
+- **`nimbus az register` writes a CA bundle that trusts Nimbus *and* the
+  internet.** `REQUESTS_CA_BUNDLE` replaces the trust store rather than
+  adding to it, so while it pointed at the Nimbus CA alone `az` could not
+  reach any real host and `az bicep install` failed with an SSL error that
+  blamed the network. The combined bundle keeps the CAs `az` already
+  trusted. Measured both ways against pypi.org.
 - **S3 lifecycle rules work, and the apply used to FAIL.** `?lifecycle` fell
   through the bucket-config switch with no case at all, so a PUT was accepted
   and discarded — and because `aws_s3_bucket_lifecycle_configuration` polls

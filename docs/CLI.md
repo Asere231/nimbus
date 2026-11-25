@@ -104,7 +104,7 @@ az login --service-principal -u 00000000-0000-0000-0000-000000000002 \
   -p nimbus --tenant 00000000-0000-0000-0000-000000000001 --allow-no-subscriptions
 ```
 
-Two things it handles for you, both of which are easy to get wrong:
+Three things it handles for you, all of which are easy to get wrong:
 
 - `az cloud register` fetches the metadata document over TLS **immediately**,
   so the CA has to be trusted before that command, not before your first
@@ -112,6 +112,14 @@ Two things it handles for you, both of which are easy to get wrong:
 - MSAL validates an unknown authority against the real
   `login.microsoftonline.com` before it will use it. Nimbus sets
   `core.instance_discovery=false`, the switch Azure Stack uses.
+- `REQUESTS_CA_BUNDLE` **replaces** the trust store rather than adding to it,
+  so pointing it at the Nimbus CA alone leaves `az` unable to reach any real
+  host — `az bicep install` and `az upgrade` fail with an SSL error that
+  blames the network. It writes a **combined** bundle instead,
+  `~/.nimbus/certs/nimbus-ca-bundle.pem`, holding the CAs `az` already
+  trusted plus ours, and points at that. If no base trust store can be found
+  it says so and falls back to the Nimbus CA alone, rather than writing a
+  bundle that only looks complete.
 
 To go back to real Azure: `az cloud set -n AzureCloud`.
 

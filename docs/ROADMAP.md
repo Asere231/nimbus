@@ -755,12 +755,16 @@ deleted, because the decisions themselves are worth knowing:
   cluster on each of the three clouds**, including a workload in a namespace
   of its own. What it has not been checked against is a big cluster: the
   layout is untested beyond a handful of objects, and nothing paginates.
-- **`REQUESTS_CA_BUNDLE` replaces the trust store rather than adding to it**,
-  so while it points at the Nimbus CA, `az` cannot reach any real host — which
-  breaks `az bicep install`, `az upgrade` and anything else that downloads.
-  `nimbus az register` could write a combined bundle (the CAs az already
-  trusts, plus ours) and point at that instead. Until then the workaround is a
-  shell without the variable set.
+- **`REQUESTS_CA_BUNDLE` replaces the trust store rather than adding to it,
+  and `nimbus az register` now writes a COMBINED bundle** — the CAs `az`
+  already trusted plus ours, at `~/.nimbus/certs/nimbus-ca-bundle.pem` — so
+  `az bicep install` and `az upgrade` keep working while it is set. Measured
+  both ways against pypi.org: 200 with the combined bundle, a TLS failure
+  with the Nimbus CA alone. The base store is certifi's, found by asking a
+  Python interpreter, falling back to the platform's PEM bundle; **Windows
+  keeps its roots in a certificate store rather than a file**, so there
+  certifi is the only route and without it the fallback says so rather than
+  writing a bundle that trusts only us.
 - **Deployments work at resource-group AND subscription scope.**
   `az deployment sub create/validate/what-if/show/list` all work, a
   subscription template creates resource groups (and anything else at that

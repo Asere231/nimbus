@@ -568,23 +568,34 @@ func azCLI(args []string) {
 
 	// The CA has to be in place before the first az call, so print it first
 	// and hand it to every child process.
-	fmt.Println("# Trust the Nimbus CA in the shell you use az from:")
+	//
+	// A COMBINED bundle, because REQUESTS_CA_BUNDLE replaces the trust
+	// store rather than adding to it: pointed at the Nimbus CA alone, az
+	// cannot reach any real host and `az bicep install` fails with an SSL
+	// error that blames the network. See cabundle.go.
+	bundle, note := writeCombinedBundle(*home, ca)
+	if bundle == ca {
+		fmt.Printf("# nimbus: %s\n", note)
+	}
+	fmt.Println("# Trust the Nimbus CA in the shell you use az from.")
+	fmt.Println("# This bundle also keeps the CAs az already trusted, so")
+	fmt.Println("# `az bicep install` and `az upgrade` still work while it is set.")
 	if runtime.GOOS == "windows" {
-		fmt.Printf("$env:REQUESTS_CA_BUNDLE = \"%s\"\n", ca)
+		fmt.Printf("$env:REQUESTS_CA_BUNDLE = \"%s\"\n", bundle)
 	} else {
-		fmt.Printf("export REQUESTS_CA_BUNDLE=%s\n", ca)
+		fmt.Printf("export REQUESTS_CA_BUNDLE=%s\n", bundle)
 	}
 	fmt.Println()
 
 	if *run {
 		for _, step := range steps {
-			if err := runAz(ca, step); err != nil {
+			if err := runAz(bundle, step); err != nil {
 				// `az cloud register` refuses a name it already knows, which
 				// re-registering after a port change always hits. The same
 				// flags work as `cloud update`.
 				if step[1] == "register" {
 					update := append([]string{"cloud", "update"}, step[2:]...)
-					if err2 := runAz(ca, update); err2 == nil {
+					if err2 := runAz(bundle, update); err2 == nil {
 						continue
 					}
 				}

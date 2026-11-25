@@ -675,6 +675,34 @@ deleted, because the decisions themselves are worth knowing:
   Every request to the cluster is authenticated as `system:masters`, because
   the token webhook says yes to everything; the aws-auth ConfigMap and IAM
   role mapping are not modelled.
+
+  **The blocking question is measured, and the answer is encouraging.** IRSA's
+  canonical Terraform pattern runs `data.tls_certificate` against the
+  cluster's `identity.oidc.issuer`, and Nimbus serves AWS over plain HTTP, so
+  whether that data source could work at all decided the design. Measured
+  against the `tls` provider 4.x:
+
+  - `http://` is **refused outright** — `Invalid URL scheme`. The issuer
+    cannot live on the AWS endpoint as it stands.
+  - Nimbus's **existing TLS listener answers it**, returning a two-element
+    chain: `[CN=Nimbus Local CA (is_ca), CN=localhost]`. The canonical
+    pattern reads `certificates[0].sha1_fingerprint` for the provider's
+    thumbprint, and index 0 is the CA — which is what real EKS gives too.
+  - It needs **no trust plumbing**: run with `SSL_CERT_FILE` and
+    `REQUESTS_CA_BUNDLE` unset it still fetched, because the data source
+    retrieves the chain without verifying it.
+  - `host.docker.internal` has been in the certificate's SANs since
+    Milestone 2, so the same issuer URL is reachable from inside the k3s
+    container, which is what `--service-account-issuer` needs.
+
+  So the design question is not "can this work" but "where does the issuer
+  live" — the Azure TLS port serving an AWS-shaped path is odd, and a TLS
+  listener for AWS is the alternative. That is the first decision for the
+  milestone, and it is now an informed one. The rest is unchanged and is
+  what makes this a milestone rather than an item: k3s signing
+  service-account tokens with a key Nimbus holds, an OIDC discovery
+  document and JWKS, `sts:AssumeRoleWithWebIdentity`, and `Federated`
+  principals in the authorization core, which are refused by name today.
 - **S3 lifecycle rules are stored, served and applied; what nothing does is
   fire one in a session you are watching.** S3's own minimum is a DAY —
   `Days` and `NoncurrentDays` are whole days and the API refuses 0 — so no

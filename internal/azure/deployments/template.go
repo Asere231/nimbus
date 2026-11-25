@@ -406,6 +406,7 @@ func (p *Plan) EvaluateOutputs(scope *Scope) (map[string]any, error) {
 	s := *scope
 	s.Parameters = p.Parameters
 	s.Variables = p.Variables
+	s.ResolveName = p.NameResolver()
 	out := map[string]any{}
 	for name, raw := range p.Outputs {
 		v, err := EvaluateDeep(raw, &s)
@@ -510,4 +511,36 @@ func expandPropertyCopies(specs []any, into map[string]any, s *Scope) error {
 		into[name] = items
 	}
 	return nil
+}
+
+// NameResolver maps a bare resource NAME to the ID this plan gave it.
+//
+// ARM lets reference() name a resource in the same template, which is the
+// documented way to read a NESTED deployment's outputs -- and a nested
+// deployment whose outputs nobody can read is most of the reason to nest
+// one.
+//
+// A name that two resources share resolves to NEITHER. ARM requires names
+// to be unique within a template for exactly this reason, and answering
+// with whichever came first would make a template's meaning depend on the
+// order its resources happen to be listed in.
+func (p *Plan) NameResolver() func(string) (string, bool) {
+	byName := map[string]string{}
+	duplicated := map[string]bool{}
+	for _, r := range p.Resources {
+		key := strings.ToLower(r.Name)
+		if _, seen := byName[key]; seen {
+			duplicated[key] = true
+			continue
+		}
+		byName[key] = r.ID
+	}
+	return func(name string) (string, bool) {
+		key := strings.ToLower(name)
+		if duplicated[key] {
+			return "", false
+		}
+		id, ok := byName[key]
+		return id, ok
+	}
 }

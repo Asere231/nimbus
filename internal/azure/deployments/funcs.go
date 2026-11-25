@@ -443,6 +443,15 @@ func (s *Scope) reference(args []any) (any, error) {
 	if s.Reference == nil {
 		return nil, fmt.Errorf("reference(%s) cannot be resolved here", id)
 	}
+	// A bare NAME names a resource in the same template, which is how a
+	// nested deployment's outputs are read. Only tried when the argument
+	// is not already an ID: a resource called "subscriptions" must not
+	// have its own name taken for the start of a path.
+	if !strings.HasPrefix(id, "/") && s.ResolveName != nil {
+		if resolved, ok := s.ResolveName(id); ok {
+			id = resolved
+		}
+	}
 	res, ok := s.Reference(id)
 	if !ok {
 		return nil, fmt.Errorf("reference(%s): the resource has not been deployed", id)

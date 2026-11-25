@@ -53,6 +53,18 @@ type Scope struct {
 	// validation and what-if pass.
 	Reference func(resourceID string) (map[string]any, bool)
 
+	// ResolveName turns a bare resource NAME into an ID, for the
+	// resources of the template being deployed.
+	//
+	// ARM lets reference() name a resource in the same template rather
+	// than giving a full ID -- `reference('inner').outputs.x.value` is
+	// the documented way to read a NESTED deployment's outputs, and a
+	// nested deployment with outputs nobody can read is most of the
+	// reason to nest one. A name is only meaningful within one template,
+	// which is why this is a function the deployment supplies rather than
+	// a lookup the expression engine could do itself.
+	ResolveName func(name string) (string, bool)
+
 	// copyIndexes holds the current iteration of every copy loop in scope,
 	// keyed by loop name; the resource-level loop is the empty key.
 	// currentCopy names the innermost one, which is what a bare copyIndex()

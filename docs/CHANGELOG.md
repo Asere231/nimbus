@@ -51,6 +51,14 @@ Picking off deferred items from the roadmap's "Later", a tier at a time.
   failure it could see said nothing but "Failed"; real ARM puts it in
   `properties.error`. Found by a test whose own failure message read
   "the deployment failed: &lt;nil&gt;".
+- **A nested ARM deployment's outputs reach the outer template.** The
+  resources always worked — a nested deployment is an ordinary
+  `Microsoft.Resources/deployments` resource going through the same PUT — so
+  what was missing was the half that makes nesting worth doing:
+  `reference('inner').outputs.x.value` needed `reference()` to accept a bare
+  NAME (ARM resolves one within the template, and it is the documented way to
+  read nested outputs), and the outer deployment to WAIT, since a nested
+  deployment's PUT answers while it is still provisioning.
 - **DynamoDB TTL expires items.** `UpdateTimeToLive` round-tripped as a
   setting and nothing ever expired. A background sweeper takes them now, and
   the removal reaches the table's stream as an ordinary REMOVE stamped with

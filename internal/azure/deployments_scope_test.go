@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Asere231/nimbus/internal/azure/deployments"
 )
 
 // Subscription-scope deployments. Every path and body here was captured
@@ -305,5 +307,127 @@ func TestANonGroupResourceDeployedAtSubscriptionScope(t *testing.T) {
 			strings.HasSuffix(res.ID, "/resourceGroups/") {
 			t.Errorf("a resource landed under a nameless group: %s", res.ID)
 		}
+	}
+}
+
+// Nested deployments: a template that deploys a template.
+//
+// The resources part already worked, because a nested deployment is an
+// ordinary Microsoft.Resources/deployments resource and goes through the
+// same PUT as everything else. What did not was reading its OUTPUTS,
+// which is most of the reason to nest one.
+const nestedTemplate = `{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2021-04-01",
+      "name": "inner",
+      "properties": {
+        "mode": "Incremental",
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "resources": [
+            { "type": "Microsoft.Network/virtualNetworks", "apiVersion": "2023-09-01",
+              "name": "vnet-from-nested", "location": "[resourceGroup().location]",
+              "properties": { "addressSpace": { "addressPrefixes": ["10.44.0.0/16"] } } }
+          ],
+          "outputs": {
+            "innerId": { "type": "string",
+              "value": "[resourceId('Microsoft.Network/virtualNetworks','vnet-from-nested')]" }
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "fromInner": { "type": "string", "value": "[reference('inner').outputs.innerId.value]" }
+  }
+}`
+
+func TestANestedDeploymentsOutputsReachTheOuterTemplate(t *testing.T) {
+	s, rg := newTestServerWithGroup(t)
+	got := deploy(t, s, rg, "outer", nestedTemplate, nil)
+
+	// The inner template's resource really exists.
+	vnet := "/subscriptions/" + DefaultSubscriptionID + "/resourceGroups/" + rg +
+		"/providers/Microsoft.Network/virtualNetworks/vnet-from-nested"
+	if !s.store.Exists(vnet) {
+		t.Fatal("the nested deployment did not create its resource")
+	}
+	// And so does the nested deployment itself, as a resource of its own.
+	inner := "/subscriptions/" + DefaultSubscriptionID + "/resourceGroups/" + rg +
+		"/providers/Microsoft.Resources/deployments/inner"
+	if !s.store.Exists(inner) {
+		t.Error("the nested deployment is not a resource in its own right")
+	}
+
+	// The outer template read the inner one's output. This is the part
+	// that did not work: reference('inner') is a bare NAME, and the
+	// outer evaluates its outputs while the inner is still provisioning
+	// unless it waits.
+	props, _ := got["properties"].(map[string]any)
+	outputs, _ := props["outputs"].(map[string]any)
+	from, _ := outputs["fromInner"].(map[string]any)
+	if str(from["value"]) != vnet {
+		t.Errorf("the outer output is %q, want the inner's %q", from["value"], vnet)
+	}
+}
+
+// reference() by bare NAME works for an ordinary resource too, not only
+// for a nested deployment -- ARM allows it for anything in the same
+// template.
+func TestReferenceByBareNameResolvesWithinTheTemplate(t *testing.T) {
+	s, rg := newTestServerWithGroup(t)
+	template := `{
+      "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+      "contentVersion": "1.0.0.0",
+      "resources": [
+        { "type": "Microsoft.Network/networkSecurityGroups", "apiVersion": "2023-09-01",
+          "name": "nsg-named", "location": "[resourceGroup().location]", "properties": {} }
+      ],
+      "outputs": {
+        "byName": { "type": "string", "value": "[reference('nsg-named').resourceGuid]" },
+        "byId":   { "type": "string",
+          "value": "[reference(resourceId('Microsoft.Network/networkSecurityGroups','nsg-named')).resourceGuid]" }
+      }
+    }`
+	got := deploy(t, s, rg, "named", template, nil)
+	props, _ := got["properties"].(map[string]any)
+	outputs, _ := props["outputs"].(map[string]any)
+	byName, _ := outputs["byName"].(map[string]any)
+	byID, _ := outputs["byId"].(map[string]any)
+	if str(byName["value"]) == "" {
+		t.Error("reference() by bare name resolved to nothing")
+	}
+	// The two spellings must agree -- a name is a way of writing an id,
+	// not a different resource.
+	if str(byName["value"]) != str(byID["value"]) {
+		t.Errorf("by name gave %q and by id gave %q", byName["value"], byID["value"])
+	}
+}
+
+// A name two resources share resolves to NEITHER. ARM requires names to
+// be unique within a template for exactly this reason, and answering with
+// whichever came first would make a template's meaning depend on the
+// order its resources happen to be listed in.
+func TestADuplicatedNameResolvesToNeitherResource(t *testing.T) {
+	plan := &deployments.Plan{Resources: []deployments.Resource{
+		{Name: "same", ID: "/one"},
+		{Name: "same", ID: "/two"},
+		{Name: "unique", ID: "/three"},
+	}}
+	resolve := plan.NameResolver()
+	if _, ok := resolve("same"); ok {
+		t.Error("a duplicated name resolved")
+	}
+	if id, ok := resolve("unique"); !ok || id != "/three" {
+		t.Errorf("a unique name resolved to %q (%v)", id, ok)
+	}
+	// Case-insensitively, as ARM resolves names.
+	if id, ok := resolve("UNIQUE"); !ok || id != "/three" {
+		t.Errorf("a name differing only in case resolved to %q (%v)", id, ok)
 	}
 }

@@ -164,6 +164,9 @@ func (s *Server) runDeployment(t target, body map[string]any) error {
 	}
 
 	scope := s.scopeFor(t, body)
+	// reference('name') names a resource in THIS template, which is how a
+	// nested deployment's outputs are read.
+	scope.ResolveName = plan.NameResolver()
 	ops := make([]any, 0, len(plan.Resources))
 	providers := map[string]map[string]bool{}
 
@@ -185,6 +188,21 @@ func (s *Server) runDeployment(t target, body map[string]any) error {
 		}
 		if status >= 400 {
 			return fmt.Errorf("%s %s: %s", r.Type, r.Name, armMessage(raw))
+		}
+		// A NESTED deployment is awaited, as ARM awaits one. Its PUT
+		// answers while it is still provisioning -- that is what makes a
+		// deployment long-running -- so without this the outer template
+		// evaluates `reference('inner').outputs` against a deployment
+		// that has not written its outputs yet, and fails on a property
+		// that is about to exist.
+		//
+		// Only deployments. Waiting for every asynchronous resource
+		// would be closer to ARM still, and is a bigger change than this
+		// one: see docs/ROADMAP.md.
+		if eq(r.Type, typeDeployment) {
+			if err := s.awaitDeployment(r.ID); err != nil {
+				return fmt.Errorf("%s %s: %w", r.Type, r.Name, err)
+			}
 		}
 		ops = append(ops, deploymentOperation(t, r, i, status))
 
@@ -538,4 +556,39 @@ func (s *Server) handleDeploymentOperations(w http.ResponseWriter, t target) str
 	}
 	writeJSON(w, 200, map[string]any{"value": ops})
 	return ""
+}
+
+// nestedDeploymentTimeout bounds the wait for a nested deployment. Long
+// enough for anything a template here creates, short enough that a nested
+// deployment wedged for some other reason fails with a reason rather than
+// hanging the outer one for ever.
+const nestedDeploymentTimeout = 10 * time.Minute
+
+// awaitDeployment blocks until a nested deployment reaches a terminal
+// provisioning state.
+func (s *Server) awaitDeployment(id string) error {
+	deadline := time.Now().Add(nestedDeploymentTimeout)
+	for {
+		res, err := s.store.Get(id)
+		if err != nil {
+			return fmt.Errorf("the nested deployment disappeared while it was running")
+		}
+		var body map[string]any
+		if json.Unmarshal(res.Body, &body) == nil {
+			props, _ := body["properties"].(map[string]any)
+			switch str(props["provisioningState"]) {
+			case "Succeeded":
+				return nil
+			case "Failed", "Canceled":
+				if e, ok := props["error"].(map[string]any); ok {
+					return fmt.Errorf("%s", str(e["message"]))
+				}
+				return fmt.Errorf("the nested deployment failed")
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the nested deployment did not finish within %s", nestedDeploymentTimeout)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

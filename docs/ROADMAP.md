@@ -722,6 +722,14 @@ deleted, because the decisions themselves are worth knowing:
   per-provider field names, so it needs no table to keep up to date. Only
   `root_module`: a reference into a module call is a different shape, and a
   wrong parent is worse than none.
+- **A deployment waits for a NESTED deployment but not for every other
+  asynchronous resource.** ARM waits for each; Nimbus creates in dependency
+  order and moves on, so `reference()` on a resource whose `Hook.Provision`
+  is still running reads a body that has not been filled yet. Nested
+  deployments are awaited because their outputs are most of the reason to
+  nest one. Waiting for everything would be closer to ARM and is a bigger
+  change: a template with a VM would then take as long as the VM, which is
+  correct and worth measuring before it is assumed.
 - **The network view DROPS a subnet it cannot place, where the topology view
   shows it.** Subnets and networks are deliberately excluded from the orphan
   list, so a subnet whose network is missing — pending or live — is simply not
@@ -747,8 +755,13 @@ deleted, because the decisions themselves are worth knowing:
   and `resourceGroup()` is REFUSED there by name rather than answering with
   an id for a group with no name. The two listings are kept apart, because a
   deployment's scope is part of its identity. Still unimplemented:
-  management-group and tenant scope, nested deployments, `templateLink`
-  (which would fetch over the network) and Complete mode.
+  management-group and tenant scope, `templateLink` (which would fetch over
+  the network) and Complete mode. **Nested deployments work**: the resources
+  always did, because a nested deployment is an ordinary
+  `Microsoft.Resources/deployments` resource going through the same PUT, and
+  what did not was reading its OUTPUTS — `reference('inner').outputs.x.value`
+  needed a bare NAME to resolve within the template, and the outer deployment
+  to wait for the inner one.
 - **Re-deploying a resource group with a different location silently keeps
   the old one.** Real ARM refuses it (`Resource group location cannot be
   changed`); Nimbus accepts the write and leaves the location as it was, so

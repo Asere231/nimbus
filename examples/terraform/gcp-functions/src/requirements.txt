@@ -1,0 +1,9 @@
+# Vendored into this directory before the apply, because a Cloud Function's
+# source carries its own dependencies here. Real Cloud Functions installs
+# this during a remote build, and a remote build is the one thing an offline
+# emulator cannot have:
+#
+#   pip install --target src -r src/requirements.txt
+#
+# See the comment at the top of main.tf.
+functions-framework==3.*

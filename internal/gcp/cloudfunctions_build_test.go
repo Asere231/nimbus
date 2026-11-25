@@ -63,7 +63,8 @@ func TestTheFunctionDockerfileRunsTheModuleNotTheConsoleScript(t *testing.T) {
 // must be lowercase", which reads as a complaint about the name Nimbus chose
 // rather than about the encoding it chose -- and used as a directory the
 // slash silently turned one directory into two nested ones. Both measured on
-// the first real deploy.
+// the first real deploy, and both avoidable: docker.ImageTag and
+// docker.SanitiseName already did this, and the bug was reinventing them.
 func TestAFunctionsImageTagIsALegalDockerTag(t *testing.T) {
 	for _, name := range []string{"hello-fn", "nimbus-hello", "a"} {
 		tag := functionImageTag(name, "projects/p/locations/l/functions/"+name)

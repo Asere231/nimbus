@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Asere231/nimbus/internal/engines/docker"
 )
 
 // Turning a source archive into a running container.
@@ -83,7 +85,11 @@ func (s *Server) functionCodeDir(id string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("could not resolve the function code directory: %w", err)
 	}
-	dir := filepath.Join(abs, "functions", slugOf(id))
+	// Named with the shared docker helpers rather than a hash of my own.
+	// They already lowercase and strip everything a name cannot contain,
+	// which is the whole of the bug a base64 digest caused here: it
+	// contains `/`, so one directory silently became two nested ones.
+	dir := filepath.Join(abs, "functions", docker.SanitiseName(docker.Name("fn", id, "")))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("could not create the function code directory: %w", err)
 	}
@@ -100,15 +106,17 @@ func (s *Server) removeFunctionCode(id string) {
 
 // functionImageTag is the image a function's build produces.
 //
-// Derived from the function rather than remembered, because the engine has to
-// be able to REMOVE it after a restart, when nothing remembers having built
-// it. An image left behind is the quietest leak there is -- nothing in
-// `docker ps` shows it, and Azure Functions leaked 3GB that way.
+// docker.ImageTag, not a scheme of its own. It hashes the lower-cased
+// resource id to hex and runs the prefix and name through SanitiseName, so
+// the result is a legal Docker tag by construction -- which is exactly what a
+// digest invented here got wrong: base64 contains uppercase letters, `/` and
+// `=`, and `docker build` refused it with "repository name must be
+// lowercase", a complaint about the name rather than about the encoding.
+//
+// Derived rather than remembered, because the engine has to be able to REMOVE
+// it after a restart, when nothing remembers having built it.
 func functionImageTag(name, id string) string {
-	// Lowercase and no slash: a Docker tag may contain neither an uppercase
-	// letter nor a `/` in this position, and the function's own name is
-	// already lowercase because Cloud Functions requires it.
-	return "nimbus-gcf-" + strings.ToLower(name) + "-" + slugOf(id) + ":latest"
+	return docker.ImageTag("nimbus-gcf", id, name)
 }
 
 // writeFunctionDockerfile bakes the source in and runs the framework.

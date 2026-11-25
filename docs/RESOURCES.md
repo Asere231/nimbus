@@ -185,6 +185,7 @@ A resource's id **is its self link**, so ids embed the port.
 | `compute.googleapis.com/Route` | hook |
 | `compute.googleapis.com/Router` | hook |
 | `compute.googleapis.com/Subnetwork` | hook |
+| `cloudfunctions.googleapis.com/Function` | **runs** |
 | `container.googleapis.com/Cluster` | **runs** |
 | `container.googleapis.com/NodePool` | **runs** |
 | `iam.googleapis.com/ServiceAccount` | hook |
@@ -207,6 +208,7 @@ prefix and without it, and does not pretend there is a rule.
 | `iam_custom_endpoint` | `http://localhost:4703/` (the client appends `v1/`) |
 | `pubsub_custom_endpoint` | `http://localhost:4703/v1/` (gcloud wants the bare origin) |
 | `cloud_run_v2_custom_endpoint` | `http://localhost:4703/v2/` |
+| `cloudfunctions2_custom_endpoint` | `http://localhost:4703/v2/` (the same `/v2` Cloud Run uses; they are told apart by the collection) |
 | `container_custom_endpoint` | `http://localhost:4703/` |
 | `resource_manager_custom_endpoint` | `http://localhost:4703/v1/` |
 

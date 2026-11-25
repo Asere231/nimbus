@@ -314,7 +314,23 @@ func (s *Server) deleteFunction(w http.ResponseWriter, location, name string) *a
 	defer cancel()
 	if fn := s.functions.Get(id); fn != nil {
 		s.functions.Stop(ctx, fn)
+		s.functions.Forget(id)
 	}
+	// The image, ALWAYS, by its derived tag -- and NOT left to the engine.
+	//
+	// The engine removes an image it remembers building, and after a restart
+	// it remembers nothing: Reattach adopts a container and cannot tell
+	// whether its image was built or pulled, so the adopted Service has no
+	// BuildDir and removeBuiltImage declines rather than risk deleting a
+	// shared pulled image. That guard is right; the consequence is that the
+	// PLUGIN has to remove its own built image, which is what Azure's
+	// function app does for the same reason.
+	//
+	// Measured here, not reasoned about: a destroy straight after an apply
+	// left no image, and a destroy after a RESTART left one behind. Nothing
+	// in `docker ps` shows it, which is what makes it the quietest leak in
+	// the project.
+	_ = s.functions.Docker().RemoveImage(ctx, functionImageTag(name, id))
 	s.removeFunctionCode(id)
 	if _, err := s.store.Delete(id); err != nil {
 		return internalError(err)

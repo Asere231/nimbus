@@ -13,6 +13,20 @@
 crash.log
 tf.log
 
+# A Cloud Function's vendored dependencies, installed by the documented pip
+# step before an apply. Not committed, for the same reason the Azure function
+# app's .python_packages is not: it is megabytes of somebody else's code and
+# the step that produces it is one line.
+#
+# Ignore the whole directory and name the two files that ARE ours, rather than
+# listing what pip puts there: `pip install --target src` drops a dozen
+# top-level package directories straight into it, and an enumeration would be
+# wrong the first time a dependency changed.
+examples/terraform/gcp-functions/src/*
+!examples/terraform/gcp-functions/src/main.py
+!examples/terraform/gcp-functions/src/requirements.txt
+examples/terraform/gcp-functions/src.zip
+
 # Python harness virtualenvs (test/storage-sdk/run.sh creates one)
 .venv/
 __pycache__/

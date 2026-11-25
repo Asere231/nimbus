@@ -20,6 +20,7 @@ export const TYPES = {
   "container.googleapis.com/nodepool": ["POOL", "#669df6", "Node pool"],
   "pubsub.googleapis.com/topic": ["TOPIC", "#fbbc04", "Pub/Sub topic"],
   "pubsub.googleapis.com/subscription": ["SUB", "#fdd663", "Subscription"],
+  "cloudfunctions.googleapis.com/function": ["FN", "#1a73e8", "Cloud Function"],
   "run.googleapis.com/service": ["RUN", "#34a853", "Cloud Run service"],
   "run.googleapis.com/revision": ["REV", "#81c995", "Revision"],
 };

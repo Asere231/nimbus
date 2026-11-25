@@ -2,6 +2,8 @@ package gcp
 
 import (
 	"net/http"
+
+	"github.com/Asere231/nimbus/internal/engines/docker"
 	"strings"
 	"testing"
 )
@@ -259,5 +261,70 @@ func TestAFailedDeployIsRecordedOnTheFunctionItself(t *testing.T) {
 	}
 	if str(mapOf(msgs[0])["message"]) == "" {
 		t.Error("the state message is empty")
+	}
+}
+
+// Deleting a function removes its IMAGE, even after a restart.
+//
+// This is the quietest leak in the project and it was measured rather than
+// reasoned about: a destroy straight after an apply left no image, and a
+// destroy after a RESTART left one behind. Nothing in `docker ps` shows it.
+//
+// The cause is not a bug in the engine. Reattach adopts a container and
+// cannot tell whether its image was built or pulled, so an adopted Service
+// has no BuildDir and removeBuiltImage declines -- which is correct, because
+// removing a shared PULLED image because one function used it would break
+// everything else on the machine. The consequence is that the plugin must
+// remove its own built image by its derived tag, which is what Azure's
+// function app does for exactly the same reason.
+//
+// Forgetting the service is what a restart does to the engine's memory, so
+// that is how this test reaches the state that leaked.
+func TestDeletingAFunctionRemovesItsImageEvenAfterARestart(t *testing.T) {
+	s := newTestServer(t)
+	putSource(t, s, "code", "src.zip")
+	call(t, s, http.MethodPost, gcfPath(s, "?functionId=hello-fn"), gcfBody)
+
+	id := s.functionName("us-central1", "hello-fn")
+	tag := functionImageTag("hello-fn", id)
+
+	f, ok := s.functions.Docker().(*docker.Fake)
+	if !ok {
+		t.Fatal("the test server is not using the Docker Fake")
+	}
+	// Available for this one. newTestServer marks the Fake unavailable so a
+	// handler cannot start anything, and an unavailable daemon makes every
+	// docker call a no-op -- including the removal under test, which would
+	// make this pass or fail for the wrong reason either way.
+	f.Unavailable = false
+	f.Images = map[string]bool{tag: true}
+
+	// The post-restart state: the container is adopted, the built-image
+	// memory is gone.
+	s.functions.Forget(id)
+
+	if rec, body := call(t, s, http.MethodDelete, gcfPath(s, "/hello-fn"), ""); rec.Code != http.StatusOK {
+		t.Fatalf("delete = %d %v", rec.Code, body)
+	}
+	if f.Images[tag] {
+		t.Errorf("the image %s survived the delete; nothing in `docker ps` would show it", tag)
+	}
+}
+
+// The image tag is a legal one BY CONSTRUCTION, because it comes from the
+// shared helper rather than from a digest invented here.
+func TestAFunctionsImageTagComesFromTheSharedHelper(t *testing.T) {
+	id := "http://localhost:4703/v2/projects/P/locations/us-central1/functions/Hello-FN"
+	tag := functionImageTag("Hello-FN", id)
+	if tag != docker.ImageTag("nimbus-gcf", id, "Hello-FN") {
+		t.Errorf("the tag does not come from docker.ImageTag: %s", tag)
+	}
+	// Even given an id and a name with uppercase in them.
+	if tag != strings.ToLower(tag) {
+		t.Errorf("tag %q has uppercase letters; docker refuses them", tag)
+	}
+	repo, _, _ := strings.Cut(tag, ":")
+	if strings.ContainsAny(repo, "/+= ") {
+		t.Errorf("tag %q contains a character docker will not take there", tag)
 	}
 }

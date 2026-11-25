@@ -51,17 +51,19 @@ func hexID(n int) string {
 	return hex.EncodeToString(b)[:n]
 }
 
-// slugOf is a stable LOWERCASE HEX digest, for the places a derived value
-// becomes a NAME rather than an opaque field: a Docker image tag and a
-// directory on disk.
+// slugOf is a stable LOWERCASE HEX digest, for a derived value that appears
+// in a PATH rather than in an opaque field -- a Cloud Build id, say.
 //
-// etagOf cannot be used for either, and the reason is worth keeping: it is
-// base64, so it contains uppercase letters, `/` and `=`. A Docker tag must be
-// lowercase and may not contain a slash, and `docker build` refuses it with
-// "repository name must be lowercase" -- which reads as a complaint about the
-// name Nimbus chose rather than about the encoding it chose. The slash also
-// turned one directory into two nested ones. Measured on the first real
-// Cloud Functions deploy.
+// etagOf cannot be used there, and the reason is worth keeping: it is base64,
+// so it contains uppercase letters, `/` and `=`. Used as a Docker tag it was
+// refused outright ("repository name must be lowercase", which reads as a
+// complaint about the name rather than about the encoding), and used as a
+// directory the slash silently turned one directory into two nested ones.
+// Both measured on the first real Cloud Functions deploy.
+//
+// For a container NAME or an image TAG, use docker.SanitiseName and
+// docker.ImageTag instead: they already do this and more, and reinventing
+// them is what produced the bug above.
 func slugOf(seed string) string {
 	sum := sha256.Sum256([]byte("nimbus/gcp/slug/" + seed))
 	return hex.EncodeToString(sum[:8])

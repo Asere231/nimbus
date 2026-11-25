@@ -1,8 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.25.0 — 2026-11-25
 
-Picking off deferred items from the roadmap's "Later", a tier at a time.
+Fourteen deferred items from the roadmap's "Later", worked through a tier
+at a time. No new milestone: this is the backlog, and most of it turned
+out to be **a setting that round-tripped cleanly and did nothing**, or a
+sub-resource whose polite failure a client read as an answer.
+
+Three of the listed items were closed by DECIDING rather than coding, and
+the reasoning is in `docs/ROADMAP.md` so it is not re-litigated: bundling
+more AWS managed policies (no configuration asks for one, and transcribing
+unverifiable documents is the drift this project warns about), persisting
+multipart uploads across a restart (losing one costs a client a retry it
+already performs), and the cluster watcher's poll interval. Registry
+authentication was skipped on the owner's call, with the blocker measured:
+`registry:2`'s htpasswd auth is bcrypt-only and Go's standard library has
+no bcrypt.
 
 - **A presigned URL's expiry is enforced, and its identity is honoured.**
   Both were missing and either one alone made presigning useless locally:

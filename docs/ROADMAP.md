@@ -1,32 +1,39 @@
 # Roadmap
 
-**Current: working through "Later", a tier at a time. Seven items done
-since 0.24.0, all green in CI, none released yet.**
+**Current: nothing. 0.25.0 cleared the "Later" backlog of everything that
+was not a milestone in its own right.**
 
-Done in this pass, newest first: the plan overlay's type tables (it had
-never worked for GCP at all); ARM deployments at **subscription scope**;
-**DynamoDB streams**; **Lambda published versions and aliases**; **object
-versioning as a real history in both S3 and Cloud Storage**; **presigned-URL
-expiry and identity**; and a GCP role catalogue that no longer grants
-`setIamPolicy` by accident. Registry authentication was looked at and
-**deliberately skipped** — see its entry below for why the easy route is
-closed and what was decided about `admin_enabled = false`.
+Done in 0.25.0, newest first: **CloudWatch filter patterns and retention**;
+a **combined CA bundle** so `az` can reach Nimbus and the internet at once;
+**S3 lifecycle rules** (whose apply used to fail outright); **nested ARM
+deployments**; **DynamoDB TTL**; **ghost bodies in the plan overlay**;
+**Lambda event source mappings**, so a DynamoDB stream really invokes a
+function; the plan overlay's type tables, which had never worked for GCP at
+all; ARM deployments at **subscription scope**; **DynamoDB streams**;
+**Lambda published versions and aliases**; **object versioning as a real
+history in both S3 and Cloud Storage**; **presigned-URL expiry and
+identity**; and a GCP role catalogue that no longer grants `setIamPolicy`
+by accident.
 
-**Where to pick up:**
+Five stale claims in this file were corrected along the way, every one of
+them a sentence nobody had read because nothing failed.
 
-1. **Cut 0.25.0.** `docs/CHANGELOG.md` has seven entries under
-   `## Unreleased` and the version constant is still 0.24.0.
-   `TestTheVersionIsTheSameEverywhere` checks all three places.
-2. **EKS OIDC provider** (the entry below). Started and not attempted: it
-   needs a measurement first, because the canonical Terraform pattern is
-   `data.tls_certificate` against the cluster's `identity.oidc.issuer`,
-   and Nimbus serves AWS over plain HTTP — so whether that data source can
-   work at all is the open question, before any of
-   `aws_iam_openid_connect_provider` is built.
-3. **Ghost bodies in the plan overlay** — described exactly in the plan
-   overlay entry below. A `PlanChange` parent hint, read from the field
-   each provider uses for it, is what makes a pending subnet appear inside
-   its pending network.
+**What is left are two MILESTONES, not items**, and each needs a prompt in
+`docs/prompts/` and a planning pass rather than being picked up:
+
+1. **EKS OIDC and IRSA** (the EKS entry below). Needs a measurement before
+   any code: the canonical Terraform pattern is `data.tls_certificate`
+   against the cluster's `identity.oidc.issuer`, and Nimbus serves AWS over
+   plain HTTP — so whether that data source can work at all decides the
+   shape of everything after it. Doing it properly also means k3s signing
+   service-account tokens with a key Nimbus holds, an OIDC discovery
+   endpoint, `sts:AssumeRoleWithWebIdentity`, and `Federated` principals in
+   the authorization core, which are refused by name today.
+2. **GCP OAuth and token exchange** (the "No OAuth" entry below).
+
+**Registry authentication** was looked at and deliberately skipped — its
+entry says why the easy route is closed, and what was decided about
+`admin_enabled = false`.
 
 Milestone 24 is done: **all three clouds run code.** Cloud Functions Gen 2
 applies, `curl` of its URL returns what the handler returned, the plan is
@@ -470,6 +477,12 @@ deleted, because the decisions themselves are worth knowing:
   hardening policy, a `Deny` on `aws:SecureTransport: false`, therefore
   denies everything here. That is what the policy says, and it is pinned by
   a test rather than smoothed over.
+- **Bundling more AWS managed policies is NOT a to-do.** Six are bundled, and
+  nothing in the examples attaches an unbundled one — so there is no demand,
+  and the alternative is transcribing documents that cannot be verified
+  against AWS, which is the drift this file warns about everywhere else. An
+  unknown ARN already refuses, names itself, lists what IS bundled, and is
+  pinned by a test. Add one when a real configuration needs it.
 - **Six AWS managed policies are bundled**, chosen because their real
   documents are short enough to transcribe exactly. They are
   transcriptions, not fetched, so they can drift as AWS revises a version,
@@ -689,7 +702,10 @@ deleted, because the decisions themselves are worth knowing:
   held in memory and bounded at 512 MB,
   so it does not survive a restart — real S3 keeps an incomplete upload
   until a lifecycle rule reaps it, and `ListMultipartUploads` here only ever
-  shows what this process started. A ranged GET honours one range; a
+  shows what this process started. **Deliberate, not a gap:** losing an
+  upload to a restart costs a client a retry, which every client here is
+  already written to do, so persisting parts would add a disk format to
+  support a resume nothing performs. A ranged GET honours one range; a
   multi-range request is answered with the whole object rather than a
   `multipart/byteranges` body, because no client Nimbus serves sends one.
 - **A presigned URL's signature is not verified, though its expiry and its

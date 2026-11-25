@@ -597,10 +597,14 @@ deleted, because the decisions themselves are worth knowing:
   writes a snapshot, so runs recorded before that one still begin from an
   empty world and end with fewer resources than are live. Nothing can
   recover what was never recorded; new runs are complete.
-- **The activity feed still starts empty after a restart**, because the SSE
-  stream replays the bus's in-memory ring and the journal is deliberately not
-  streamed. The timeline is how history is reached now; seeding the feed from
-  the journal on connect is a small change if it ever grates.
+- **The activity feed is seeded from the JOURNAL when there is one**, so it
+  no longer starts empty after a restart. This entry used to say the opposite
+  and to propose the fix as "a small change if it ever grates" -- the change
+  was made, in `core.Bus.RecentEvents`, which reads the journal and falls back
+  to the in-memory ring, excluding `kind: "snapshot"` records so a restart
+  does not look like somebody recreating the world. What remains true is that
+  log EVENTS are not persisted: an empty feed on a fresh data directory means
+  nothing has run yet, which is accurate.
 - **The plan overlay's azurerm → ARM type table is partial** (`armTypes` in
   `internal/ui/plan.go`). An unmapped type still draws, labelled with its
   Terraform address; add a line when an example needs one.

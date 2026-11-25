@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+Milestone 25, in progress: EKS OIDC and IRSA.
+
+- **An EKS cluster has an OIDC issuer**, served over TLS on a listener of
+  its own (`--aws-tls-port`, default 4704) because `data.tls_certificate`
+  — which every EKS Terraform module runs against the issuer — refuses an
+  `http://` URL outright. The same AWS handler answers on both, so S3 and
+  STS are reachable over TLS as a side effect. Nimbus holds an RSA
+  service-account signing key and publishes the public half as the
+  issuer's JWKS; it is the first key here whose signature will genuinely
+  decide something.
+
 ## 0.25.0 — 2026-11-25
 
 Fourteen deferred items from the roadmap's "Later", worked through a tier

@@ -265,3 +265,140 @@ func TestTheWebhookConfigAddressesTheHostFromInsideDocker(t *testing.T) {
 		}
 	}
 }
+
+// The cluster's OIDC issuer, which every EKS Terraform module runs
+// data.tls_certificate against.
+func TestAClusterReportsItsOIDCIssuer(t *testing.T) {
+	s := newEKSTestServer(t)
+	s.cfg.TLSURL = "https://localhost:4704"
+	makeIRSACluster(t, s, "irsa")
+
+	_, doc := restJSON(t, s, http.MethodGet, "/clusters/irsa", "")
+	cluster, _ := doc["cluster"].(map[string]any)
+	identity, _ := cluster["identity"].(map[string]any)
+	oidc, _ := identity["oidc"].(map[string]any)
+	issuer := str(oidc["issuer"])
+	if !strings.HasPrefix(issuer, "https://localhost:4704/oidc/") {
+		t.Fatalf("the issuer is %q", issuer)
+	}
+
+	// DERIVED from the cluster's name, which a re-read cannot prove
+	// because the issuer is stored on the cluster -- so it is asserted
+	// directly. It matters because the verification path has to map a
+	// token's `iss` back to a cluster without reading the store, and
+	// because a value that moved would invalidate every token already
+	// issued against it.
+	if oidcID("irsa") != oidcID("irsa") || !strings.HasSuffix(issuer, oidcID("irsa")) {
+		t.Errorf("the issuer id is not derived from the cluster name")
+	}
+
+	// Two clusters get DIFFERENT issuers, as real EKS gives.
+	makeIRSACluster(t, s, "other")
+	_, otherDoc := restJSON(t, s, http.MethodGet, "/clusters/other", "")
+	oc, _ := otherDoc["cluster"].(map[string]any)
+	oi, _ := oc["identity"].(map[string]any)
+	oo, _ := oi["oidc"].(map[string]any)
+	if str(oo["issuer"]) == issuer {
+		t.Error("two clusters share one issuer, so one OIDC provider would cover both")
+	}
+}
+
+// With no TLS listener there is no issuer to serve, so the cluster
+// reports none rather than advertising a URL that refuses.
+func TestNoTLSListenerMeansNoIssuer(t *testing.T) {
+	s := newEKSTestServer(t)
+	s.cfg.TLSURL = ""
+	makeIRSACluster(t, s, "plain")
+
+	_, doc := restJSON(t, s, http.MethodGet, "/clusters/plain", "")
+	cluster, _ := doc["cluster"].(map[string]any)
+	if _, present := cluster["identity"]; present {
+		t.Errorf("a cluster with no TLS listener claims an identity: %v", cluster["identity"])
+	}
+}
+
+// The discovery document and the JWKS, which are fetched by clients that
+// sign nothing -- so they must be routed before anything reads a
+// credential scope.
+func TestTheIssuerServesDiscoveryAndKeys(t *testing.T) {
+	s := newEKSTestServer(t)
+	s.cfg.TLSURL = "https://localhost:4704"
+	key, err := core.EnsureSigningKey(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.UseSigningKey(key)
+	makeIRSACluster(t, s, "irsa")
+	id := oidcID("irsa")
+
+	// Unsigned: no Authorization header at all.
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/oidc/"+id+"/.well-known/openid-configuration", nil))
+	if rec.Code != 200 {
+		t.Fatalf("discovery = %d %s", rec.Code, rec.Body)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	want := "https://localhost:4704/oidc/" + id
+	// The issuer must match the token's `iss` EXACTLY or every
+	// verification fails, so it is worth asserting rather than assuming.
+	if str(cfg["issuer"]) != want {
+		t.Errorf("discovery says issuer %q, want %q", cfg["issuer"], want)
+	}
+	if str(cfg["jwks_uri"]) != want+"/keys" {
+		t.Errorf("jwks_uri is %q", cfg["jwks_uri"])
+	}
+
+	rec = httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oidc/"+id+"/keys", nil))
+	if rec.Code != 200 {
+		t.Fatalf("keys = %d %s", rec.Code, rec.Body)
+	}
+	var jwks map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &jwks); err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := jwks["keys"].([]any)
+	if len(keys) != 1 {
+		t.Fatalf("the JWKS has %d keys", len(keys))
+	}
+	jwk, _ := keys[0].(map[string]any)
+	if jwk["kid"] != key.KeyID() {
+		t.Errorf("the served kid %v is not the signing key's %q", jwk["kid"], key.KeyID())
+	}
+
+	// With NO signing key there is nothing to publish, and the JWKS says
+	// so rather than answering an empty key set -- which a consumer would
+	// read as "this issuer signs nothing" and cache.
+	bare := newEKSTestServer(t)
+	bare.cfg.TLSURL = "https://localhost:4704"
+	makeIRSACluster(t, bare, "irsa")
+	rec = httptest.NewRecorder()
+	bare.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oidc/"+id+"/keys", nil))
+	if rec.Code != 404 {
+		t.Errorf("a server with no signing key served a JWKS: %d %s", rec.Code, rec.Body)
+	}
+
+	// A document nobody serves is a 404 naming itself, not a silent empty.
+	rec = httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oidc/"+id+"/nonsense", nil))
+	if rec.Code != 404 {
+		t.Errorf("an unknown OIDC document = %d", rec.Code)
+	}
+}
+
+// makeIRSACluster creates a cluster the way a client does.
+func makeIRSACluster(t *testing.T, s *Server, name string) {
+	t.Helper()
+	rec, _ := restJSON(t, s, http.MethodPost, "/clusters", `{
+		"name": "`+name+`",
+		"roleArn": "arn:aws:iam::000000000000:role/eks",
+		"resourcesVpcConfig": {"subnetIds": ["subnet-1", "subnet-2"]}
+	}`)
+	if rec.Code != 200 {
+		t.Fatalf("creating %s: %d %s", name, rec.Code, rec.Body)
+	}
+}

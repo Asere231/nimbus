@@ -155,6 +155,8 @@ func start(args []string) {
 	uiPort := fs.Int("ui-port", 4700, "visualizer port (http)")
 	azPort := fs.Int("azure-port", 4701, "Azure Resource Manager port (https)")
 	awsPort := fs.Int("aws-port", 4702, "AWS port (http)")
+	awsTLSPort := fs.Int("aws-tls-port", 4704,
+		"AWS port (https), which serves the EKS OIDC issuer")
 	gcpPort := fs.Int("gcp-port", 4703, "Google Cloud port (http)")
 	clouds := fs.String("clouds", "azure", "which clouds to run, comma separated: "+strings.Join(knownClouds, ", "))
 	persist := fs.Bool("persist", false, "save state to disk so it survives restarts")
@@ -249,7 +251,24 @@ func start(args []string) {
 		if dataDir != "" {
 			awsCfg.DataDir = dataDir
 		}
+		// The OIDC issuer has to be HTTPS: data.tls_certificate, which
+		// every EKS module runs against it, refuses an http:// URL
+		// outright. So AWS gets a second listener serving the SAME
+		// handler over TLS -- the issuer is one more path on it, and S3
+		// and STS become reachable over TLS at no extra cost.
+		awsTLSURL := fmt.Sprintf("https://%s:%d", *host, *awsTLSPort)
+		awsCfg.TLSURL = awsTLSURL
 		a := aws.New(awsCfg, store, bus)
+		// k3s signs projected service-account tokens with this key and
+		// Nimbus publishes the public half as the issuer's JWKS. Set
+		// before any cluster exists, because k3s reads the path at
+		// container start.
+		if key, err := core.EnsureSigningKey(filepath.Join(*home, "certs")); err == nil {
+			a.UseSigningKey(key)
+		} else {
+			fmt.Fprintf(os.Stderr, "nimbus: no service-account signing key, so EKS has no OIDC issuer: %v\n", err)
+			awsCfg.TLSURL = ""
+		}
 		explainers["aws"] = a
 		servers = append(servers, &cloudServer{
 			name:  "aws",
@@ -259,6 +278,14 @@ func start(args []string) {
 				ReadHeaderTimeout: 10 * time.Second},
 			back: a.Start(),
 			stop: a.Shutdown,
+		})
+		servers = append(servers, &cloudServer{
+			name:  "aws-tls",
+			label: fmt.Sprintf(`AWS (TLS)    %s     EKS OIDC issuer`, awsTLSURL),
+			url:   awsTLSURL,
+			tls:   true,
+			srv: &http.Server{Addr: fmt.Sprintf(":%d", *awsTLSPort), Handler: a,
+				ReadHeaderTimeout: 10 * time.Second},
 		})
 	}
 

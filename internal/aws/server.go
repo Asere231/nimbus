@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +44,12 @@ const DefaultRegion = "us-east-1"
 type Config struct {
 	// PublicURL is how clients reach this server, e.g. http://localhost:4702.
 	PublicURL string
+	// TLSURL is the HTTPS address of the second AWS listener, which exists
+	// for the EKS OIDC issuer: `data.tls_certificate` refuses an http://
+	// URL, so the issuer cannot live on PublicURL. Empty means no TLS
+	// listener, and a cluster then reports no identity rather than
+	// advertising a URL that refuses. See eks_oidc.go.
+	TLSURL string
 	// AccountID and Region default to the constants above.
 	AccountID string
 	Region    string
@@ -103,6 +110,10 @@ type Server struct {
 	// only, for the reason CloudWatch log events are: nothing persists
 	// them, and an empty stream reads as "nothing has been written yet".
 	streams *streamStore
+	// signing is the key k3s signs projected service-account tokens with
+	// and whose public half the JWKS publishes. nil when no cluster has
+	// needed one.
+	signing *core.SigningKey
 	// lambda runs the functions, and logs holds what they printed.
 	lambda *funcs.Engine
 	logs   *logStore
@@ -335,6 +346,13 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 	if r.URL.Path == TokenReviewPath {
 		return s.serveTokenReview(w, r)
 	}
+	// The OIDC issuer's documents, routed before anything looks at a
+	// credential scope for the same reason: they are fetched by clients
+	// that sign nothing -- a Terraform data source, a Kubernetes API
+	// server, an SDK verifying a token. See eks_oidc.go.
+	if strings.HasPrefix(r.URL.Path, oidcPrefix) {
+		return s.serveOIDC(w, r)
+	}
 	service := serviceOf(r)
 
 	// A presigned URL's deadline, checked before anything else looks at
@@ -470,3 +488,12 @@ func sprintf(format string, args ...any) string {
 	}
 	return fmt.Sprintf(format, args...)
 }
+
+// UseSigningKey gives the server the key k3s signs service-account tokens
+// with. Called at startup, before any cluster exists, because k3s reads
+// the key path at container start and there is no moment between the
+// container existing and the file being needed.
+func (s *Server) UseSigningKey(k *core.SigningKey) { s.signing = k }
+
+// SigningKey is what the EKS engine passes to k3s.
+func (s *Server) SigningKey() *core.SigningKey { return s.signing }

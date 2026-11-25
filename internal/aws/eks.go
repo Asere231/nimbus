@@ -42,8 +42,14 @@ type eksCluster struct {
 	Status    string            `json:"status"`
 	Tags      map[string]string `json:"tags,omitempty"`
 
-	ResourcesVpcConfig      eksVpcConfig   `json:"resourcesVpcConfig"`
-	CertificateAuthority    eksCertificate `json:"certificateAuthority"`
+	ResourcesVpcConfig   eksVpcConfig   `json:"resourcesVpcConfig"`
+	CertificateAuthority eksCertificate `json:"certificateAuthority"`
+	// Identity carries the OIDC issuer, which is what every EKS Terraform
+	// module runs data.tls_certificate against to build an
+	// aws_iam_openid_connect_provider. Absent when Nimbus has no TLS
+	// listener to serve one on -- better than advertising a URL that
+	// refuses. See eks_oidc.go.
+	Identity                *eksIdentity   `json:"identity,omitempty"`
 	KubernetesNetworkConfig map[string]any `json:"kubernetesNetworkConfig,omitempty"`
 	PlatformVersion         string         `json:"platformVersion"`
 
@@ -192,6 +198,9 @@ func (s *Server) createEKSCluster(w http.ResponseWriter, r *http.Request) *apiEr
 		Tags:               req.Tags,
 		ResourcesVpcConfig: req.ResourcesVpcConfig,
 		PlatformVersion:    "eks.1",
+	}
+	if issuer := s.IssuerURL(req.Name); issuer != "" {
+		c.Identity = &eksIdentity{OIDC: eksOIDC{Issuer: issuer}}
 	}
 	c.ResourcesVpcConfig.EndpointPublicAccess = true
 	if aerr := s.saveEKSCluster(c); aerr != nil {
@@ -483,3 +492,14 @@ func orZero(v, fallback int) int {
 // eksClusters returns every cluster the engine should still be running,
 // for the shutdown path.
 func (s *Server) eksClusters() []*k3s.Cluster { return s.k3s.All() }
+
+// eksIdentity is the cluster's OIDC identity, nested exactly as the API
+// nests it: the provider reads identity[0].oidc[0].issuer, so a flatter
+// shape would read as absent.
+type eksIdentity struct {
+	OIDC eksOIDC `json:"oidc"`
+}
+
+type eksOIDC struct {
+	Issuer string `json:"issuer"`
+}

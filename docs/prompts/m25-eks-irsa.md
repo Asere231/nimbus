@@ -50,7 +50,7 @@ What the k3s engine already does, so this needs no new mechanism:
 webhook is configured today) and a file is bind-mounted into the node
 (that is how its kubeconfig gets there).
 
-## Decisions for the owner
+## Decisions (taken by the owner, Nov 2026)
 
 **1. Where does the OIDC issuer live?** It must be HTTPS, which the AWS
 endpoint is not.
@@ -69,9 +69,11 @@ endpoint is not.
     module's canonical pattern does not apply and a thumbprint must be
     hardcoded. Cheapest, and it breaks the thing the milestone is for.
 
-  Recommendation: **(b)**. The measurement says (a) works, so this is a
-  judgement about shape rather than feasibility, and (b) is the one that
-  does not need unpicking later.
+  **DECIDED: (b)** — AWS gets its own TLS listener. The measurement says
+  (a) works, so this was a judgement about shape rather than feasibility,
+  and (b) is the one that does not need unpicking later. It also makes
+  `--clouds aws` self-contained and opens the TLS door that several
+  "Later" entries want for the S3 and STS data planes.
 
 **2. How far does IRSA go?**
 
@@ -86,9 +88,9 @@ endpoint is not.
     against a token Nimbus is handed — without wiring k3s's projected
     tokens. Terraform applies cleanly; no pod proves anything.
 
-  Recommendation: **(a)**. (b) is the shape of divergence this project
-  keeps finding and fixing — a configuration that applies cleanly and does
-  nothing. The whole point is the pod.
+  **DECIDED: (a)** — all the way to the pod. (b) is the shape of
+  divergence this project keeps finding and fixing: a configuration that
+  applies cleanly and does nothing. The whole point is the pod.
 
 ## Done criteria
 

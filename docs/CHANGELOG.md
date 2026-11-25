@@ -45,6 +45,16 @@ Picking off deferred items from the roadmap's "Later", a tier at a time.
   failure it could see said nothing but "Failed"; real ARM puts it in
   `properties.error`. Found by a test whose own failure message read
   "the deployment failed: &lt;nil&gt;".
+- **A DynamoDB stream invokes a Lambda.** `aws_lambda_event_source_mapping`
+  is the poller between the two halves this project had built separately —
+  and it is a poller, which is the part people get wrong: a function does
+  not subscribe to anything, so batch size and starting position configure
+  the MAPPING and a function with no mapping is never called however much
+  is written to the table. An event source Nimbus cannot poll is refused by
+  name rather than accepted and never fired. A handler that threw is a
+  FAILED batch, retried and then skipped, where real Lambda blocks the
+  shard until the records expire — stated in `LastProcessingResult` rather
+  than silent.
 - **DynamoDB has streams.** `StreamSpecification` round-tripped as a setting
   and nothing recorded a thing. Every write to a stream-enabled table is now
   appended as an INSERT, MODIFY or REMOVE carrying the item's keys and

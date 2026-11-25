@@ -175,6 +175,24 @@ resource "aws_lambda_alias" "prod" {
   function_version = aws_lambda_function.writer.version
 }
 
+# The poller that connects the two. A function does NOT subscribe to a
+# stream: a poller owned by the Lambda service reads the stream and calls
+# the function, which is why batch size and starting position configure
+# THIS resource and not the function.
+#
+# So writing to the table invokes the handler, with the changed records in
+# the payload -- no HTTP call, nothing polling from the outside.
+#
+# The handler recognises a stream event and does NOT write back. It is
+# triggered by the same table it writes to, and writing on a stream event
+# is an infinite loop -- in real AWS exactly as here. See handler/app.py.
+resource "aws_lambda_event_source_mapping" "items" {
+  event_source_arn  = aws_dynamodb_table.items.stream_arn
+  function_name     = aws_lambda_function.writer.function_name
+  starting_position = "LATEST"
+  batch_size        = 10
+}
+
 output "invoke" {
   # fileb:// rather than an inline payload: it is the only spelling both
   # aws-cli v1 and v2 read as raw bytes. See the note at the top.

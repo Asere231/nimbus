@@ -475,8 +475,16 @@ func (s *Server) checkVersionExists(name, version string) *apiError {
 // query parameter or from a `name:qualifier` reference. Empty means
 // $LATEST, which is what an unqualified call asks for.
 func lambdaQualifier(ref string, r *http.Request) string {
-	if q := r.URL.Query().Get("Qualifier"); q != "" {
-		return q
+	// A nil request is the POLLER's call: an event source mapping names a
+	// function by ARN with no request around it, and that ARN may be
+	// qualified -- a mapping onto an alias is how a canary consumer is
+	// wired. Reading the query off nil would panic, and taking "no
+	// request" to mean "no qualifier" would silently invoke $LATEST where
+	// the mapping named a version.
+	if r != nil {
+		if q := r.URL.Query().Get("Qualifier"); q != "" {
+			return q
+		}
 	}
 	if decoded, err := url.PathUnescape(ref); err == nil {
 		ref = decoded

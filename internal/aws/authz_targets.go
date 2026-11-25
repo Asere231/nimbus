@@ -169,6 +169,27 @@ func (s *Server) lambdaTarget(r *http.Request) (target, bool) {
 		return target{}, false
 	}
 
+	// An event source mapping is its own collection, named by UUID rather
+	// than by function, so it is classified before the function-shaped
+	// paths below -- which would otherwise read the UUID as a name.
+	if parts[1] == "event-source-mappings" {
+		action := map[string]string{
+			http.MethodPost: "CreateEventSourceMapping", http.MethodGet: "GetEventSourceMapping",
+			http.MethodPut: "UpdateEventSourceMapping", http.MethodDelete: "DeleteEventSourceMapping",
+		}[r.Method]
+		if action == "" {
+			return target{}, false
+		}
+		if len(parts) == 2 && r.Method == http.MethodGet {
+			action = "ListEventSourceMappings"
+		}
+		resource := all.Resource
+		if len(parts) == 3 {
+			resource = s.esmARN(parts[2])
+		}
+		return target{Action: "lambda:" + action, Resource: resource}, true
+	}
+
 	arn := s.lambdaARN(lambdaName(parts[2]))
 	if len(parts) == 3 {
 		switch r.Method {

@@ -1471,6 +1471,59 @@ jobs:
           assert d.get("NextShardIterator"), "GetRecords returned no NextShardIterator"
           PY
 
+          # --- the event source mapping ------------------------------
+          #
+          # The poller that connects the two. A function does NOT
+          # subscribe to a stream: a poller owned by the Lambda service
+          # reads it and calls the function -- so writing to the table,
+          # with no invoke of any kind, must run the handler.
+          aws $E lambda list-event-source-mappings --function-name nimbus-writer \
+            --output json > mappings.json
+          cat mappings.json
+          python3 - <<'PY'
+          import json
+          m = json.load(open("mappings.json"))["EventSourceMappings"]
+          assert len(m) == 1, f"expected one mapping, got {len(m)}"
+          assert m[0]["State"] == "Enabled", m[0]["State"]
+          assert m[0]["StartingPosition"] == "LATEST", m[0]["StartingPosition"]
+          PY
+
+          rows_before=$(aws $E dynamodb scan --table-name nimbus-items --query 'Count' --output text)
+          aws $E dynamodb put-item --table-name nimbus-items \
+            --item '{"id":{"S":"triggers-the-stream"}}'
+
+          # Wait for the poller rather than guessing: it ticks twice a
+          # second, and a fixed sleep would be either flaky or slow.
+          for i in $(seq 1 40); do
+            if aws $E logs filter-log-events --log-group-name /aws/lambda/nimbus-writer \
+                 --query 'events[].message' --output text 2>/dev/null \
+                 | grep -q "stream saw INSERT"; then
+              break
+            fi
+            sleep 0.5
+          done
+          aws $E logs filter-log-events --log-group-name /aws/lambda/nimbus-writer \
+            --query 'events[].message' --output text | tr '\t' '\n' > fnlogs.txt
+          grep "stream saw" fnlogs.txt || {
+            echo "::error::writing to the table did not invoke the handler"; exit 1; }
+
+          # And NO feedback loop. The handler is triggered by the table it
+          # writes to, so a handler that wrote on a stream event would grow
+          # the table without bound -- measured at 14 rows to 19 in four
+          # seconds before the guard existed.
+          sleep 3
+          rows_after=$(aws $E dynamodb scan --table-name nimbus-items --query 'Count' --output text)
+          echo "rows: $rows_before -> $rows_after"
+          if [ "$rows_after" != "$((rows_before + 1))" ]; then
+            echo "::error::the stream handler fed back into its own table: $rows_before -> $rows_after"
+            exit 1
+          fi
+
+          result=$(aws $E lambda list-event-source-mappings --function-name nimbus-writer \
+            --query 'EventSourceMappings[0].LastProcessingResult' --output text)
+          [ "$result" = "OK" ] || {
+            echo "::error::the mapping reports LastProcessingResult=$result"; exit 1; }
+
           terraform destroy -auto-approve -input=false
 
       - name: No containers left behind

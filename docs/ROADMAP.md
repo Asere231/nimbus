@@ -605,14 +605,15 @@ deleted, because the decisions themselves are worth knowing:
   while `$LATEST` answered with the new. A version's container is started on
   the FIRST invoke rather than at publish time, so a `publish = true` on
   every apply does not leave a container per version running for versions
-  nobody calls. A weighted alias's `routing_config` IS honoured: the split
+  nobody calls. Lambda also has **event source mappings** now, so a
+  DynamoDB stream really invokes a function. A weighted alias's
+  `routing_config` IS honoured: the split
   is random per request, as real Lambda's is, which is why
   `X-Amz-Executed-Version` names the version that really ran rather than
-  the alias. Still missing: layers, event source mappings, function URLs
-  and concurrency settings. An
+  the alias. Still missing: layers, function URLs and concurrency settings. An
   `Event` invocation runs immediately rather than being queued, so there is
   no retry behaviour to observe.
-- **DynamoDB streams work; what has no consumer is the stream.** Every write
+- **DynamoDB streams work, and an event source mapping consumes them.** Every write
   to a stream-enabled table is recorded, `StreamViewType` decides what each
   record carries, `LatestStreamArn` and `LatestStreamLabel` are on the table
   description, and `aws dynamodbstreams` reads the records back. **One shard
@@ -621,8 +622,14 @@ deleted, because the decisions themselves are worth knowing:
   order — more than real DynamoDB promises. Records are in memory and bounded
   at 10,000, so they do not survive a restart, which is what a real stream's
   24-hour expiry produces anyway. Nothing splits a shard and nothing expires
-  a record. And there is **no event source mapping**, so nothing invokes a
-  Lambda from a stream: you read it yourself.
+  a record. An **event source mapping** polls a stream and invokes a Lambda
+  with the records — the poller is a goroutine per mapping, restarted on a
+  restart, and it is the only emulated source: Kinesis, SQS and Kafka are
+  refused by name. A failed batch is retried `esmMaxAttempts` times and then
+  skipped, where real Lambda blocks the shard until the records expire;
+  the difference is visible in `LastProcessingResult` rather than silent.
+  No filter criteria, no bisect-on-error, no on-failure destination, no
+  parallelisation factor.
 - **DynamoDB has no TTL expiry and no index projections.** A
   secondary index works because its keys are ordinary attributes of the same
   items, so a query on it needs no separate storage — but a `KEYS_ONLY`

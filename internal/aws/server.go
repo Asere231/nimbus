@@ -94,6 +94,11 @@ type Server struct {
 	// items holds DynamoDB's rows, beside the tables themselves in the
 	// store -- a table is a resource, its items are data.
 	items *itemStore
+	// esm holds the running stream pollers, one per event source mapping.
+	// The MAPPING lives in the store and survives a restart; the goroutine
+	// does not, so reattachPollers starts them again -- the log-group
+	// index's lesson, one subsystem over.
+	esm *pollers
 	// streams is the change log a stream-enabled table keeps. In memory
 	// only, for the reason CloudWatch log events are: nothing persists
 	// them, and an empty stream reads as "nothing has been written yet".
@@ -129,7 +134,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	}
 	s := &Server{cfg: cfg, store: store, bus: bus,
 		objects: newObjectStore(cfg.DataDir), items: newItemStore(cfg.DataDir),
-		streams: newStreamStore(),
+		streams: newStreamStore(), esm: newPollers(),
 		uploads: newMultipartStore(),
 		logs:    newLogStore(), policies: newPolicyCache()}
 	s.lambda = funcs.New(funcs.Config{
@@ -205,6 +210,10 @@ func (s *Server) reattach(ctx context.Context) {
 	s.vms.Reattach(ctx, s.store.Exists)
 	s.lambda.Reattach(ctx, s.store.Exists)
 	s.reattachLogGroups()
+	// A mapping survives a restart in the store; its poller does not. A
+	// mapping reading Enabled and delivering nothing is the log-group
+	// index's bug in another costume.
+	s.reattachPollers()
 }
 
 // reattachLogGroups rebuilds the in-memory index of log groups from the
@@ -259,6 +268,10 @@ func (s *Server) setClusterStatus(clusterARN string, found k3s.Found) {
 // Shutdown stops the clusters this cloud started, unless they are meant to
 // outlive Nimbus.
 func (s *Server) Shutdown(ctx context.Context) {
+	// The pollers stop whatever --persist says: they are goroutines in
+	// this process, not containers that outlive it, so there is nothing
+	// for KeepClusters to keep.
+	s.stopPollers()
 	if s.cfg.KeepClusters {
 		return
 	}

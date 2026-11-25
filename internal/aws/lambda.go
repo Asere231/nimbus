@@ -156,6 +156,21 @@ func (s *Server) serveLambda(w http.ResponseWriter, r *http.Request) string {
 	case len(parts) == 5 && parts[1] == "functions" && parts[3] == "policy" && r.Method == http.MethodDelete:
 		aerr = s.removeFunctionPermission(w, parts[2], parts[4])
 
+	// Event source mappings: the poller that invokes a function from a
+	// stream. A top-level collection, not a sub-resource of the function,
+	// because a mapping is its own resource with its own lifecycle. See
+	// lambda_esm.go.
+	case len(parts) == 2 && parts[1] == "event-source-mappings" && r.Method == http.MethodPost:
+		aerr = s.createEventSourceMapping(w, r)
+	case len(parts) == 2 && parts[1] == "event-source-mappings" && r.Method == http.MethodGet:
+		aerr = s.listEventSourceMappings(w, r)
+	case len(parts) == 3 && parts[1] == "event-source-mappings" && r.Method == http.MethodGet:
+		aerr = s.getEventSourceMapping(w, parts[2])
+	case len(parts) == 3 && parts[1] == "event-source-mappings" && r.Method == http.MethodPut:
+		aerr = s.updateEventSourceMapping(w, r, parts[2])
+	case len(parts) == 3 && parts[1] == "event-source-mappings" && r.Method == http.MethodDelete:
+		aerr = s.deleteEventSourceMapping(w, parts[2])
+
 	case len(parts) == 3 && parts[1] == "tags":
 		aerr = s.lambdaTags(w, r, parts[2])
 

@@ -30,6 +30,7 @@ export const TYPES = {
   "aws::lambda::function": ["FN", "#ff9900", "Lambda function"],
   "aws::lambda::version": ["VER", "#ffb84d", "Published version"],
   "aws::lambda::alias": ["ALIAS", "#ffd199", "Function alias"],
+  "aws::lambda::eventsourcemapping": ["ESM", "#ffc266", "Event source mapping"],
   "aws::logs::loggroup": ["LOGS", "#8b949e", "Log group"],
 };
 
@@ -37,7 +38,7 @@ export const TYPES = {
 // first, then what sits in it.
 export const ORDER = ["account", "vpc", "subnet", "internetgateway", "natgateway",
   "routetable", "securitygroup", "instance", "cluster", "nodegroup", "table", "function",
-  "version", "alias", "bucket", "keypair", "role", "user", "policy", "instanceprofile", "loggroup"];
+  "version", "alias", "eventsourcemapping", "bucket", "keypair", "role", "user", "policy", "instanceprofile", "loggroup"];
 
 // AWS has no addressing-only types to hide, unlike ARM's blobServices.
 export const PASSTHROUGH = null;

@@ -682,17 +682,31 @@ deleted, because the decisions themselves are worth knowing:
   `application/x-pem-file` rather than claiming a format it is not. azurerm
   never reads the secret, so nothing in Terraform sees the difference; `az
   keyvault secret download` would.
-- **The registry has no authentication.** `registry:2` runs open, and
-  `listCredentials` returns decorative values; an imagePullSecret built from
-  them works because nothing checks it.
+- **The registry has no authentication, and the easy route is closed.**
+  `registry:2` runs open, `listCredentials` returns decorative values, and an
+  imagePullSecret built from them works because nothing checks it. The
+  obvious fix — `REGISTRY_AUTH=htpasswd` — cannot be built here: measured on
+  registry 2.8.3, htpasswd auth accepts **bcrypt only** (MD5-crypt and SHA-1
+  lines both answer 401 "authentication failure", naming no format), and Go's
+  standard library has no bcrypt. The viable route is `REGISTRY_AUTH=token`,
+  where the registry is given a `rootcertbundle` and verifies RS256 JWTs
+  Nimbus signs — all stdlib — but that is a token server rather than a flag,
+  and it needs a decision about `admin_enabled = false` (azurerm's default),
+  where real ACR has no admin credentials and only an AAD token gets in.
 - **Azure role assignments ARE enforced** since Milestone 14, behind
   `--enforce-iam`, including scope inheritance from a subscription or
   resource group — and since Milestone 17 that includes `dataActions` on
   **Key Vault's data plane**, so a "Key Vault Secrets User" assignment
   decides and a Contributor can delete a vault without reading a secret
-  out of it. Storage's data plane is the exception: Shared Key carries no
-  principal, so a "Storage Blob Data Reader" assignment still governs
-  nothing.
+  out of it. Storage's data plane is the exception for RBAC: Shared Key
+  carries no principal, so a "Storage Blob Data Reader" assignment still
+  governs nothing there. **It is not open, though** — since Milestone 22 a
+  SAS is verified (signature, expiry, `sp`, `sr`, `sip`, `spr`) and a
+  container's `PublicAccess` decides what an anonymous request may do, both
+  unconditionally rather than behind the flag, because neither needs a
+  principal. Saying only the RBAC half is what made this read as "storage's
+  data plane cannot be enforced", which is the over-generalisation
+  Milestone 22 corrected in CLAUDE.md.
 
 - **A mid-apply restart fails the apply.** Terraform polls while the port is
   closed and azurerm reports `unimplemented polling status "Unknown"`. Nothing

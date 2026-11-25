@@ -212,3 +212,91 @@ func TestPlanEndpointHoldsOneOverlayAtATime(t *testing.T) {
 		t.Errorf("POST of broken JSON = %d, want 400", res.StatusCode)
 	}
 }
+
+// References between PENDING resources, read from a real `terraform show
+// -json` of examples/terraform/gcp-basic.
+//
+// This is the one relationship a plan cannot express the usual way. A
+// subnet's `network` is listed under after_unknown exactly as its own id
+// is -- the network does not exist yet, so neither does the value -- and
+// the relationship survives only in the configuration section, as
+// `"references": ["google_compute_network.main.id",
+// "google_compute_network.main"]`. Without it the network view cannot
+// draw a pending subnet inside its pending network.
+func TestAPlanCarriesReferencesBetweenPendingResources(t *testing.T) {
+	f, err := os.Open(filepath.Join("..", "..", "test", "ui", "testdata", "terraform-plan-gcp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	overlay, err := ReadPlan(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byAddress := map[string]PlanChange{}
+	for _, c := range overlay.Changes {
+		byAddress[c.Address] = c
+	}
+
+	// The subnet names the network it will join.
+	subnet, ok := byAddress["google_compute_subnetwork.private"]
+	if !ok {
+		t.Fatalf("the fixture has no subnet: %v", byAddress)
+	}
+	if len(subnet.References) != 1 || subnet.References[0] != "google_compute_network.main" {
+		t.Errorf("the subnet references %v, want just the network", subnet.References)
+	}
+	// Terraform lists BOTH "…main.id" and "…main" for one reference, so a
+	// duplicate here would mean the address was being parsed rather than
+	// matched against the changes that exist.
+	if _, isAttribute := byAddress["google_compute_network.main.id"]; isAttribute {
+		t.Error("an attribute reference was taken for a resource address")
+	}
+
+	// The object names its bucket, which is the same mechanism on a
+	// different pair -- so this is not a one-off for networking.
+	object := byAddress["google_storage_bucket_object.readme"]
+	if len(object.References) != 1 || object.References[0] != "google_storage_bucket.data" {
+		t.Errorf("the object references %v, want just the bucket", object.References)
+	}
+
+	// A resource that points at nothing pending carries nothing.
+	if refs := byAddress["google_compute_network.main"].References; len(refs) != 0 {
+		t.Errorf("the network references %v, want none", refs)
+	}
+	if refs := byAddress["google_service_account.app"].References; len(refs) != 0 {
+		t.Errorf("the service account references %v, want none", refs)
+	}
+}
+
+// Only an address that is ITSELF pending is carried. A reference to a
+// variable, a data source or a resource that already exists is matched by
+// ID like anything else, and carrying it would give the browser an
+// address it could never resolve to a ghost.
+func TestOnlyPendingAddressesAreCarried(t *testing.T) {
+	plan := `{
+      "format_version": "1.2",
+      "resource_changes": [
+        {"address": "aws_subnet.a", "type": "aws_subnet", "name": "a",
+         "change": {"actions": ["create"], "after": {"name": "a"}, "after_unknown": {"id": true}}}
+      ],
+      "configuration": {"root_module": {"resources": [
+        {"address": "aws_subnet.a", "expressions": {
+           "vpc_id": {"references": ["aws_vpc.already_there.id", "aws_vpc.already_there"]},
+           "cidr_block": {"constant_value": "10.0.1.0/24"},
+           "tags": {"Name": {"references": ["var.prefix"]}}
+        }}
+      ]}}
+    }`
+	overlay, err := ReadPlan(strings.NewReader(plan))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(overlay.Changes) != 1 {
+		t.Fatalf("expected one change, got %d", len(overlay.Changes))
+	}
+	if refs := overlay.Changes[0].References; len(refs) != 0 {
+		t.Errorf("references to things that are not pending were carried: %v", refs)
+	}
+}

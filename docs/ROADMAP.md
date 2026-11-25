@@ -701,16 +701,25 @@ deleted, because the decisions themselves are worth knowing:
   examples' own `.tf` files, so a type nobody considered fails a test; a type
   with no Nimbus resource behind it (a bucket's `?versioning` sub-resource, a
   `kubernetes_*` object) is listed with its reason instead.
-- **Plan overlays are NOT topology-only — the claim here was wrong.**
-  `render.js` passes the ghosted map to every view, so the network view
-  already draws a pending network and the things beside it. What is really
-  missing is narrower and worth stating exactly: **a ghost carries no body**,
-  so any relationship a view derives from one is lost. Measured with a real
-  `gcp-basic` plan — the pending `nimbus-net` and its firewall rule drew, and
-  the two pending subnets did not appear inside it, because a subnet names its
-  network through `body.network` (`body.vpcId` on AWS, `parentId` on Azure)
-  and a ghost's body is empty. Carrying a parent hint on `PlanChange`, read
-  from the field each provider uses, is what would fix it.
+- **Plan overlays reach the network view, pending subnets included.** A ghost
+  still carries no body, so a relationship derived from one is lost — but the
+  relationship that matters is carried another way. A pending subnet's
+  `vpc_id` is listed under `after_unknown` exactly as its own id is, because
+  the network does not exist yet either; the plan keeps it in its
+  `configuration` section as a Terraform ADDRESS, which `PlanChange.References`
+  now carries. The network view resolves those against the other ghosts,
+  picking the one whose type is that cloud's network — addresses rather than
+  per-provider field names, so it needs no table to keep up to date. Only
+  `root_module`: a reference into a module call is a different shape, and a
+  wrong parent is worse than none.
+- **The network view DROPS a subnet it cannot place, where the topology view
+  shows it.** Subnets and networks are deliberately excluded from the orphan
+  list, so a subnet whose network is missing — pending or live — is simply not
+  drawn, while the topology view's rule is the opposite ("a create we cannot
+  place still shows, labelled with its Terraform address"). The two
+  disagreeing is a real inconsistency. Making subnets orphanable would change
+  what the view does with LIVE resources too, so it is recorded rather than
+  changed in passing.
 - **The Kubernetes view has been checked against the fixture and a real
   cluster on each of the three clouds**, including a workload in a namespace
   of its own. What it has not been checked against is a big cluster: the

@@ -29,6 +29,13 @@ export function planIndex(overlay) {
   return byID;
 }
 
+// ghostFor finds the ghost at a Terraform address, among a map of
+// resources. Exported because the network view resolves a pending
+// subnet's network this way -- by address, since neither has an id yet.
+export function ghostFor(resources, address) {
+  return resources.get(lower(GHOST_PREFIX + address)) || null;
+}
+
 // ghosts returns synthetic resources for the creates that have no ID yet,
 // parented to the resource group they name when that group is on screen.
 //
@@ -79,6 +86,13 @@ export function ghosts(overlay, resources, cloud = "azure") {
       ghost: true,
       planAction: "create",
       planAddress: c.address,
+      // What this pending resource points at, by Terraform address. The
+      // only place a plan says how two PENDING resources relate: a
+      // subnet's vpc_id is unknown exactly as its own id is, so the
+      // relationship survives only in the configuration section. A view
+      // that wants to nest one ghost inside another resolves these
+      // against the other ghosts' planAddress.
+      planRefs: c.references || [],
     });
   }
   return out;

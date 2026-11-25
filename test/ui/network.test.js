@@ -477,3 +477,136 @@ test("every class the network view draws is styled in the export", () => {
   assert.deepEqual(missing, [],
     "these classes draw on screen but have no rule in the exported SVG");
 });
+
+// A PENDING subnet inside a PENDING network.
+//
+// This is the one relationship a plan cannot express the usual way: a
+// subnet's vpc_id is listed under after_unknown exactly as its own id is,
+// because the network does not exist yet either. The plan carries it as a
+// Terraform ADDRESS in its configuration section instead, which is what
+// `references` on a change is.
+import { withGhosts, GHOST_PREFIX } from "../../internal/ui/static/plan.js";
+
+test("a pending subnet is drawn inside its pending network", () => {
+  const live = new Map();
+  const overlay = {
+    changes: [
+      {
+        address: "google_compute_network.main", action: "create",
+        type: "compute.googleapis.com/Network", name: "nimbus-net",
+      },
+      {
+        address: "google_compute_subnetwork.private", action: "create",
+        type: "compute.googleapis.com/Subnetwork", name: "nimbus-private",
+        references: ["google_compute_network.main"],
+      },
+    ],
+  };
+  const model = networkModel(withGhosts(overlay, live, "gcp"), "gcp");
+  assert.equal(model.vnets.length, 1, "the pending network should be drawn");
+  assert.equal(model.vnets[0].name, "nimbus-net");
+  assert.equal(model.vnets[0].subnets.length, 1,
+    "the pending subnet should be inside it, not an orphan");
+  assert.equal(model.vnets[0].subnets[0].name, "nimbus-private");
+  assert.equal(model.orphans.length, 0, "nothing should be left over");
+});
+
+// Without the reference there is nothing to go on, and NOT drawing it is
+// better than guessing which network was meant.
+//
+// Note what that means: this view drops an unplaceable subnet entirely,
+// because subnets and networks are deliberately excluded from the orphan
+// list -- the same thing it already did to a real subnet whose network is
+// missing. The topology view's rule is the opposite ("a create we cannot
+// place still shows"), and the two disagreeing is a real inconsistency,
+// recorded in docs/ROADMAP.md rather than changed here: making subnets
+// orphanable would change what the view does with LIVE resources too.
+test("a pending subnet with no reference is not placed, and not guessed at", () => {
+  const live = new Map();
+  const overlay = {
+    changes: [
+      { address: "google_compute_network.main", action: "create",
+        type: "compute.googleapis.com/Network", name: "nimbus-net" },
+      { address: "google_compute_subnetwork.private", action: "create",
+        type: "compute.googleapis.com/Subnetwork", name: "nimbus-private" },
+    ],
+  };
+  const model = networkModel(withGhosts(overlay, live, "gcp"), "gcp");
+  assert.equal(model.vnets[0].subnets.length, 0,
+    "no reference means no placement");
+  assert.equal(model.orphans.length, 0,
+    "and this view does not orphan subnets, as it does not for live ones");
+});
+
+// A reference to something that is NOT the network type must not be taken
+// for one. A subnet referencing a service account is ordinary.
+test("only a reference to the network type places a pending subnet", () => {
+  const live = new Map();
+  const overlay = {
+    changes: [
+      { address: "google_compute_network.main", action: "create",
+        type: "compute.googleapis.com/Network", name: "nimbus-net" },
+      { address: "google_service_account.app", action: "create",
+        type: "iam.googleapis.com/ServiceAccount", name: "app" },
+      { address: "google_compute_subnetwork.private", action: "create",
+        type: "compute.googleapis.com/Subnetwork", name: "nimbus-private",
+        references: ["google_service_account.app"] },
+    ],
+  };
+  const model = networkModel(withGhosts(overlay, live, "gcp"), "gcp");
+  assert.equal(model.vnets[0].subnets.length, 0,
+    "a service-account reference is not a network");
+});
+
+// The case that makes the type check load-bearing rather than defensive:
+// a subnet referencing BOTH, with the non-network first. Taking the first
+// reference and stopping would lose the network entirely -- and the first
+// version of the test above could not tell, because a wrong key and no
+// key both end in the subnet not being placed.
+test("a pending subnet finds its network among several references", () => {
+  const live = new Map();
+  const overlay = {
+    changes: [
+      { address: "google_compute_network.main", action: "create",
+        type: "compute.googleapis.com/Network", name: "nimbus-net" },
+      { address: "google_compute_address.egress", action: "create",
+        type: "compute.googleapis.com/Address", name: "egress-ip" },
+      { address: "google_compute_subnetwork.private", action: "create",
+        type: "compute.googleapis.com/Subnetwork", name: "nimbus-private",
+        // In the order the SERVER emits them, which is alphabetical by
+        // address -- so "google_compute_address.egress" really does come
+        // before the network, and taking the first reference and stopping
+        // would lose it.
+        references: ["google_compute_address.egress", "google_compute_network.main"] },
+    ],
+  };
+  const model = networkModel(withGhosts(overlay, live, "gcp"), "gcp");
+  assert.equal(model.vnets[0].subnets.length, 1,
+    "the network reference must be found past the others");
+});
+
+// A pending subnet whose network ALREADY EXISTS names it by id like any
+// other resource, so the descriptor still decides.
+test("a pending subnet in a live network still uses the descriptor", () => {
+  const NET = "http://localhost:4703/compute/v1/projects/p/global/networks/live-net";
+  const live = new Map([[NET.toLowerCase(), {
+    cloud: "gcp", id: NET, type: "compute.googleapis.com/Network",
+    name: "live-net", parentId: "", body: {},
+  }]]);
+  const overlay = {
+    changes: [{
+      address: "google_compute_subnetwork.private", action: "create",
+      type: "compute.googleapis.com/Subnetwork", name: "nimbus-private",
+      references: [],
+    }],
+  };
+  const map = withGhosts(overlay, live, "gcp");
+  // The ghost carries no body, so the descriptor finds no network and the
+  // subnet is not placed -- which is correct and worth pinning: a plan
+  // does not say which live network a pending subnet will join either,
+  // because the reference resolves to an id Terraform does not know yet,
+  // and inventing one would be a guess.
+  const model = networkModel(map, "gcp");
+  assert.equal(model.vnets[0].subnets.length, 0);
+  assert.ok(map.has((GHOST_PREFIX + "google_compute_subnetwork.private").toLowerCase()));
+});

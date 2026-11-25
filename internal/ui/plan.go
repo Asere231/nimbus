@@ -37,6 +37,21 @@ type PlanChange struct {
 	Type          string `json:"type,omitempty"`          // Microsoft.Network/virtualNetworks
 	Name          string `json:"name,omitempty"`          //
 	ResourceGroup string `json:"resourceGroup,omitempty"` // where a create will land
+
+	// References are the Terraform ADDRESSES this change depends on, kept
+	// only for addresses that are themselves pending changes.
+	//
+	// This is the one place a plan says how two PENDING resources relate.
+	// A subnet's `vpc_id` is listed under after_unknown exactly as its own
+	// id is -- the VPC does not exist yet, so neither does the value --
+	// and the relationship survives only in the configuration section, as
+	// `"references": ["aws_vpc.main.id", "aws_vpc.main"]`. Measured on a
+	// real gcp-basic plan.
+	//
+	// Addresses rather than per-provider field names, because a reference
+	// is Terraform's own notion and works for every provider without a
+	// table to keep up to date.
+	References []string `json:"references,omitempty"`
 }
 
 // Overlay is a whole plan, reduced.
@@ -57,7 +72,19 @@ type Overlay struct {
 type tfPlan struct {
 	FormatVersion    string `json:"format_version"`
 	TerraformVersion string `json:"terraform_version"`
-	ResourceChanges  []struct {
+	// Configuration is where a reference between two PENDING resources
+	// survives. Only root_module: a reference into a module call is a
+	// different shape, and reporting a wrong parent is worse than
+	// reporting none.
+	Configuration struct {
+		RootModule struct {
+			Resources []struct {
+				Address     string                     `json:"address"`
+				Expressions map[string]json.RawMessage `json:"expressions"`
+			} `json:"resources"`
+		} `json:"root_module"`
+	} `json:"configuration"`
+	ResourceChanges []struct {
 		Address string `json:"address"`
 		Type    string `json:"type"`
 		Name    string `json:"name"`
@@ -116,8 +143,58 @@ func ReadPlan(r io.Reader) (Overlay, error) {
 		}
 		out.Changes = append(out.Changes, change)
 	}
+	// References are resolved once every change is known, because only
+	// an address that is ITSELF pending is worth carrying: a reference to
+	// something that already exists is matched by ID like anything else.
+	pending := map[string]bool{}
+	for _, c := range out.Changes {
+		pending[c.Address] = true
+	}
+	refs := referencesByAddress(plan, pending)
+	for i := range out.Changes {
+		out.Changes[i].References = refs[out.Changes[i].Address]
+	}
+
 	sort.SliceStable(out.Changes, func(i, j int) bool { return out.Changes[i].Address < out.Changes[j].Address })
 	return out, nil
+}
+
+// referencesByAddress reads the configuration section for what each
+// resource points at.
+//
+// Terraform lists both `aws_vpc.main.id` and `aws_vpc.main` for one
+// reference, so an address is taken by matching against the changes that
+// exist rather than by parsing: trimming ".id" would be a guess about
+// attribute names, and a resource called `aws_vpc.id` would break it.
+func referencesByAddress(plan tfPlan, pending map[string]bool) map[string][]string {
+	out := map[string][]string{}
+	for _, res := range plan.Configuration.RootModule.Resources {
+		seen := map[string]bool{}
+		var list []string
+		for _, raw := range res.Expressions {
+			var expr struct {
+				References []string `json:"references"`
+			}
+			// An expression may be a nested block (an array or an object
+			// of further expressions) rather than one with references;
+			// those simply do not decode, which is not an error.
+			if json.Unmarshal(raw, &expr) != nil {
+				continue
+			}
+			for _, ref := range expr.References {
+				if !pending[ref] || seen[ref] || ref == res.Address {
+					continue
+				}
+				seen[ref] = true
+				list = append(list, ref)
+			}
+		}
+		if len(list) > 0 {
+			sort.Strings(list)
+			out[res.Address] = list
+		}
+	}
+	return out
 }
 
 // Summary is the one line `nimbus plan-view` prints.

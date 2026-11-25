@@ -18,6 +18,12 @@ Picking off deferred items from the roadmap's "Later", a tier at a time.
   has no root fallback to land in. The signature itself is still not
   verified — Nimbus holds no secret for a base credential — and
   `docs/ROADMAP.md` says so, with the one case that could be.
+- **A pending subnet is drawn inside its pending network.** The plan does
+  not say so the obvious way: a subnet's `vpc_id` is unknown exactly as its
+  own id is, because the network does not exist yet either. It keeps the
+  relationship in its `configuration` section as a Terraform address
+  instead, which the overlay now carries — addresses rather than
+  per-provider field names, so it works for every provider without a table.
 - **The plan overlay works for GCP, which it never had.** Every `google_*`
   type was missing from its tables, so a loaded plan drew each pending change
   as a bare Terraform address with no badge and no place on the graph — and

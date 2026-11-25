@@ -23,6 +23,7 @@
 
 import { el, fit } from "./dom.js";
 import { typeStyle, networkShape } from "./types.js";
+import { isGhost, ghostFor } from "./plan.js";
 
 // Geometry. A VNet box is wide because a subnet row has to hold a name, a
 // CIDR and two attachment chips without any of them being truncated.
@@ -106,7 +107,7 @@ export function networkModel(resources, cloud) {
   const subnetsByNetwork = new Map();
   for (const r of all) {
     if (!isType(r, shape.subnetType)) continue;
-    const netKey = shape.networkOf(r);
+    const netKey = networkKeyOf(r, resources, shape);
     const chips = (shape.chipsOf ? shape.chipsOf(r, all) : []).map((c) => {
       attached.add(lower(c.id));
       const target = byID.get(lower(c.id));
@@ -356,4 +357,32 @@ export function draw(svg, model, { selected, filter, onSelect }) {
     g.addEventListener("click", () => onSelect(lower(o.id)));
     g.addEventListener("keydown", (ev) => { if (ev.key === "Enter") onSelect(lower(o.id)); });
   }
+}
+
+
+// networkKeyOf is the network a subnet belongs to, as a key into the map
+// of networks.
+//
+// A real subnet NAMES its network, in whatever field its cloud uses, and
+// the descriptor knows which. A GHOST cannot: a pending subnet's vpc_id
+// is listed under after_unknown exactly as its own id is, because the
+// network does not exist yet either. The plan does carry the
+// relationship, but as a Terraform ADDRESS in its configuration section,
+// so a pending subnet is matched to a pending network by address.
+//
+// Cloud-neutral: which of the referenced addresses is the network is
+// decided by the descriptor's own networkType, not by a field name --
+// `test/ui/clouds.test.js` fails the build if a shared module keys on a
+// type string.
+export function networkKeyOf(subnet, resources, shape) {
+  if (!isGhost(subnet)) return shape.networkOf(subnet);
+  for (const address of subnet.planRefs || []) {
+    const target = ghostFor(resources, address);
+    if (target && lower(target.type) === shape.networkType) {
+      return lower(target.id);
+    }
+  }
+  // A pending subnet whose network is already live names it by id like
+  // any other, so the descriptor still gets a chance.
+  return shape.networkOf(subnet);
 }

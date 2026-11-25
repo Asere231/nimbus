@@ -1345,6 +1345,47 @@ jobs:
             exit 1
           fi
 
+          # --- the table's stream -------------------------------------
+          #
+          # Both writes above were made by the HANDLER, through boto3
+          # inside a container reaching Nimbus by AWS_ENDPOINT_URL -- so
+          # this is the stream seeing a cross-service write rather than
+          # one the test made itself.
+          stream=$(aws $E dynamodb describe-table --table-name nimbus-items \
+            --query 'Table.LatestStreamArn' --output text)
+          echo "stream=$stream"
+          case "$stream" in
+            *":table/nimbus-items/stream/"*) ;;
+            *) echo "::error::the table reports no usable LatestStreamArn: '$stream'"; exit 1 ;;
+          esac
+
+          shard=$(aws $E dynamodbstreams describe-stream --stream-arn "$stream" \
+            --query 'StreamDescription.Shards[0].ShardId' --output text)
+          iter=$(aws $E dynamodbstreams get-shard-iterator --stream-arn "$stream" \
+            --shard-id "$shard" --shard-iterator-type TRIM_HORIZON \
+            --query ShardIterator --output text)
+          aws $E dynamodbstreams get-records --shard-iterator "$iter" > records.json
+          cat records.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("records.json"))
+          recs = d["Records"]
+          assert len(recs) == 2, f"expected two stream records, got {len(recs)}"
+          assert all(r["eventName"] == "INSERT" for r in recs), \
+              f"expected two INSERTs, got {[r['eventName'] for r in recs]}"
+          ids = sorted(r["dynamodb"]["Keys"]["id"]["S"] for r in recs)
+          assert ids == ["ci", "via-alias"], f"the stream saw {ids}"
+          # NEW_AND_OLD_IMAGES, so an INSERT carries the new image and no
+          # old one -- the view type deciding what travels is the whole
+          # reason the setting exists.
+          for r in recs:
+              assert "NewImage" in r["dynamodb"], "an INSERT carries no NewImage"
+              assert "OldImage" not in r["dynamodb"], "an INSERT carries an OldImage"
+          # A next iterator must ALWAYS come back: an absent one means the
+          # shard is closed and a consumer stops polling.
+          assert d.get("NextShardIterator"), "GetRecords returned no NextShardIterator"
+          PY
+
           terraform destroy -auto-approve -input=false
 
       - name: No containers left behind

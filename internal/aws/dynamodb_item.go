@@ -112,6 +112,7 @@ func (s *Server) putItem(w http.ResponseWriter, req map[string]any) *apiError {
 		return aerr
 	}
 	old := s.items.put(t.TableName, key, item)
+	s.recordChange(t, item, old)
 
 	out := map[string]any{}
 	if str(req["ReturnValues"]) == "ALL_OLD" && old != nil {
@@ -189,6 +190,7 @@ func (s *Server) updateItem(w http.ResponseWriter, req map[string]any) *apiError
 		return aerr
 	}
 	s.items.put(t.TableName, key, updated)
+	s.recordChange(t, updated, current)
 
 	out := map[string]any{}
 	switch str(req["ReturnValues"]) {
@@ -239,6 +241,11 @@ func (s *Server) deleteItem(w http.ResponseWriter, req map[string]any) *apiError
 	// Deleting an item that is not there SUCCEEDS, which is what makes a
 	// destroy idempotent -- the same rule S3 objects follow.
 	old := s.items.delete(t.TableName, key)
+	// Only a delete that really removed something is a change. Deleting
+	// an absent item succeeds, and a consumer must not hear about it.
+	if old != nil {
+		s.recordChange(t, nil, old)
+	}
 	out := map[string]any{}
 	if str(req["ReturnValues"]) == "ALL_OLD" && old != nil {
 		out["Attributes"] = old
@@ -450,7 +457,8 @@ func (s *Server) batchWriteItem(w http.ResponseWriter, req map[string]any) *apiE
 				if aerr != nil {
 					return aerr
 				}
-				s.items.put(t.TableName, key, item)
+				old := s.items.put(t.TableName, key, item)
+				s.recordChange(t, item, old)
 				continue
 			}
 			if del, ok := write["DeleteRequest"].(map[string]any); ok {
@@ -462,7 +470,9 @@ func (s *Server) batchWriteItem(w http.ResponseWriter, req map[string]any) *apiE
 				if aerr != nil {
 					return aerr
 				}
-				s.items.delete(t.TableName, key)
+				if old := s.items.delete(t.TableName, key); old != nil {
+					s.recordChange(t, nil, old)
+				}
 				continue
 			}
 			return dynamoBadRequest("a batch write must be a PutRequest or a DeleteRequest")

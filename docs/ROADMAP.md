@@ -584,7 +584,18 @@ deleted, because the decisions themselves are worth knowing:
   and concurrency settings. An
   `Event` invocation runs immediately rather than being queued, so there is
   no retry behaviour to observe.
-- **DynamoDB has no streams, no TTL expiry and no index projections.** A
+- **DynamoDB streams work; what has no consumer is the stream.** Every write
+  to a stream-enabled table is recorded, `StreamViewType` decides what each
+  record carries, `LatestStreamArn` and `LatestStreamLabel` are on the table
+  description, and `aws dynamodbstreams` reads the records back. **One shard
+  per table**, which is a simplification with a useful property: real
+  DynamoDB only orders records within a shard, so one shard gives a total
+  order — more than real DynamoDB promises. Records are in memory and bounded
+  at 10,000, so they do not survive a restart, which is what a real stream's
+  24-hour expiry produces anyway. Nothing splits a shard and nothing expires
+  a record. And there is **no event source mapping**, so nothing invokes a
+  Lambda from a stream: you read it yourself.
+- **DynamoDB has no TTL expiry and no index projections.** A
   secondary index works because its keys are ordinary attributes of the same
   items, so a query on it needs no separate storage — but a `KEYS_ONLY`
   index returns the whole item, which is too much rather than too little.
@@ -693,6 +704,12 @@ deleted, because the decisions themselves are worth knowing:
   Nimbus signs — all stdlib — but that is a token server rather than a flag,
   and it needs a decision about `admin_enabled = false` (azurerm's default),
   where real ACR has no admin credentials and only an AAD token gets in.
+  **That decision is taken** (owner, Nov 2026): such a registry issues a
+  token to any caller rather than refusing, so `docker login` with anything
+  works and the default configuration stays usable — the same rule as
+  "an unmapped caller is unrestricted" under `--enforce-iam`. Refusing
+  would be more faithful and would make most real configurations unable to
+  push.
 - **Azure role assignments ARE enforced** since Milestone 14, behind
   `--enforce-iam`, including scope inheritance from a subscription or
   resource group — and since Milestone 17 that includes `dataActions` on

@@ -23,6 +23,7 @@ tf.log
 /examples/terraform/*/show.json
 /examples/terraform/*/version*.txt
 /examples/terraform/*/logs.txt
+/examples/terraform/*/records.json
 
 # A Cloud Function's vendored dependencies, installed by the documented pip
 # step before an apply. Not committed, for the same reason the Azure function

@@ -94,6 +94,10 @@ type Server struct {
 	// items holds DynamoDB's rows, beside the tables themselves in the
 	// store -- a table is a resource, its items are data.
 	items *itemStore
+	// streams is the change log a stream-enabled table keeps. In memory
+	// only, for the reason CloudWatch log events are: nothing persists
+	// them, and an empty stream reads as "nothing has been written yet".
+	streams *streamStore
 	// lambda runs the functions, and logs holds what they printed.
 	lambda *funcs.Engine
 	logs   *logStore
@@ -125,6 +129,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 	}
 	s := &Server{cfg: cfg, store: store, bus: bus,
 		objects: newObjectStore(cfg.DataDir), items: newItemStore(cfg.DataDir),
+		streams: newStreamStore(),
 		uploads: newMultipartStore(),
 		logs:    newLogStore(), policies: newPolicyCache()}
 	s.lambda = funcs.New(funcs.Config{

@@ -41,9 +41,15 @@ type dynamoTable struct {
 	GlobalSecondaryIndexes []map[string]any `json:"GlobalSecondaryIndexes,omitempty"`
 	LocalSecondaryIndexes  []map[string]any `json:"LocalSecondaryIndexes,omitempty"`
 	StreamSpecification    map[string]any   `json:"StreamSpecification,omitempty"`
-	SSEDescription         map[string]any   `json:"SSEDescription,omitempty"`
-	TableClassSummary      map[string]any   `json:"TableClassSummary,omitempty"`
-	DeletionProtection     bool             `json:"DeletionProtectionEnabled"`
+	// Filled by withCounts rather than stored, because both are DERIVED
+	// from the table and the provider reads them on every refresh: a
+	// stored copy is a second thing to keep in step, and a generated one
+	// would be a permanent diff.
+	LatestStreamArn    string         `json:"LatestStreamArn,omitempty"`
+	LatestStreamLabel  string         `json:"LatestStreamLabel,omitempty"`
+	SSEDescription     map[string]any `json:"SSEDescription,omitempty"`
+	TableClassSummary  map[string]any `json:"TableClassSummary,omitempty"`
+	DeletionProtection bool           `json:"DeletionProtectionEnabled"`
 
 	// Kept beside the table rather than returned by DescribeTable, because
 	// that is where the real API keeps them: each has its own call. The
@@ -156,6 +162,15 @@ func (s *Server) withCounts(t *dynamoTable) *dynamoTable {
 	out := *t
 	out.ItemCount, out.TableSizeBytes = s.items.stats(t.TableName)
 	out.NimbusTags, out.NimbusTTL, out.NimbusPITR = nil, nil, false
+	// A stream-enabled table reports its stream here, which is where the
+	// provider reads `stream_arn` and `stream_label` from -- and what an
+	// aws_lambda_event_source_mapping is then given. A table with no
+	// stream reports neither, rather than an empty string, because an
+	// empty object echoed back is not the same as absent.
+	if streamViewTypeOf(t) != "" {
+		out.LatestStreamArn = s.streamARN(t)
+		out.LatestStreamLabel = streamLabel(t)
+	}
 	return &out
 }
 
@@ -178,6 +193,9 @@ func (s *Server) deleteDynamoTable(w http.ResponseWriter, req map[string]any) *a
 			Message: "Table cannot be deleted while DeletionProtectionEnabled is set to True"}
 	}
 	s.items.dropTable(t.TableName)
+	// The stream goes with the table, or a table created again under the
+	// same name would inherit the previous one's change log.
+	s.streams.dropTable(t.TableName)
 	_, _ = s.store.Delete(t.TableArn)
 	t.TableStatus = "DELETING"
 	writeJSON(w, 200, map[string]any{"TableDescription": s.withCounts(t)})

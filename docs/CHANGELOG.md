@@ -18,6 +18,18 @@ Picking off deferred items from the roadmap's "Later", a tier at a time.
   has no root fallback to land in. The signature itself is still not
   verified — Nimbus holds no secret for a base credential — and
   `docs/ROADMAP.md` says so, with the one case that could be.
+- **DynamoDB has streams.** `StreamSpecification` round-tripped as a setting
+  and nothing recorded a thing. Every write to a stream-enabled table is now
+  appended as an INSERT, MODIFY or REMOVE carrying the item's keys and
+  whichever images `StreamViewType` asks for, `LatestStreamArn` and
+  `LatestStreamLabel` are on the table description (so `stream_arn` reaches
+  Terraform state), and `aws dynamodbstreams` reads it all back. One shard
+  per table — which gives a total order, more than real DynamoDB promises.
+  An iterator type nobody implemented is refused rather than defaulted,
+  because a cursor that silently started somewhere else makes a consumer
+  miss records or replay them and neither looks like an error. There is no
+  event source mapping, so nothing invokes a function from a stream: you
+  read it yourself.
 - **Lambda publishes versions and has aliases.** `publish = true` and
   `aws_lambda_alias` are ordinary provider resources and neither could
   apply. A published version is an immutable snapshot of the configuration

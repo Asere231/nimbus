@@ -79,6 +79,18 @@ func (s *Server) serveDynamoDB(w http.ResponseWriter, r *http.Request) string {
 		req = map[string]any{}
 	}
 
+	// DynamoDB Streams is a SEPARATE API sharing this endpoint and this
+	// credential scope; the target's PREFIX is what tells them apart.
+	// Routing on the scope alone answers every Streams call as if it were
+	// a table call. See dynamodb_streams.go.
+	if strings.HasPrefix(target, streamsTargetPrefix) {
+		if aerr := s.serveDynamoStreams(w, action, req); aerr != nil {
+			writeDynamoError(w, aerr)
+			return "dynamodb streams " + action + ": " + aerr.Code
+		}
+		return ""
+	}
+
 	var aerr *apiError
 	switch action {
 	case "CreateTable":

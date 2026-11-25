@@ -90,6 +90,13 @@ resource "aws_dynamodb_table" "items" {
     type = "S"
   }
 
+  # Every write to this table is appended to a stream a consumer can read
+  # back. Nimbus has NO automatic consumer -- there is no event source
+  # mapping, so nothing invokes the function from the stream; you read it
+  # yourself with `aws dynamodbstreams`. See the stream_arn output.
+  stream_enabled   = true
+  stream_view_type = "NEW_AND_OLD_IMAGES"
+
   tags = { Project = "nimbus" }
 }
 
@@ -176,6 +183,10 @@ output "invoke" {
 
 output "invoke_prod" {
   value = "printf '{\"id\":\"2\"}' > payload.json && aws --endpoint-url ${var.nimbus_endpoint} lambda invoke --function-name ${aws_lambda_function.writer.function_name} --qualifier ${aws_lambda_alias.prod.name} --payload fileb://payload.json out.json && cat out.json"
+}
+
+output "read_the_stream" {
+  value = "aws --endpoint-url ${var.nimbus_endpoint} dynamodbstreams get-records --shard-iterator $(aws --endpoint-url ${var.nimbus_endpoint} dynamodbstreams get-shard-iterator --stream-arn ${aws_dynamodb_table.items.stream_arn} --shard-id $(aws --endpoint-url ${var.nimbus_endpoint} dynamodbstreams describe-stream --stream-arn ${aws_dynamodb_table.items.stream_arn} --query 'StreamDescription.Shards[0].ShardId' --output text) --shard-iterator-type TRIM_HORIZON --query ShardIterator --output text)"
 }
 
 output "scan" {

@@ -116,6 +116,15 @@ func (s *Server) jsonTarget(r *http.Request, service, bodyKey string, arn func(s
 }
 
 func (s *Server) dynamoTarget(r *http.Request) (target, bool) {
+	// Streams shares the service prefix (`dynamodb:GetRecords`) but names
+	// a STREAM, so its resource comes out of StreamArn rather than being
+	// built from a table name -- which the body for these calls does not
+	// carry. ListStreams may name a table, and a GetRecords names neither:
+	// its only argument is an opaque iterator, so there is nothing to
+	// narrow to and "*" is the honest answer, which real AWS also requires.
+	if strings.HasPrefix(r.Header.Get("X-Amz-Target"), streamsTargetPrefix) {
+		return s.jsonTarget(r, "dynamodb", "StreamArn", func(arn string) string { return arn })
+	}
 	return s.jsonTarget(r, "dynamodb", "TableName", s.dynamoTableARN)
 }
 

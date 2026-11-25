@@ -51,6 +51,17 @@ Picking off deferred items from the roadmap's "Later", a tier at a time.
   failure it could see said nothing but "Failed"; real ARM puts it in
   `properties.error`. Found by a test whose own failure message read
   "the deployment failed: &lt;nil&gt;".
+- **DynamoDB TTL expires items.** `UpdateTimeToLive` round-tripped as a
+  setting and nothing ever expired. A background sweeper takes them now, and
+  the removal reaches the table's stream as an ordinary REMOVE stamped with
+  the service principal — which is the only thing distinguishing an expiry
+  from a client's own delete, and the whole basis of the archive-what-expired
+  pattern. Reads are deliberately not filtered: that is DynamoDB's own model,
+  and filtering would make an item vanish with no record of it going.
+  **The Streams API and the Lambda event spell that identity differently** —
+  `PrincipalId`/`Type` against `principalId`/`type` — and each client finds
+  nothing in the other's: with lowercase keys `aws dynamodbstreams
+  get-records` reported an empty object.
 - **A DynamoDB stream invokes a Lambda.** `aws_lambda_event_source_mapping`
   is the poller between the two halves this project had built separately —
   and it is a poller, which is the part people get wrong: a function does

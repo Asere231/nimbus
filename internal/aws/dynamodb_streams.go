@@ -61,6 +61,9 @@ type streamRecord struct {
 	EventSource  string         `json:"eventSource"`
 	AWSRegion    string         `json:"awsRegion"`
 	Dynamodb     map[string]any `json:"dynamodb"`
+	// UserIdentity is present only on a TTL expiry, where real DynamoDB
+	// stamps principalId "dynamodb.amazonaws.com" / type "Service".
+	UserIdentity map[string]any `json:"userIdentity,omitempty"`
 
 	// sequence is the ordinal this record was appended at, kept outside
 	// the wire shape so an iterator can be resolved without parsing the
@@ -90,6 +93,14 @@ func newStreamStore() *streamStore {
 // append records one change. Called with the new and old images, either of
 // which may be nil: a create has no old image and a delete has no new one.
 func (s *streamStore) append(table, region, viewType string, keys, newImage, oldImage map[string]any) {
+	s.appendAs(table, region, viewType, keys, newImage, oldImage, nil)
+}
+
+// appendAs records a change, optionally stamped with the userIdentity a
+// TTL expiry carries. That field is the ONLY thing distinguishing an
+// expiry from a client's own delete in the stream, which is what a
+// consumer archiving expired items reads.
+func (s *streamStore) appendAs(table, region, viewType string, keys, newImage, oldImage, identity map[string]any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.seq++
@@ -116,6 +127,7 @@ func (s *streamStore) append(table, region, viewType string, keys, newImage, old
 	}
 
 	s.records[table] = append(s.records[table], streamRecord{
+		UserIdentity: identity,
 		EventID:      stableID(table+"/"+strconv.FormatInt(seq, 10), 32),
 		EventName:    streamEventName(newImage, oldImage),
 		EventVersion: "1.1",
@@ -237,6 +249,12 @@ func streamViewTypeOf(t *dynamoTable) string {
 // to notice. The keys come from the table's own KeySchema, never from
 // guessing which attributes look key-shaped.
 func (s *Server) recordChange(t *dynamoTable, newImage, oldImage map[string]any) {
+	s.recordChangeAs(t, newImage, oldImage, nil)
+}
+
+// recordChangeAs is recordChange with a userIdentity, which a TTL
+// expiry carries and a client's own write does not.
+func (s *Server) recordChangeAs(t *dynamoTable, newImage, oldImage, identity map[string]any) {
 	viewType := streamViewTypeOf(t)
 	if viewType == "" {
 		return
@@ -245,8 +263,8 @@ func (s *Server) recordChange(t *dynamoTable, newImage, oldImage map[string]any)
 	if image == nil {
 		image = oldImage
 	}
-	s.streams.append(t.TableName, s.cfg.Region, viewType,
-		keyAttributesOf(t, image), newImage, oldImage)
+	s.streams.appendAs(t.TableName, s.cfg.Region, viewType,
+		keyAttributesOf(t, image), newImage, oldImage, identity)
 }
 
 // keyAttributesOf is just the key attributes of an item, which is what
@@ -283,16 +301,25 @@ func (s *Server) serveDynamoStreams(w http.ResponseWriter, action string, req ma
 	return invalidAction("DynamoDB Streams", action)
 }
 
-// streamTables is every table with a stream enabled.
-func (s *Server) streamTables() []*dynamoTable {
+// allDynamoTables is every table in the store.
+func (s *Server) allDynamoTables() []*dynamoTable {
 	var out []*dynamoTable
 	for _, res := range s.store.List(func(r *core.Resource) bool { return r.Type == typeDynamoTable }) {
 		var t dynamoTable
 		if json.Unmarshal(res.Body, &t) != nil {
 			continue
 		}
-		if streamViewTypeOf(&t) != "" {
-			out = append(out, &t)
+		out = append(out, &t)
+	}
+	return out
+}
+
+// streamTables is every table with a stream enabled.
+func (s *Server) streamTables() []*dynamoTable {
+	var out []*dynamoTable
+	for _, t := range s.allDynamoTables() {
+		if streamViewTypeOf(t) != "" {
+			out = append(out, t)
 		}
 	}
 	return out

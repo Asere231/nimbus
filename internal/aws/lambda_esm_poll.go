@@ -209,7 +209,7 @@ func (s *Server) invokeForMapping(ctx context.Context, m *eventSourceMapping, bo
 func streamEventRecords(records []streamRecord, eventSourceARN string) []any {
 	out := make([]any, 0, len(records))
 	for _, rec := range records {
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			"eventID":        rec.EventID,
 			"eventName":      rec.EventName,
 			"eventVersion":   rec.EventVersion,
@@ -217,7 +217,13 @@ func streamEventRecords(records []streamRecord, eventSourceARN string) []any {
 			"awsRegion":      rec.AWSRegion,
 			"dynamodb":       rec.Dynamodb,
 			"eventSourceARN": eventSourceARN,
-		})
+		}
+		// Only a TTL expiry has one, and a consumer archiving expired
+		// items reads exactly this to tell an expiry from a delete.
+		if rec.UserIdentity != nil {
+			entry["userIdentity"] = lambdaUserIdentity(rec.UserIdentity)
+		}
+		out = append(out, entry)
 	}
 	return out
 }

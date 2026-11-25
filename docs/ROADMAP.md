@@ -630,11 +630,21 @@ deleted, because the decisions themselves are worth knowing:
   the difference is visible in `LastProcessingResult` rather than silent.
   No filter criteria, no bisect-on-error, no on-failure destination, no
   parallelisation factor.
-- **DynamoDB has no TTL expiry and no index projections.** A
+- **DynamoDB TTL expires items, and the removal reaches the stream.** A
+  background sweeper deletes items whose TTL attribute has passed, stamped
+  with the service principal that distinguishes an expiry from a client's own
+  delete — which is what a consumer archiving expired items reads. Reads are
+  NOT filtered, because DynamoDB's own model is a background deletion and
+  filtering would make an item vanish with no record of it going. Nimbus
+  sweeps every second where real DynamoDB takes up to 48 hours: prompter is
+  the useful direction for an emulator and cannot hide a bug. An attribute
+  that is not a readable unix time leaves the item alone, as real DynamoDB
+  does — deleting too much is the one mistake here that cannot be undone.
+- **DynamoDB has no index projections.** A
   secondary index works because its keys are ordinary attributes of the same
   items, so a query on it needs no separate storage — but a `KEYS_ONLY`
   index returns the whole item, which is too much rather than too little.
-  `UpdateTimeToLive` round-trips as a setting; nothing ever expires. Nested
+  Nested
   attribute paths (`a.b`, `a[0]`), parentheses and `size()` in an expression
   are refused rather than guessed at.
 - **CloudWatch Logs keeps 10,000 events per stream, in memory.** They do not

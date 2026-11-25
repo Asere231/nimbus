@@ -188,6 +188,11 @@ func (s *Server) Start() func() {
 		done()
 		s.k3s.Watch(ctx)
 	}()
+	// TTL is a BACKGROUND deletion, not a read-time filter: an expired
+	// item is still there until the sweeper takes it, and its removal
+	// reaches the table's stream as an ordinary REMOVE -- which is what
+	// the pattern people use TTL for depends on. See dynamodb_ttl.go.
+	go s.startTTLSweeper(ctx)
 	return cancel
 }
 

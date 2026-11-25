@@ -104,16 +104,18 @@ func (s *Server) rootCaller() caller {
 
 // accessKeyOf is the access key id the request signed with, from the
 // Authorization header or from a presigned URL's query parameter.
+//
+// All three spellings, which matters more than it looks: SigV2's
+// `AWSAccessKeyId` was missing, so a URL from `aws s3 presign` -- which
+// under aws-cli 1.x signs with SigV2, not SigV4 -- resolved to ANONYMOUS
+// and was judged against a resource policy instead of against the
+// permissions of whoever signed it. A presigned URL exists to carry its
+// signer's authority; dropping the key throws that away. See presign.go.
 func accessKeyOf(r *http.Request) string {
 	if c := parseAuthorization(r.Header.Get("Authorization")); c.AccessKey != "" {
 		return c.AccessKey
 	}
-	if q := r.URL.Query().Get("X-Amz-Credential"); q != "" {
-		if i := strings.Index(q, "/"); i > 0 {
-			return q[:i]
-		}
-	}
-	return ""
+	return presignAccessKey(r.URL.Query())
 }
 
 // callerForKey maps an access key id to a principal, by the two rules

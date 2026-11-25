@@ -2089,6 +2089,53 @@ jobs:
           fi
           terraform destroy -auto-approve -input=false
 
+      # A presigned URL's expiry, both directions. Worth having on THIS
+      # runner specifically: aws-cli v2 presigns with SigV4 where the v1
+      # this was developed against emits SigV2, so the two legs cover the
+      # two wire forms between them -- the third time the two CLI versions
+      # have differed.
+      - name: a presigned URL expires
+        env:
+          AWS_ACCESS_KEY_ID: nimbus
+          AWS_SECRET_ACCESS_KEY: nimbus
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ENDPOINT_URL: http://localhost:4702
+        run: |
+          set -euo pipefail
+          aws s3 mb s3://presign-ci
+          echo 'hello from a presigned url' > ps.txt
+          aws s3 cp ps.txt s3://presign-ci/ps.txt
+
+          url=$(aws s3 presign s3://presign-ci/ps.txt --expires-in 1)
+          echo "presigned: $url"
+          sleep 3
+          body=$(curl -s "$url")
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$url")
+          echo "$body"
+          if [ "$code" != "403" ]; then
+            echo "::error::an expired presigned URL answered $code, expected 403"
+            exit 1
+          fi
+          case "$body" in
+            *"Request has expired"*) ;;
+            *) echo "::error::the refusal does not say the request expired"; exit 1 ;;
+          esac
+          case "$body" in
+            *"hello from a presigned url"*)
+              echo "::error::an expired presigned URL served the object"; exit 1 ;;
+          esac
+
+          # The control: an emulator that refused every presigned URL
+          # would pass everything above.
+          fresh=$(aws s3 presign s3://presign-ci/ps.txt --expires-in 600)
+          got=$(curl -sf "$fresh")
+          if [ "$got" != "hello from a presigned url" ]; then
+            echo "::error::a valid presigned URL did not serve the object: $got"
+            exit 1
+          fi
+          aws s3 rm s3://presign-ci/ps.txt
+          aws s3 rb s3://presign-ci
+
       # Both directions. An emulator that refused everything would pass
       # the first half of this, which is why the second half is here.
       - name: an apply that must FAIL, and then succeed

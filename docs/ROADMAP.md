@@ -597,9 +597,15 @@ deleted, because the decisions themselves are worth knowing:
   shows what this process started. A ranged GET honours one range; a
   multi-range request is answered with the whole object rather than a
   `multipart/byteranges` body, because no client Nimbus serves sends one.
-- **No presigned-URL verification.** A presigned request is routed by its
-  `X-Amz-Credential` and then served like any other; the signature and the
-  expiry are not checked, like every other signature here.
+- **A presigned URL's signature is not verified, though its expiry and its
+  identity now are.** An expired URL is refused with S3's own `AccessDenied`
+  / "Request has expired", in both the SigV2 form `aws s3 presign` emits by
+  default and the SigV4 form, and the key in the URL names the principal
+  whose permissions are checked. The signature itself cannot be recomputed:
+  base credentials here have no secret at all. A key minted by
+  `sts:AssumeRole` does have a derived one, so those alone could be
+  verified, and deliberately are not — verifying one form and not the other
+  would make a failure mean two different things.
 - **Runs are inferred from gaps, not announced.** `core.RunGap` is 30 s,
   measured against azurerm's silent ~20 s resource-group wait. Two things
   done within half a minute of each other merge into one run, and a pause

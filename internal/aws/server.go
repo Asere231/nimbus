@@ -310,6 +310,19 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) string {
 	}
 	service := serviceOf(r)
 
+	// A presigned URL's deadline, checked before anything else looks at
+	// the request. This is AUTHENTICATION rather than authorization -- an
+	// expired URL is not a caller whose permissions are in question, it
+	// is a credential that has stopped being one -- so it is enforced
+	// whether or not --enforce-iam is on, exactly as a storage SAS is on
+	// the Azure side. A request carrying no presigned credentials is
+	// untouched. See presign.go.
+	if e := checkPresign(r, time.Now()); e != nil {
+		w.Header().Set(deniedReasonHeader, e.Message)
+		s.writeServiceError(w, service, e)
+		return "presigned URL refused: " + e.Message
+	}
+
 	// Authorization, in one place in front of every service rather than
 	// as a call each handler has to remember -- a handler that forgets to
 	// ask would be a silent grant. With --enforce-iam off this returns

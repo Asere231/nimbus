@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+Picking off deferred items from the roadmap's "Later", a tier at a time.
+
+- **A presigned URL's expiry is enforced, and its identity is honoured.**
+  Both were missing and either one alone made presigning useless locally:
+  a URL minted with `--expires-in 1` still served its object minutes
+  later, and `AWSAccessKeyId` — SigV2's spelling, which is what
+  `aws s3 presign` emits under aws-cli 1.x — was not read at all, so a
+  presigned request resolved to **anonymous**, throwing away the authority
+  of whoever signed it. An expired URL is now refused with S3's own
+  `AccessDenied` / "Request has expired", quoting both times, in the SigV2
+  and the SigV4 form; the key names the principal whose permissions are
+  checked. Enforced whether or not `--enforce-iam` is on, as a storage SAS
+  is on the Azure side, because a presigned URL needs no principal and so
+  has no root fallback to land in. The signature itself is still not
+  verified — Nimbus holds no secret for a base credential — and
+  `docs/ROADMAP.md` says so, with the one case that could be.
+- **A GCP role may not grant `setIamPolicy` by accident.** Four bundled
+  roles were expressed as wildcards broad enough to hand out the single
+  worst permission to be loose about. `roles/cloudfunctions.developer` and
+  `roles/cloudfunctions.viewer` are corrected against Google's published
+  lists, and `TestNoBundledRoleGrantsIAMByAccident` asks through the
+  production evaluator so the catalogue cannot drift back.
+
 ## 0.24.0 — 2026-11-25
 
 Milestone 24: GCP runs code, so **all three clouds do** — and none of them

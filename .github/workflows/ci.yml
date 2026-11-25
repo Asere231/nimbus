@@ -232,6 +232,166 @@ jobs:
   # nests the JWK under `key` (azurerm never lists keys), a certificate create
   # must answer 202 and not 200 (azurerm tolerates 200), and the sign/verify
   # round trip itself, which azurerm never performs.
+  # GCP runs code: Cloud Functions Gen 2, driven by Terraform and then by
+  # gcloud.
+  #
+  # Both clients, because gcloud needed FOUR endpoints the provider never asks
+  # for -- a runtime catalogue, an upload URL, and two pre-flight APIs that
+  # otherwise reach the real Google. "The provider applies cleanly" is not the
+  # same claim as "the service works".
+  gcp-functions:
+    name: terraform gcp-functions (Cloud Functions + gcloud)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: The base image, pre-pulled
+        run: |
+          # Pre-pulled so `docker build` never reaches a registry, which is
+          # the one thing this project will not do at deploy time.
+          docker pull python:3.11-slim
+
+      - name: Vendor the function's dependencies
+        working-directory: examples/terraform/gcp-functions
+        run: |
+          set -euo pipefail
+          # A Cloud Function's source carries its own dependencies here.
+          # Real Cloud Functions installs requirements.txt during a REMOTE
+          # BUILD, and a remote build is the one thing an offline emulator
+          # cannot have -- so the archive has to bring the Functions
+          # Framework, exactly as the azure-functions example brings
+          # azure-functions.
+          pip install --target src -r src/requirements.txt
+          # The console script is present and UNUSABLE: its shebang is the
+          # absolute path of the interpreter that ran pip, so in the
+          # container it fails with "no such file or directory" naming a
+          # script that exists. The Dockerfile runs `python -m` instead;
+          # this asserts the module is importable, which is what that needs.
+          test -f src/functions_framework/__main__.py
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          ./bin/nimbus cert
+          ./bin/nimbus start --clouds gcp &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: Apply, curl the function, and plan clean
+        working-directory: examples/terraform/gcp-functions
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          URL=$(terraform output -raw function_url)
+          body=$(curl -sf "$URL?name=ci")
+          echo "$body"
+          # The handler's own output, so the real Functions Framework out of
+          # the archive is what served it.
+          echo "$body" | grep -q "hello ci from a cloud function"
+          # PORT comes from the engine and FUNCTION_TARGET from
+          # buildConfig.entryPoint; a handler reads both.
+          echo "$body" | grep -q '"port": "8080"'
+          echo "$body" | grep -q '"target": "hello"'
+
+          # The handler's print() reaches the container console.
+          docker logs "$(docker ps --filter label=nimbus.service=nimbus-hello -q)" 2>&1 | grep -q "hello called for ci"
+
+          # Clean, or a derived value is changing between reads.
+          terraform plan -detailed-exitcode -input=false
+
+      # gcloud is preinstalled on GitHub's Ubuntu runners.
+      - name: gcloud functions deploy, list and delete
+        run: |
+          set -euo pipefail
+          ./bin/nimbus gcp register --run
+          cd examples/terraform/gcp-functions
+
+          # --quiet, and NOT `yes n |` or --no-allow-unauthenticated. Two
+          # traps, both measured here.
+          #
+          # `yes n | cmd` under `set -o pipefail` ALWAYS reports failure,
+          # because `yes` is killed by SIGPIPE the moment cmd exits: the
+          # deploy succeeded and the step failed anyway, with the deploy's own
+          # happy output printed by the error branch as the evidence.
+          #
+          # And --no-allow-unauthenticated is not the same as declining the
+          # prompt. The explicit flag makes gcloud RECONCILE the backing
+          # Cloud Run service's IAM -- GET .../services/{n}:getIamPolicy on
+          # the v1 run endpoint, which Nimbus does not serve -- while
+          # declining skips IAM entirely. --quiet defaults the prompt to no
+          # and asks for no policy.
+          gcloud functions deploy nimbus-gcloud --gen2 --runtime=python311 \
+            --region=us-central1 --source=src --entry-point=hello --trigger-http \
+            --quiet --log-http > /tmp/gcloud.log 2>&1 || { tail -40 /tmp/gcloud.log; exit 1; }
+
+          # NOTHING may reach the real Google. Without the serviceusage and
+          # cloudbuild overrides, gcloud made four requests to
+          # googleapis.com in the middle of a local deploy and came back 403
+          # and 401 -- so this is the assertion that keeps them wired.
+          #
+          # The HOST of each request, not the log as a whole, and two reasons
+          # why. --log-http writes gzipped response bodies, so the file is
+          # BINARY and a plain grep over it is unreliable (hence -a). And a
+          # request PATH legitimately contains googleapis.com: asking Service
+          # Usage about run.googleapis.com puts the service's name in the URL,
+          # so grepping the uri line matches three times while every request
+          # went to localhost. Checking the host is the only form that means
+          # what it says.
+          hosts=$(grep -a '^uri:' /tmp/gcloud.log | sed 's|^uri: https*://||; s|/.*||' | sort -u)
+          echo "hosts gcloud talked to:"; echo "$hosts"
+          if echo "$hosts" | grep -q 'googleapis.com'; then
+            echo "FAIL: gcloud reached the real Google"
+            exit 1
+          fi
+          test -n "$hosts"
+
+          gcloud functions describe nimbus-gcloud --region=us-central1 --gen2 \
+            --format="value(state)" | grep -q ACTIVE
+          # The gcloud-deployed function really answers.
+          curl -sf "http://localhost:4703/_nimbus/functions/nimbus-gcloud" | grep -q "cloud function"
+
+          # A clean listing: gcloud reads the v1 and v2 lists and merges
+          # them, so a 404 on the Gen 1 list printed an error beside a
+          # listing that had worked.
+          gcloud functions list > /tmp/list.log 2>&1
+          cat /tmp/list.log
+          grep -q nimbus-gcloud /tmp/list.log
+          if grep -qi "error" /tmp/list.log; then
+            echo "FAIL: functions list printed an error beside a successful listing"; exit 1
+          fi
+
+          gcloud functions runtimes list --region=us-central1 | grep -q python311
+          gcloud functions delete nimbus-gcloud --region=us-central1 --gen2 --quiet
+
+      - name: Destroy, and leave no container and no image
+        working-directory: examples/terraform/gcp-functions
+        run: |
+          set -euo pipefail
+          terraform destroy -auto-approve -input=false
+          sleep 2
+          left=$(docker ps -aq --filter name=nimbus-gcf | wc -l | tr -d ' ')
+          imgs=$(docker images -q --filter 'reference=nimbus-gcf-*' | wc -l | tr -d ' ')
+          echo "containers: $left  images: $imgs"
+          # The image is the quiet one: nothing in `docker ps` shows it, and
+          # a destroy AFTER A RESTART left one behind until the plugin began
+          # removing it by its derived tag.
+          test "$left" = "0"
+          test "$imgs" = "0"
+
   keyvault:
     name: terraform azure-keyvault (keys, certs, az crypto)
     runs-on: ubuntu-latest

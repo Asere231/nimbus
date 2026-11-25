@@ -153,7 +153,7 @@ output "try_it" {
     curl "$URL?name=nimbus"
 
     # 2. its console, which is where print() goes
-    docker logs "$(docker ps --filter label=nimbus.resource=${google_cloudfunctions2_function.hello.name} -q)"
+    docker logs "$(docker ps --filter label=nimbus.service=${google_cloudfunctions2_function.hello.name} -q)"
 
     # 3. the image Nimbus built for it, removed again by `terraform destroy`
     docker images --filter 'reference=nimbus-gcf-*'

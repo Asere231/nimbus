@@ -152,6 +152,7 @@ scope**, not the URL — every Query service POSTs to `/`.
 | `AWS::EKS::Cluster` | **runs** |
 | `AWS::EKS::Nodegroup` | **runs** |
 | `AWS::IAM::InstanceProfile` | hook |
+| `AWS::IAM::OIDCProvider` | hook |
 | `AWS::IAM::Policy` | hook |
 | `AWS::IAM::Role` | hook |
 | `AWS::IAM::User` | hook |

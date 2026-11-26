@@ -1784,6 +1784,89 @@ jobs:
             exit 1
           fi
 
+  irsa:
+    name: terraform aws-irsa (k3s, a pod assumes a role)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.mod
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Docker and the images
+        run: |
+          docker version --format '{{.Server.Version}}'
+          docker pull rancher/k3s:v1.34.12-k3s1
+          # The pod's image. The Lambda base images ship boto3, so the probe
+          # needs nothing installed -- which is what keeps this offline.
+          docker pull public.ecr.aws/lambda/python:3.12
+
+      - name: Start Nimbus
+        run: |
+          go build -o bin/nimbus ./cmd/nimbus
+          # --enforce-iam is what makes the second bucket a refusal rather
+          # than a formality. Without it nothing is ever denied and the job
+          # would pass while proving half of what it claims.
+          ./bin/nimbus start --clouds aws --enforce-iam &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4700/api/info >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4700/api/info
+
+      - name: apply, then a pod reads one bucket and is refused the other
+        working-directory: examples/terraform/aws-irsa
+        env:
+          AWS_ACCESS_KEY_ID: nimbus
+          AWS_SECRET_ACCESS_KEY: nimbus
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+          # The issuer is served over TLS on its own listener, because
+          # data.tls_certificate refuses an http:// url -- so a clean apply
+          # already proves that half: the provider could not have been
+          # created without reading the thumbprint from it.
+          terraform output -raw issuer
+
+          ./verify.sh | tee /tmp/irsa.log
+
+          # The pod got credentials for the ROLE, not the account root.
+          grep -q 'assumed-role/nimbus-irsa-reader' /tmp/irsa.log || {
+            echo "::error::the pod did not assume its role"; exit 1; }
+          grep -q 'allowed   : a pod read this' /tmp/irsa.log || {
+            echo "::error::the pod could not read the bucket its role grants"; exit 1; }
+          # And was refused the other one, naming the permission. Asserting
+          # the CODE rather than just a non-zero exit, because "the read
+          # failed" is also what a broken endpoint looks like.
+          grep -q 'denied    : AccessDenied' /tmp/irsa.log || {
+            echo "::error::the pod was NOT refused the bucket its role does not grant"; exit 1; }
+
+          set +e; terraform plan -detailed-exitcode -input=false; code=$?; set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error::plan -detailed-exitcode returned $code; expected 0"
+            exit 1
+          fi
+
+          terraform destroy -auto-approve -input=false
+
+      - name: No containers left behind
+        run: |
+          left=$(docker ps -aq --filter label=nimbus.cluster)
+          if [ -n "$left" ]; then
+            echo "::error::destroy left containers running:"
+            docker ps -a --filter label=nimbus.cluster
+            exit 1
+          fi
+
   gcp-compute:
     name: terraform gcp-gke + run/pubsub (k3s, docker)
     runs-on: ubuntu-latest

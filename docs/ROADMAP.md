@@ -19,9 +19,34 @@ Five stale claims in this file were corrected along the way, every one of
 them a sentence nobody had read because nothing failed.
 
 **Current: Milestone 25, EKS OIDC and IRSA** — prompt in
-`docs/prompts/m25-eks-irsa.md`, blocking measurement already done, waiting
-on two owner decisions (where the issuer lives, and whether to wire the pod
-end of it).
+`docs/prompts/m25-eks-irsa.md`. Both owner decisions are taken: the issuer
+has AWS's own TLS listener (`--aws-tls-port`, 4704), because
+`data.tls_certificate` refuses an `http://` url and AWS is served over
+plain HTTP by design; and the pod end is wired, not just the control
+plane.
+
+Built and measured: the OIDC discovery document and JWKS, the
+`aws_iam_openid_connect_provider` resource, `Federated` principals and
+`<issuer>:sub`/`:aud` conditions in a trust policy,
+`sts:AssumeRoleWithWebIdentity` verifying RS256 against the published key,
+and the k3s arguments that make a cluster sign with it. Proven with the
+real `aws` CLI by minting a token with that key and presenting it
+unsigned: credentials come back, they resolve to the ROLE, the granted
+bucket reads and the other is refused naming `s3:GetObject`, and a wrong
+subject, a wrong audience and a tampered signature are each refused for
+their own reason. What is left is the pod itself, in a real cluster, which
+needs Docker.
+
+**Nimbus does not run the EKS Pod Identity Webhook.** Real EKS has a
+mutating admission webhook that injects the projected token volume and
+`AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE` and
+`AWS_STS_REGIONAL_ENDPOINTS` into any pod whose service account carries
+the `eks.amazonaws.com/role-arn` annotation. Here the pod spec carries
+them itself, and `examples/terraform/aws-irsa` keeps the annotation
+anyway, because it is what a real cluster reads and what anyone copying
+the example will look for. Writing the webhook would mean serving an
+admission endpoint and registering it in every cluster; it is a
+self-contained piece of work and is in "Later" below.
 
 After that, one milestone remains: **GCP OAuth and token exchange** (the
 "No OAuth" entry below).
@@ -295,6 +320,17 @@ deleted, because the decisions themselves are worth knowing:
 
 ## Later
 
+- **The EKS Pod Identity Webhook is not implemented.** Real EKS mutates
+  any pod whose service account carries the `eks.amazonaws.com/role-arn`
+  annotation, injecting the projected-token volume and the environment
+  variables an SDK reads. IRSA works here without it -- a pod spec that
+  declares them itself gets credentials, which is what
+  `examples/terraform/aws-irsa` does -- so what is missing is the
+  convenience, not the mechanism. It would mean serving a mutating
+  admission endpoint and registering a `MutatingWebhookConfiguration` in
+  every cluster the k3s engine starts, which is a self-contained piece of
+  work and the obvious next thing if copying a real IRSA module verbatim
+  matters more than it does today.
 - **A persisted store written before Milestone 18 may hold a stale file.**
   `fsname.Encode` is the identity for ordinary lowercase keys, so existing
   data loads unchanged, but a key that previously collided or failed to write

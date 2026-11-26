@@ -12,6 +12,38 @@ Milestone 25, in progress: EKS OIDC and IRSA.
   service-account signing key and publishes the public half as the
   issuer's JWKS; it is the first key here whose signature will genuinely
   decide something.
+- **`aws_iam_openid_connect_provider`**, the resource every IRSA module
+  creates. Its ARN is AWS's own derivation — the url with its scheme
+  stripped — because a role's trust policy names it as its `Federated`
+  principal and the two have to be writable in one plan. The issuer is
+  normalised before it is compared, so a url sent with or without the
+  scheme and with or without a trailing slash is one provider.
+- **`Federated` principals and `<issuer>:sub`/`:aud` conditions** in a
+  trust policy, both of which used to be refused by name. The condition
+  key can never be in the supported-key table, because the key name
+  contains the issuer; it is recognised structurally instead, narrowly
+  enough that an ordinary mistyped key is still refused rather than
+  silently accepted and never matched.
+- **`sts:AssumeRoleWithWebIdentity`**: a pod presents its projected
+  service-account token and gets credentials for a role. The token's
+  RS256 signature is verified against the published key, so this is the
+  one call here where a signature genuinely decides. It arrives UNSIGNED
+  — the token is the credential — which needed a dispatch rule of its
+  own, since an unsigned request otherwise routes to S3. Every way a
+  token can be wrong is refused for its own reason, `alg: none`
+  included.
+- **A cluster signs with that key.** The k3s API server is given the
+  signing key, the verify keys and its own per-cluster issuer, so a
+  token it mints verifies against the JWKS Nimbus serves. Two ordering
+  bugs were found writing the test for it: the key used to be supplied
+  after the arguments that point a cluster at it were built, so no
+  cluster would have received them.
+- **`examples/terraform/aws-irsa`**, with a `verify.sh` that runs a real
+  pod. The role trusts one service account by `sub` and grants one
+  bucket; the second bucket is there to be refused. CI runs it with
+  `--enforce-iam` on, because without that the refusal is a formality.
+- Nimbus does not run the EKS Pod Identity Webhook, so the pod spec
+  carries what real EKS would inject. See `docs/ROADMAP.md`.
 
 ## 0.25.0 — 2026-11-25
 

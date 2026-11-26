@@ -24,6 +24,7 @@ export const TYPES = {
   "aws::iam::user": ["USER", "#bc8cff", "IAM user"],
   "aws::iam::policy": ["POL", "#8b949e", "IAM policy"],
   "aws::iam::instanceprofile": ["PROF", "#8b949e", "Instance profile"],
+  "aws::iam::oidcprovider": ["OIDC", "#bc8cff", "OIDC identity provider"],
   "aws::eks::cluster": ["EKS", "#58a6ff", "EKS cluster"],
   "aws::eks::nodegroup": ["NG", "#79c0ff", "Node group"],
   "aws::dynamodb::table": ["DDB", "#e3b341", "DynamoDB table"],

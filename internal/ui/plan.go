@@ -311,6 +311,7 @@ var awsTypes = map[string]string{
 	"aws_iam_user":                    "AWS::IAM::User",
 	"aws_iam_policy":                  "AWS::IAM::Policy",
 	"aws_iam_instance_profile":        "AWS::IAM::InstanceProfile",
+	"aws_iam_openid_connect_provider": "AWS::IAM::OIDCProvider",
 	"aws_instance":                    "AWS::EC2::Instance",
 	"aws_key_pair":                    "AWS::EC2::KeyPair",
 	"aws_eks_cluster":                 "AWS::EKS::Cluster",

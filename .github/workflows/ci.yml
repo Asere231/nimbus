@@ -754,8 +754,19 @@ jobs:
 
           # 4. a signature that decodes but is wrong quotes the string-to-sign,
           #    which is the single most useful thing in that error.
+          #
+          #    The signature is REPLACED rather than edited. This used to
+          #    be `sed 's/sig=./sig=Z/'`, which is a no-op whenever the
+          #    first character of the real signature is already Z -- a
+          #    one-in-sixty-four flake that passed by luck until it did
+          #    not, and reported "HTTP 200, want 403", i.e. the bug it
+          #    exists to catch. 43 A's and a padding byte is base64 of 32
+          #    zero bytes: well-formed, so it reaches the comparison
+          #    rather than the "could not be read" path above, and it
+          #    cannot coincide with a real HMAC.
           probe "tampered signature" 403 "string-to-sign" \
-            "$B""private/secret.txt$(printf '%s' "$RO" | sed 's/sig=./sig=Z/')"
+            "$B""private/secret.txt$(printf '%s' "$RO" \
+              | sed 's/sig=[^&]*/sig=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA%3D/')"
 
           # 5. an expired SAS says WHEN it expired.
           probe "expired SAS" 403 "expired at 2020-01-01" \

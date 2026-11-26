@@ -39,6 +39,7 @@ Runs the emulator and the visualizer.
 | `--azure-port N` | `4701` | Azure Resource Manager (https) |
 | `--aws-port N` | `4702` | AWS (http) |
 | `--gcp-port N` | `4703` | Google Cloud (http) |
+| `--aws-tls-port N` | `4704` | AWS over https, for the EKS OIDC issuer |
 | `--enforce-iam` | off | actually refuse requests the caller's policies do not allow |
 | `--principal ID` | — | act as this principal rather than the account root |
 
@@ -50,6 +51,13 @@ nimbus start --clouds azure,aws,gcp --persist
 leaves Docker containers running when Nimbus stops so a restart adopts them
 rather than starting a second set. Ports are reused, so a function keeps
 answering on the address it had.
+
+**On `--aws-tls-port`.** AWS itself is served over plain HTTP, because
+path-style S3 needs no certificate and no DNS. An EKS cluster's OIDC issuer
+cannot live there: `data.tls_certificate`, which every IRSA module uses to
+read the issuer's thumbprint, refuses an `http://` url outright. So the
+discovery document and the JWKS are served on this second, TLS listener,
+and nothing else about AWS moves.
 
 **On `--enforce-iam`.** Off by default, and with it off nothing is ever
 refused. With it on, an unmapped caller is the account **root**, which in

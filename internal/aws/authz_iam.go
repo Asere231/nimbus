@@ -137,7 +137,15 @@ type rawPrincipal struct {
 	any     bool     // "*" or {"AWS": "*"}
 	ids     []string // exact principal ARNs
 	account []string // account ids and root ARNs, which Nimbus cannot evaluate
-	other   bool     // Service/Federated/CanonicalUser: not this caller
+	other   bool     // Service/CanonicalUser: not this caller
+	// federated are OIDC provider ARNs. Kept apart from `other` because
+	// a web identity really can match one: a role's trust policy names
+	// its provider here, and AssumeRoleWithWebIdentity asks whether the
+	// token's issuer is that provider. Against an ordinary IAM caller it
+	// is still a definite NO -- a federated principal is not a role or a
+	// user -- which is why it is a third field rather than folded into
+	// `ids`.
+	federated []string
 }
 
 func (p *rawPrincipal) UnmarshalJSON(data []byte) error {
@@ -158,6 +166,10 @@ func (p *rawPrincipal) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("want \"*\" or a map of principal types, got %s", truncate(string(data), 40))
 	}
 	for kind, values := range byType {
+		if strings.EqualFold(kind, "Federated") {
+			p.federated = append(p.federated, values...)
+			continue
+		}
 		if !strings.EqualFold(kind, "AWS") {
 			p.other = true
 			continue
@@ -186,12 +198,29 @@ func (p *rawPrincipal) classify(v string) {
 // matches reports whether this element speaks to a caller. ARNs are
 // compared exactly: IAM does no wildcard matching inside a Principal, and
 // `*` is the whole element rather than a pattern.
+//
+// A FEDERATED principal is deliberately not consulted here. This answers
+// "is the caller in front of me this principal", and an IAM role or user
+// is never a federated identity -- only AssumeRoleWithWebIdentity asks
+// that question, through matchesFederated.
 func (p *rawPrincipal) matches(id string) bool {
 	if p.any {
 		return true
 	}
 	for _, want := range p.ids {
 		if want == id {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesFederated reports whether this element names an OIDC provider.
+// Exact, like every other principal comparison: IAM does no wildcard
+// matching inside a Principal.
+func (p *rawPrincipal) matchesFederated(providerARN string) bool {
+	for _, want := range p.federated {
+		if want == providerARN {
 			return true
 		}
 	}
@@ -814,6 +843,11 @@ func compileStatement(source string, raw rawStatement, kind policyKind, attached
 				st.unsupported = fmt.Errorf(
 					"the condition operator %q is not supported by Nimbus (supported: %s)",
 					op, strings.Join(sortedKeys(supportedConditionOps), ", "))
+			case isWebIdentityConditionKey(lowerKey):
+				st.conditions = append(st.conditions, iamCondition{
+					op: lowerOp, key: lowerKey, values: lowerIfBool(lowerOp, values),
+					ifExists: ifExists,
+				})
 			case !supportedConditionKeys[lowerKey]:
 				st.unsupported = fmt.Errorf(
 					"the condition key %q is not supported by Nimbus (supported: %s)",
@@ -1016,4 +1050,33 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// isWebIdentityConditionKey recognises the keys a web-identity trust
+// policy is written with: `<issuer>:sub` and `<issuer>:aud`.
+//
+// They cannot be in supportedConditionKeys because the key NAME contains
+// the issuer, which differs per cluster -- `oidc.eks.us-east-1.amazonaws
+// .com/id/ABC:sub`. The project's rule still holds: a key is supported
+// when the server can answer it from the request in front of it, and
+// during AssumeRoleWithWebIdentity Nimbus has the verified token, so it
+// can answer both exactly.
+//
+// Narrow on purpose. Only `:sub` and `:aud`, and only when something
+// issuer-shaped precedes them, so an ordinary mistyped key is still
+// refused by name rather than silently accepted and never matched.
+func isWebIdentityConditionKey(lowerKey string) bool {
+	issuer, claim, found := strings.Cut(lowerKey, ":")
+	for found && strings.Contains(claim, ":") {
+		// An issuer contains no colon of its own once the scheme is
+		// gone, but splitting from the left is still the wrong end: take
+		// the LAST colon so a key keeps its whole issuer.
+		next, rest, ok := strings.Cut(claim, ":")
+		issuer, claim, found = issuer+":"+next, rest, ok
+	}
+	if !found || (claim != "sub" && claim != "aud") {
+		return false
+	}
+	// Issuer-shaped: a host, so at least one dot or a path.
+	return strings.Contains(issuer, ".") || strings.Contains(issuer, "/")
 }

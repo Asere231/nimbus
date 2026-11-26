@@ -51,6 +51,22 @@ func (s *Server) serveIAM(w http.ResponseWriter, r *http.Request) string {
 
 	var aerr *apiError
 	switch action {
+	// --- OIDC identity providers
+	//
+	// The resource that tells IAM a token from this issuer may be used to
+	// assume a role. Every EKS IRSA module creates one per cluster. See
+	// iam_oidc.go.
+	case "CreateOpenIDConnectProvider":
+		aerr = s.createOIDCProvider(w, p)
+	case "GetOpenIDConnectProvider":
+		aerr = s.getOIDCProvider(w, p)
+	case "ListOpenIDConnectProviders":
+		aerr = s.listOIDCProviders(w)
+	case "DeleteOpenIDConnectProvider":
+		aerr = s.deleteOIDCProvider(w, p)
+	case "UpdateOpenIDConnectProviderThumbprint":
+		aerr = s.updateOIDCProviderThumbprint(w, p)
+
 	// --- roles
 	case "CreateRole":
 		aerr = s.createRole(w, p)

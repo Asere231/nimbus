@@ -37,8 +37,19 @@ echo "== 2. where the pod reaches Nimbus =="
 NODE=$(docker ps --filter "label=nimbus.cluster=$CLUSTER" --filter "label=nimbus.role=server" \
   --format '{{.Names}}' | head -1)
 if [ -z "$NODE" ]; then echo "no k3s server container for $CLUSTER"; exit 1; fi
-GATEWAY=$(docker exec "$NODE" getent hosts host.docker.internal | awk '{print $1}' | head -1)
-if [ -z "$GATEWAY" ]; then echo "the node cannot resolve host.docker.internal"; exit 1; fi
+# Read from /etc/hosts rather than with `getent`, which the k3s image does
+# not have -- it is a minimal image and the lookup fails with "executable
+# file not found", which reads as a resolution failure and is a missing
+# tool. Only the IPv4 line: Docker writes both, and an IPv6 gateway in a
+# hostAliases entry is legal but is not what the pod's HTTP client will
+# prefer here.
+GATEWAY=$(docker exec "$NODE" cat /etc/hosts \
+  | awk '$2 == "host.docker.internal" && $1 ~ /^[0-9.]+$/ {print $1; exit}')
+if [ -z "$GATEWAY" ]; then
+  echo "the node has no host.docker.internal alias; Nimbus adds one to every"
+  echo "container it starts, so this means --add-host did not take effect"
+  exit 1
+fi
 echo "host.docker.internal -> $GATEWAY (read from $NODE)"
 
 echo
@@ -113,5 +124,9 @@ echo "    file and calls AssumeRoleWithWebIdentity itself)"
 k -n "$NS" wait --for=condition=Ready pod/reader --timeout=180s >/dev/null || true
 k -n "$NS" logs -f pod/reader
 echo
-echo "   the pod's own identity, as STS reports it:"
-k -n "$NS" logs pod/reader | grep -i 'assumed-role' || true
+# Note what "who am I" reports: the ROLE's ARN. Real AWS answers
+# `arn:aws:sts::...:assumed-role/<role>/<session>` for assumed-role
+# credentials, and Nimbus cannot, because the session name is not
+# recoverable from the derived access key -- the key maps back to the
+# role and that is what authorization needs. A stated divergence, and
+# the ARN that matters for a policy is the same either way.

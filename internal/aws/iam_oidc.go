@@ -28,12 +28,19 @@ const typeOIDCProvider = "AWS::IAM::OIDCProvider"
 
 // oidcProvider is the stored shape.
 type oidcProvider struct {
-	Arn            string            `json:"Arn"`
-	Url            string            `json:"Url"`
-	ClientIDList   []string          `json:"ClientIDList"`
-	ThumbprintList []string          `json:"ThumbprintList"`
-	CreateDate     float64           `json:"CreateDate"`
-	Tags           map[string]string `json:"nimbusTags,omitempty"`
+	Arn            string   `json:"Arn"`
+	Url            string   `json:"Url"`
+	ClientIDList   []string `json:"ClientIDList"`
+	ThumbprintList []string `json:"ThumbprintList"`
+	// A TIMESTAMP, not an epoch, and `iamNow()` is the one every other
+	// IAM resource here uses. Measured the hard way: as a JSON number it
+	// serialised as `1.795653789975e+09`, which the `aws` CLI accepted
+	// and aws provider 5.100.0 refused outright -- "unable to parse time
+	// string ... cannot parse as 2006" -- with a 200 status, so it reads
+	// as a deserialization bug in the client. The CLI being happy is not
+	// evidence the shape is right.
+	CreateDate string            `json:"CreateDate"`
+	Tags       map[string]string `json:"nimbusTags,omitempty"`
 }
 
 // oidcProviderARN is AWS's own derivation: the URL with its scheme
@@ -81,7 +88,7 @@ func (s *Server) createOIDCProvider(w http.ResponseWriter, p params) *apiError {
 		Url:            issuer,
 		ClientIDList:   p.list("ClientIDList.member", ""),
 		ThumbprintList: p.list("ThumbprintList.member", ""),
-		CreateDate:     epoch(),
+		CreateDate:     iamNow(),
 		Tags:           tagMap(readIAMTags(p)),
 	}
 	if aerr := s.saveOIDCProvider(&prov); aerr != nil {
@@ -209,7 +216,7 @@ type getOIDCResult struct {
 	Url            string   `xml:"Url"`
 	ClientIDList   []string `xml:"ClientIDList>member"`
 	ThumbprintList []string `xml:"ThumbprintList>member"`
-	CreateDate     float64  `xml:"CreateDate"`
+	CreateDate     string   `xml:"CreateDate"`
 }
 
 type oidcProviderEntry struct {

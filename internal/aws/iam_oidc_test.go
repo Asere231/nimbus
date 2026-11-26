@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The IAM OIDC identity provider, and the trust-policy shapes that go
@@ -47,6 +48,17 @@ func TestAnOIDCProviderRoundTrips(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the provider read back is missing %q:\n%s", want, body)
 		}
+	}
+
+	// CreateDate is a TIMESTAMP, and the aws CLI accepting an epoch is
+	// what let this ship: aws provider 5.100.0 refuses a JSON number
+	// outright -- "unable to parse time string ... cannot parse as 2006"
+	// -- on a 200 response, so it reads as a bug in the client rather
+	// than in what Nimbus sent. Pinned by parsing it the way the SDK
+	// does, not by a substring, or an epoch that happens to contain a
+	// digit sequence would pass.
+	if _, err := time.Parse(time.RFC3339, oidcCreateDate(t, body)); err != nil {
+		t.Errorf("CreateDate is not an RFC 3339 timestamp: %v\n%s", err, body)
 	}
 
 	if code, _ := iamQuery(t, s, "ListOpenIDConnectProviders"); code != 200 {
@@ -172,4 +184,17 @@ func TestOnlyRealWebIdentityKeysAreAccepted(t *testing.T) {
 			t.Errorf("%q was taken for a web-identity key", k)
 		}
 	}
+}
+
+// oidcCreateDate pulls the one element out of the XML without decoding the
+// whole document, which is enough for a format assertion.
+func oidcCreateDate(t *testing.T, body string) string {
+	t.Helper()
+	const open, close = "<CreateDate>", "</CreateDate>"
+	i := strings.Index(body, open)
+	j := strings.Index(body, close)
+	if i < 0 || j < i {
+		t.Fatalf("no CreateDate in the response:\n%s", body)
+	}
+	return body[i+len(open) : j]
 }

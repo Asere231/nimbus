@@ -1840,7 +1840,12 @@ jobs:
           ./verify.sh | tee /tmp/irsa.log
 
           # The pod got credentials for the ROLE, not the account root.
-          grep -q 'assumed-role/nimbus-irsa-reader' /tmp/irsa.log || {
+          # `who am I` reports the role's own ARN rather than real AWS's
+          # `assumed-role/<role>/<session>`: the session name is not
+          # recoverable from the derived access key. Asserting the role
+          # ARN is the assertion that matters -- the account root would
+          # report `arn:aws:iam::000000000000:root`.
+          grep -q 'who am I  : arn:aws:iam::000000000000:role/nimbus-irsa-reader' /tmp/irsa.log || {
             echo "::error::the pod did not assume its role"; exit 1; }
           grep -q 'allowed   : a pod read this' /tmp/irsa.log || {
             echo "::error::the pod could not read the bucket its role grants"; exit 1; }

@@ -44,7 +44,7 @@ func newIRSAServer(t *testing.T) *Server {
 		TLSURL:    "https://localhost:4704",
 		DataDir:   dir,
 	}, store, bus)
-	s.UseSigningKey(key)
+	s.useSigningKey(key)
 	f := docker.NewFake()
 	f.Unavailable = true
 	s.UseDocker(f)
@@ -333,5 +333,84 @@ func TestAnUnsignedQueryCallRoutesToSTS(t *testing.T) {
 	// An unsigned GET is still S3, which is what path-style S3 needs.
 	if got := serviceOf(httptest.NewRequest(http.MethodGet, "/bucket/key", nil)); got != "s3" {
 		t.Errorf("an unsigned GET routed to %q, want s3", got)
+	}
+}
+
+// The arguments that make a cluster sign tokens Nimbus can verify have to
+// reach the CONTAINER. Asserting that `irsaClusterArgs` returns them would
+// prove the function and not the wiring -- this repo's signature trap,
+// and the one that left `vm.Engine.Reattach` unit-tested and called by
+// nobody -- so this goes through the real create path and reads what
+// Docker was asked to run.
+func TestAClusterIsStartedSigningWithNimbusKey(t *testing.T) {
+	bus := core.NewBus(100)
+	store, err := core.NewStore(bus, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	key, err := core.EnsureSigningKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The key goes in the CONFIG, because the k3s arguments are built in
+	// New(): a key set afterwards reaches no cluster. Short timeout
+	// because the readiness probe cannot succeed against the Fake and
+	// would otherwise hold a goroutine for the default four minutes.
+	s := New(Config{
+		PublicURL:      "http://localhost:4702",
+		TLSURL:         "https://localhost:4704",
+		DataDir:        dir,
+		SigningKey:     key,
+		ClusterTimeout: 200 * time.Millisecond,
+	}, store, bus)
+	f := docker.NewFake()
+	s.UseDocker(f)
+	makeIRSACluster(t, s, "irsa")
+
+	var opts *docker.RunOptions
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		for i := range f.Runs {
+			if strings.Contains(f.Runs[i].Name, "irsa") {
+				opts = &f.Runs[i]
+			}
+		}
+		if opts != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if opts == nil {
+		t.Fatal("no k3s container was started for the cluster")
+	}
+
+	args := strings.Join(opts.Args, " ")
+	issuer := s.IssuerURL("irsa")
+	for _, want := range []string{
+		"--service-account-issuer=" + issuer,
+		"--service-account-signing-key-file=" + saSignerKeyInContainer,
+		"--service-account-key-file=" + saSignerPubInContainer,
+		// k3s's own key stays listed, or the cluster stops accepting
+		// anything it signed with it.
+		"--service-account-key-file=" + k3sOwnSAKey,
+		"--api-audiences=" + irsaAudience,
+	} {
+		if !strings.Contains(args, want) {
+			t.Errorf("the k3s container was not given %q:\n%s", want, args)
+		}
+	}
+	// The issuer must be in the audiences too: that is Kubernetes' own
+	// default, and in-cluster clients ask for tokens with it.
+	if !strings.Contains(args, "--api-audiences="+irsaAudience+","+issuer) {
+		t.Errorf("the issuer is not among the api audiences:\n%s", args)
+	}
+	// And the key has to be MOUNTED, not merely named. k3s reads the path
+	// at startup, so a file written afterwards is a file that was never
+	// there.
+	if opts.Volumes[key.Private] != saSignerKeyInContainer {
+		t.Errorf("the private key is not mounted at %s: %v", saSignerKeyInContainer, opts.Volumes)
+	}
+	if opts.Volumes[key.Public] != saSignerPubInContainer {
+		t.Errorf("the public key is not mounted at %s: %v", saSignerPubInContainer, opts.Volumes)
 	}
 }

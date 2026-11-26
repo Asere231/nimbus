@@ -327,7 +327,7 @@ func TestTheIssuerServesDiscoveryAndKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.UseSigningKey(key)
+	s.useSigningKey(key)
 	makeIRSACluster(t, s, "irsa")
 	id := oidcID("irsa")
 

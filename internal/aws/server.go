@@ -50,6 +50,18 @@ type Config struct {
 	// listener, and a cluster then reports no identity rather than
 	// advertising a URL that refuses. See eks_oidc.go.
 	TLSURL string
+
+	// SigningKey is the key a cluster's API server signs projected
+	// service-account tokens with, and whose public half the OIDC issuer
+	// publishes as a JWKS.
+	//
+	// Configuration rather than a setter, and that is not a style
+	// preference: the k3s engine's arguments are built in New() and are
+	// read by the container at start, so a key supplied afterwards would
+	// never reach a cluster -- every token would be signed with k3s's own
+	// key and verify against nothing, with no error anywhere. It was a
+	// setter first, and that is exactly what happened.
+	SigningKey *core.SigningKey
 	// AccountID and Region default to the constants above.
 	AccountID string
 	Region    string
@@ -159,6 +171,7 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		KeepRunning:  cfg.KeepClusters,
 		StartTimeout: cfg.ClusterTimeout,
 	}, docker.NewCLI())
+	s.signing = cfg.SigningKey
 	k3sCfg := k3s.Config{
 		Image:       cfg.K3sImage,
 		Version:     cfg.KubernetesVersion,
@@ -180,6 +193,19 @@ func New(cfg Config, store *core.Store, bus *core.Bus) *Server {
 		k3sCfg.ServerVolumes = map[string]string{path: webhookPathInContainer}
 	} else {
 		log.Printf("nimbus: EKS token webhook disabled: %v", err)
+	}
+	// IRSA: make the cluster's API server sign projected tokens with the
+	// key Nimbus publishes as a JWKS, so a pod's token verifies against
+	// the issuer. The key files are the same for every cluster; the
+	// ISSUER is per cluster and is set on the Cluster itself, in eks.go.
+	// See eks_irsa.go.
+	if s.signing != nil {
+		k3sCfg.ServerArgs = append(k3sCfg.ServerArgs, irsaServerArgs()...)
+		if k3sCfg.ServerVolumes == nil {
+			k3sCfg.ServerVolumes = map[string]string{}
+		}
+		k3sCfg.ServerVolumes[s.signing.Private] = saSignerKeyInContainer
+		k3sCfg.ServerVolumes[s.signing.Public] = saSignerPubInContainer
 	}
 	s.k3s = k3s.New(k3sCfg, docker.NewCLI(), store, "aws")
 	s.objects.load()
@@ -489,11 +515,11 @@ func sprintf(format string, args ...any) string {
 	return fmt.Sprintf(format, args...)
 }
 
-// UseSigningKey gives the server the key k3s signs service-account tokens
-// with. Called at startup, before any cluster exists, because k3s reads
-// the key path at container start and there is no moment between the
-// container existing and the file being needed.
-func (s *Server) UseSigningKey(k *core.SigningKey) { s.signing = k }
+// useSigningKey is for tests that build a server and then want an issuer.
+// Unexported deliberately: production supplies the key through Config,
+// because the k3s arguments are built in New(), so there must be no
+// exported way to set it late. See Config.SigningKey.
+func (s *Server) useSigningKey(k *core.SigningKey) { s.signing = k }
 
 // SigningKey is what the EKS engine passes to k3s.
 func (s *Server) SigningKey() *core.SigningKey { return s.signing }

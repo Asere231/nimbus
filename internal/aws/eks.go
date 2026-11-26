@@ -243,6 +243,10 @@ func (s *Server) provisionEKSCluster(name string) {
 		fail(err.Error())
 		return
 	}
+	// The cluster's own OIDC issuer, which only this cluster knows. See
+	// eks_irsa.go for what the arguments do and why the issuer is the one
+	// that cannot be engine-level.
+	cl.ServerArgs = s.irsaClusterArgs(name)
 	if err := s.k3s.Start(ctx, cl); err != nil {
 		s.k3s.Remove(c.Arn)
 		fail(err.Error())

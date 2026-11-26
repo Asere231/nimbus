@@ -258,17 +258,22 @@ func start(args []string) {
 		// and STS become reachable over TLS at no extra cost.
 		awsTLSURL := fmt.Sprintf("https://%s:%d", *host, *awsTLSPort)
 		awsCfg.TLSURL = awsTLSURL
-		a := aws.New(awsCfg, store, bus)
 		// k3s signs projected service-account tokens with this key and
-		// Nimbus publishes the public half as the issuer's JWKS. Set
-		// before any cluster exists, because k3s reads the path at
-		// container start.
+		// Nimbus publishes the public half as the issuer's JWKS. Settled
+		// BEFORE the server is built, because the k3s arguments that
+		// point a cluster at the key are built in aws.New -- a key
+		// supplied afterwards would reach no cluster, and every token
+		// would be signed with k3s's own key and verify against nothing.
 		if key, err := core.EnsureSigningKey(filepath.Join(*home, "certs")); err == nil {
-			a.UseSigningKey(key)
+			awsCfg.SigningKey = key
 		} else {
+			// No key, no issuer: the TLSURL has to go too, or clusters
+			// advertise an issuer whose JWKS cannot be served.
 			fmt.Fprintf(os.Stderr, "nimbus: no service-account signing key, so EKS has no OIDC issuer: %v\n", err)
 			awsCfg.TLSURL = ""
+			awsTLSURL = ""
 		}
+		a := aws.New(awsCfg, store, bus)
 		explainers["aws"] = a
 		servers = append(servers, &cloudServer{
 			name:  "aws",
@@ -279,14 +284,19 @@ func start(args []string) {
 			back: a.Start(),
 			stop: a.Shutdown,
 		})
-		servers = append(servers, &cloudServer{
-			name:  "aws-tls",
-			label: fmt.Sprintf(`AWS (TLS)    %s     EKS OIDC issuer`, awsTLSURL),
-			url:   awsTLSURL,
-			tls:   true,
-			srv: &http.Server{Addr: fmt.Sprintf(":%d", *awsTLSPort), Handler: a,
-				ReadHeaderTimeout: 10 * time.Second},
-		})
+		// Only when there is a key to serve. The listener's whole reason
+		// to exist is the OIDC issuer, and one advertising an issuer
+		// whose JWKS cannot be served is worse than not being there.
+		if awsTLSURL != "" {
+			servers = append(servers, &cloudServer{
+				name:  "aws-tls",
+				label: fmt.Sprintf(`AWS (TLS)    %s     EKS OIDC issuer`, awsTLSURL),
+				url:   awsTLSURL,
+				tls:   true,
+				srv: &http.Server{Addr: fmt.Sprintf(":%d", *awsTLSPort), Handler: a,
+					ReadHeaderTimeout: 10 * time.Second},
+			})
+		}
 	}
 
 	if running["gcp"] {

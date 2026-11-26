@@ -47,6 +47,15 @@ type Cluster struct {
 	Key  []byte
 
 	Agents []string // agent container names, in pool order
+
+	// ServerArgs are extra k3s server arguments for THIS cluster, on top
+	// of the engine's own. Per cluster rather than per engine because
+	// EKS's OIDC issuer is per cluster: each has its own issuer URL, and
+	// `--service-account-issuer` has to be the one a token's `iss` will
+	// name or every verification fails. Set before Start; they are
+	// start-time flags, so a reattached container keeps whatever it was
+	// started with.
+	ServerArgs []string
 }
 
 // registry is the in-memory set of clusters this engine started.
@@ -170,8 +179,8 @@ func (e *Engine) Start(ctx context.Context, cl *Cluster) error {
 			// ingress controller, and it is one less thing to wait for.
 			// ServerArgs is how a cloud adds its own: EKS passes the token
 			// webhook that makes `aws eks get-token` work.
-			Args: append([]string{"server", "--tls-san", "127.0.0.1", "--disable", "traefik"},
-				e.cfg.ServerArgs...),
+			Args: append(append([]string{"server", "--tls-san", "127.0.0.1", "--disable", "traefik"},
+				e.cfg.ServerArgs...), cl.ServerArgs...),
 			Volumes: e.cfg.ServerVolumes,
 			TmpFS:   []string{"/run", "/var/run"},
 		}); err != nil {

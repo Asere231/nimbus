@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"math/big"
 	"os"
+	"runtime"
 	"testing"
 )
 
@@ -36,7 +37,12 @@ func TestTheSigningKeyIsStableAcrossRestarts(t *testing.T) {
 // it can mint a pod identity -- and is the one file in the data directory
 // that should say so.
 func TestThePrivateKeyIsNotWorldReadable(t *testing.T) {
-	if os.Getenv("GOOS") == "windows" {
+	// Windows has no Unix permission bits: a file mode there drives only
+	// the read-only flag, so an assertion about 0600 has to be skipped
+	// rather than weakened everywhere. Note `runtime.GOOS` and not an
+	// environment variable -- nothing sets `GOOS` in a running test, so a
+	// guard reading it can never fire, which is how this reached CI.
+	if runtime.GOOS == "windows" {
 		t.Skip("Windows has no Unix permission bits")
 	}
 	dir := t.TempDir()

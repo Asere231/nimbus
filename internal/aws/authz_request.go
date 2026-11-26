@@ -211,6 +211,13 @@ func (s *Server) stsTarget(r *http.Request) (target, bool) {
 		// worse answer, so an absent one widens to "*" and lets the
 		// handler do its job.
 		return target{Action: "sts:AssumeRole", Resource: p.strOr("RoleArn", "*")}, true
+	case "AssumeRoleWithWebIdentity":
+		// Requires NO permission of the caller, and could not: the caller
+		// has no identity until the call succeeds. The role's own trust
+		// policy is the whole of the authorization, evaluated in
+		// sts_webidentity.go -- so this is `alwaysAllowed` because the
+		// decision is made elsewhere, not because nothing decides.
+		return target{Action: alwaysAllowed, Resource: "*"}, true
 	}
 	return target{}, false
 }

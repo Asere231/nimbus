@@ -77,6 +77,22 @@ func serviceOf(r *http.Request) string {
 			return fields[3]
 		}
 	}
+	// An UNSIGNED Query-protocol call. `AssumeRoleWithWebIdentity` is the
+	// one AWS call made with no credentials at all -- a pod holds none,
+	// which is the whole reason IRSA exists -- so there is no credential
+	// scope to route on. The shape is narrow: a POST to `/` with a
+	// form-encoded body is the Query protocol, and no S3 operation looks
+	// like that (S3's unsigned requests are GETs and PUTs addressing
+	// `/{bucket}/{key}`, and its one POST form upload addresses a
+	// bucket). STS is the only Query service with an unsigned call.
+	//
+	// Without this the call falls through to S3 below and the pod is told
+	// `MethodNotAllowed: POST on the service root`, which names nothing
+	// it asked for. Measured, before this existed.
+	if r.Method == http.MethodPost && r.URL.Path == "/" &&
+		strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
+		return "sts"
+	}
 	return "s3"
 }
 

@@ -290,7 +290,7 @@ func (st *iamStatement) Applies(req authz.Request) (bool, error) {
 	// The principal is part of "does this statement speak to this
 	// request", so it settles alongside the action and the resource --
 	// before anything that can fail.
-	if !st.matchesPrincipal(req.Principal.ID) {
+	if !st.matchesPrincipal(req.Principal) {
 		return false, nil
 	}
 	// Only now, with the statement known to be about this request, may
@@ -337,12 +337,24 @@ func (st *iamStatement) matchesAction(action string) bool {
 // speak to this caller. An identity policy carries no Principal, and
 // there the answer is always yes -- the document is already attached to
 // the principal it governs.
-func (st *iamStatement) matchesPrincipal(id string) bool {
+func (st *iamStatement) matchesPrincipal(p authz.Principal) bool {
+	// A federated identity is asked about differently: its ARN names an
+	// OIDC provider, which is not something an IAM caller can ever be, so
+	// `matches` must answer no for it and `matchesFederated` must be the
+	// only way through. Folding them together would let a role whose
+	// Federated principal happens to equal some caller's ARN be assumed
+	// by that caller directly.
+	match := func(raw *rawPrincipal) bool {
+		if p.Kind == webIdentityKind {
+			return raw.matchesFederated(p.ID)
+		}
+		return raw.matches(p.ID)
+	}
 	switch {
 	case st.notPrincipals != nil:
-		return !st.notPrincipals.matches(id)
+		return !match(st.notPrincipals)
 	case st.principals != nil:
-		return st.principals.matches(id)
+		return match(st.principals)
 	}
 	return true
 }

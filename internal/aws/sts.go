@@ -29,6 +29,8 @@ func (s *Server) serveSTS(w http.ResponseWriter, r *http.Request) string {
 		s.getCallerIdentity(w, r)
 	case "AssumeRole":
 		s.assumeRole(w, p)
+	case "AssumeRoleWithWebIdentity":
+		s.assumeRoleWithWebIdentity(w, r, p)
 	default:
 		writeError(w, "sts", invalidAction("sts", action))
 		return "unimplemented: sts " + action

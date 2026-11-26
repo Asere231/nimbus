@@ -63,6 +63,12 @@ type Fake struct {
 	// Runs records the full options of every container started, for the
 	// assertions Calls cannot carry -- the environment a container was
 	// given, and which ports were published.
+	//
+	// Read it DIRECTLY only when nothing else can be running: it is
+	// appended to under the mutex, so a test that polls it while a
+	// provisioning goroutine is still starting containers is a data race,
+	// and the -race leg will say so. Use `RunOptionsFor` (and
+	// `Containers` to find the name) in that case.
 	Runs []RunOptions
 	// Builds records every image built, for the same reason.
 	Builds []Built

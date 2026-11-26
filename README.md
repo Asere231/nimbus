@@ -9,7 +9,7 @@ terraform apply  ──HTTPS──▶  Nimbus Azure (ARM) :4701 ──┐
 terraform apply  ──HTTP───▶  Nimbus AWS        :4702 ──┴▶ store ──▶ event bus ──SSE──▶  visualizer :4700
 ```
 
-**Status (v0.25.0):** all three clouds, in one process — and **all three
+**Status (v0.26.0):** all three clouds, in one process — and **all three
 run code**: Lambda, Azure Functions and Cloud Functions, each the way
 that cloud really does it. Control planes, storage data planes, real
 Kubernetes clusters, Cloud Run and Container Apps services, and compute

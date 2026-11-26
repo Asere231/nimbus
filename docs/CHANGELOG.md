@@ -1,8 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.26.0 — 2026-11-25
 
-Milestone 25, in progress: EKS OIDC and IRSA.
+**Milestone 25: EKS OIDC and IRSA.** A pod gets AWS credentials from its
+Kubernetes service account, and nothing about it is taken on faith -- this
+is the one call in Nimbus where a signature genuinely decides. Proven end
+to end: the pod reports its role, reads the bucket the role grants, and is
+refused the one it does not.
 
 - **An EKS cluster has an OIDC issuer**, served over TLS on a listener of
   its own (`--aws-tls-port`, default 4704) because `data.tls_certificate`

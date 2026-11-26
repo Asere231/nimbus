@@ -368,19 +368,28 @@ func TestAClusterIsStartedSigningWithNimbusKey(t *testing.T) {
 	s.UseDocker(f)
 	makeIRSACluster(t, s, "irsa")
 
-	var opts *docker.RunOptions
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
-		for i := range f.Runs {
-			if strings.Contains(f.Runs[i].Name, "irsa") {
-				opts = &f.Runs[i]
+	// Through the Fake's LOCKED accessors, never `f.Runs` directly. The
+	// provisioning goroutine is still appending to that slice while this
+	// polls it, and reading it raw is a data race -- caught by the
+	// `-race` leg on Linux, which is what that leg is for. `Containers`
+	// and `RunOptionsFor` already existed; scanning the slice by hand was
+	// reinventing a shared helper, which is its own recurring mistake
+	// here.
+	var opts docker.RunOptions
+	found := false
+	for deadline := time.Now().Add(10 * time.Second); !found && time.Now().Before(deadline); {
+		for _, c := range f.Containers() {
+			if strings.Contains(c.Name, "irsa") {
+				if opts, found = f.RunOptionsFor(c.Name); found {
+					break
+				}
 			}
 		}
-		if opts != nil {
-			break
+		if !found {
+			time.Sleep(10 * time.Millisecond)
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	if opts == nil {
+	if !found {
 		t.Fatal("no k3s container was started for the cluster")
 	}
 

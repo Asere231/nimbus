@@ -1,5 +1,17 @@
 # Roadmap
 
+**0.26.0 is Milestone 25: a pod gets AWS credentials from its Kubernetes
+service account, and the signature decides.** An EKS cluster has an OIDC
+issuer served over TLS; its API server signs projected tokens with a key
+Nimbus publishes as a JWKS; and `sts:AssumeRoleWithWebIdentity` verifies
+one before handing out credentials, so a forged token is refused here
+exactly as it would be in real AWS. Proven on macOS with Docker, and
+exercised in CI on Linux every push: the pod reports its role, reads the bucket its role grants, and
+is refused the one it does not, with `--enforce-iam` on.
+
+**One milestone remains: GCP OAuth and token exchange** (the "No OAuth"
+entry below).
+
 **0.25.0 cleared the "Later" backlog of everything that was not a milestone
 in its own right.**
 
@@ -18,8 +30,8 @@ by accident.
 Five stale claims in this file were corrected along the way, every one of
 them a sentence nobody had read because nothing failed.
 
-**Current: Milestone 25, EKS OIDC and IRSA** — prompt in
-`docs/prompts/m25-eks-irsa.md`. Both owner decisions are taken: the issuer
+**Milestone 25 is done.** Prompt in
+`docs/prompts/m25-eks-irsa.md`. Both owner decisions were taken: the issuer
 has AWS's own TLS listener (`--aws-tls-port`, 4704), because
 `data.tls_certificate` refuses an `http://` url and AWS is served over
 plain HTTP by design; and the pod end is wired, not just the control
@@ -34,8 +46,9 @@ real `aws` CLI by minting a token with that key and presenting it
 unsigned: credentials come back, they resolve to the ROLE, the granted
 bucket reads and the other is refused naming `s3:GetObject`, and a wrong
 subject, a wrong audience and a tampered signature are each refused for
-their own reason. What is left is the pod itself, in a real cluster, which
-needs Docker.
+their own reason. And then with a real pod in a real k3s cluster, where
+boto3 -- given no credentials at all, finding only `AWS_ROLE_ARN` and the
+projected token file -- did the same. CI runs that every push.
 
 **Nimbus does not run the EKS Pod Identity Webhook.** Real EKS has a
 mutating admission webhook that injects the projected token volume and
@@ -47,9 +60,6 @@ anyway, because it is what a real cluster reads and what anyone copying
 the example will look for. Writing the webhook would mean serving an
 admission endpoint and registering it in every cluster; it is a
 self-contained piece of work and is in "Later" below.
-
-After that, one milestone remains: **GCP OAuth and token exchange** (the
-"No OAuth" entry below).
 
 **Registry authentication** was looked at and deliberately skipped — its
 entry says why the easy route is closed, and what was decided about

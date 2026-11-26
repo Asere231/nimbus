@@ -38,9 +38,14 @@ EKS entry in `docs/ROADMAP.md`), against the `tls` provider 4.x:
   issuer cannot live on the AWS endpoint as it stands.
 - Nimbus's **existing TLS listener answers it**, returning
   `[CN=Nimbus Local CA (is_ca), CN=localhost]`.
-- It needs **no trust plumbing**: with `SSL_CERT_FILE` and
-  `REQUESTS_CA_BUNDLE` both unset it still fetched, because the data
-  source retrieves the chain without verifying it.
+- It needs **the CA trusted**. The measurement that said otherwise --
+  "with `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` both unset it still
+  fetched, so the data source does not verify the chain" -- was taken on
+  a machine whose keychain already held the Nimbus CA, so the unset
+  variables proved nothing. **CORRECTED** against a CI runner, which
+  trusts nothing: `x509: certificate signed by unknown authority`. It
+  verifies. `nimbus cert` once is enough, and CI installs the CA into the
+  system bundle.
 - `host.docker.internal` has been in the certificate's SANs since
   Milestone 2, so one issuer URL is reachable from the host AND from
   inside the k3s container — which `--service-account-issuer` needs.

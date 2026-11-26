@@ -1820,6 +1820,23 @@ jobs:
           done
           curl -sf http://localhost:4700/api/info
 
+      - name: Trust the Nimbus CA
+        # `data.tls_certificate` VERIFIES the chain, so the issuer's
+        # certificate has to be trusted before terraform runs. This was
+        # measured wrong first time: on the machine it was measured on the
+        # CA was already in the keychain, so "it needs no trust plumbing"
+        # was a conclusion drawn from an already-trusted CA -- the exact
+        # trap CLAUDE.md records for azurerm on Windows, repeated. The
+        # runner proved it: `x509: certificate signed by unknown
+        # authority`.
+        run: |
+          ./bin/nimbus cert
+          sudo cp ~/.nimbus/certs/nimbus-ca.pem /usr/local/share/ca-certificates/nimbus.crt
+          sudo update-ca-certificates
+          # Go's crypto/x509 reads the system bundle on Linux, and each
+          # provider is a separate Go binary, so this is what reaches the
+          # tls provider rather than any environment variable.
+
       - name: apply, then a pod reads one bucket and is refused the other
         working-directory: examples/terraform/aws-irsa
         env:

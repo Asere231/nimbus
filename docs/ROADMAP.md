@@ -729,9 +729,12 @@ deleted, because the decisions themselves are worth knowing:
     chain: `[CN=Nimbus Local CA (is_ca), CN=localhost]`. The canonical
     pattern reads `certificates[0].sha1_fingerprint` for the provider's
     thumbprint, and index 0 is the CA — which is what real EKS gives too.
-  - It needs **no trust plumbing**: run with `SSL_CERT_FILE` and
-    `REQUESTS_CA_BUNDLE` unset it still fetched, because the data source
-    retrieves the chain without verifying it.
+  - It needs **the CA trusted**, and the original note here said the
+    opposite. "Run with `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` unset it
+    still fetched" was measured on a machine whose keychain already held
+    the Nimbus CA, so the unset variables proved nothing. A CI runner,
+    which trusts nothing, is the control: `x509: certificate signed by
+    unknown authority`. `nimbus cert` once is enough.
   - `host.docker.internal` has been in the certificate's SANs since
     Milestone 2, so the same issuer URL is reachable from inside the k3s
     container, which is what `--service-account-issuer` needs.

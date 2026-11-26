@@ -18,6 +18,7 @@
 #   4. A role trusts ONE service account, by `sub`, and grants access to
 #      ONE bucket. The second bucket is there to be refused.
 #
+#   nimbus cert                                 (once, and trust it)
 #   nimbus start --clouds aws --enforce-iam     (in another terminal)
 #   terraform init && terraform apply           (pulls k3s once)
 #   ./verify.sh                                 (the pod, and the refusal)
@@ -125,9 +126,10 @@ resource "aws_eks_cluster" "main" {
 # is served on Nimbus's second, TLS listener -- `--aws-tls-port`, 4704 by
 # default -- while everything else about AWS stays on plain HTTP.
 #
-# It does not verify the chain, measured with SSL_CERT_FILE and
-# REQUESTS_CA_BUNDLE both unset, so Nimbus's local CA needs no trust
-# plumbing for this to work. The chain comes back as [CA, leaf] and the
+# It VERIFIES the chain, so `nimbus cert` has to have been run once on
+# this machine -- without it the apply fails with "certificate signed by
+# unknown authority" naming the issuer URL. The chain comes back as
+# [CA, leaf] and the
 # canonical pattern reads certificates[0], which is the CA -- matching
 # real EKS, where the thumbprint is of the root.
 data "tls_certificate" "oidc" {
